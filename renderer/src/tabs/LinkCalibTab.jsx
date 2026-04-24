@@ -6,7 +6,7 @@ import {
 import {
   ErrorPanel, SolverButton, SolverPanel,
 } from '../components/panels.jsx';
-import { applyT } from '../lib/math3d.js';
+import { applyT, invT } from '../lib/math3d.js';
 import { api, posesWsUrl, pickSaveFile, pickOpenFile } from '../api/client.js';
 
 const basename = (p) => (p || '').split('/').pop();
@@ -38,12 +38,14 @@ export function LinkCalibTab() {
   const [connected, setConnected] = useState(false);
   const [streaming, setStreaming] = useState(false);  // recording into the sample store
   const [rate, setRate] = useState(30);
-  const [source, setSource] = useState('mock');       // 'mock' | 'oculus'
+  const [sourceA, setSourceA] = useState('mock');     // 'mock' | 'oculus' | 'steamvr'
+  const [sourceB, setSourceB] = useState('none');     // 'none' disables the second source
   const [oculusIp, setOculusIp] = useState('');       // optional network ADB
   const [linkLabel, setLinkLabel] = useState('tracker_to_ctrl');
   const [showTraj, setShowTraj] = useState(true);
   const [showGround, setShowGround] = useState(true);
   const [showLink, setShowLink] = useState(true);
+  const [showAfter, setShowAfter] = useState(false); // overlay B re-projected through T_a_b
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState('');
   const [result, setResult] = useState(null);
@@ -75,10 +77,11 @@ export function LinkCalibTab() {
     if (wsRef.current) return;
     setStatus('connecting…');
     try {
+      const picked = [sourceA, sourceB].filter(s => s && s !== 'none');
       const url = await posesWsUrl({
         fps: rate,
-        source,
-        ip: source === 'oculus' && oculusIp ? oculusIp : undefined,
+        sources: picked,
+        ip: picked.includes('oculus') && oculusIp ? oculusIp : undefined,
       });
       const ws = new WebSocket(url);
       wsRef.current = ws;
@@ -104,7 +107,8 @@ export function LinkCalibTab() {
             setDevB(m.devices[1]);
           }
           setGtLink(m.gt_T_a_b || null);
-          setStatus(`hello · ${m.source ?? 'mock'} · ${m.devices?.length ?? 0} devices · ${m.fps} Hz`);
+          const srcTag = Array.isArray(m.sources) ? m.sources.join('+') : (m.source ?? 'mock');
+          setStatus(`hello · ${srcTag} · ${m.devices?.length ?? 0} devices · ${m.fps} Hz`);
           return;
         }
         if (m.type !== 'sample') return;
@@ -125,7 +129,7 @@ export function LinkCalibTab() {
     } catch (e) {
       setStatus(`connect failed: ${e.message}`);
     }
-  }, [rate, source, oculusIp]);
+  }, [rate, sourceA, sourceB, oculusIp]);
 
   const disconnect = useCallback(() => {
     if (wsRef.current) { try { wsRef.current.close(); } catch {} wsRef.current = null; }
@@ -230,6 +234,17 @@ export function LinkCalibTab() {
 
   const pts = (arr) => arr.map(s => applyT(s.T, [0, 0, 0]));
 
+  // "After extrinsics" overlay: take each B sample and map it through X⁻¹ to
+  // predict where A would be. If T_a_b is correct, this trace sits on top of A.
+  // Memoize because it only changes when result.T or viz.b changes.
+  const predictedA = useMemo(() => {
+    if (!result?.ok || !result.T || !viz.b?.length) return [];
+    const X = result.T;
+    const Xi = invT(X);
+    const offset = applyT(Xi, [0, 0, 0]);  // A origin as seen in B's frame
+    return viz.b.map(s => applyT(s.T, offset));
+  }, [result, viz.b]);
+
   return (
     <div className="workspace">
       <div className="rail">
@@ -240,16 +255,25 @@ export function LinkCalibTab() {
           </span>
         </div>
         <div className="rail-scroll">
-          <Section title="Pose source" hint={source}>
-            <Field label="source">
-              <select className="select" value={source} disabled={connected}
-                onChange={e => setSource(e.target.value)}>
+          <Section title="Pose source" hint={sourceB === 'none' ? sourceA : `${sourceA} + ${sourceB}`}>
+            <Field label="source A">
+              <select className="select" value={sourceA} disabled={connected}
+                onChange={e => setSourceA(e.target.value)}>
                 <option value="mock">mock (Lissajous)</option>
                 <option value="oculus">oculus (Quest3s)</option>
                 <option value="steamvr">steamvr (Vive tracker)</option>
               </select>
             </Field>
-            {source === 'oculus' && (
+            <Field label="source B">
+              <select className="select" value={sourceB} disabled={connected}
+                onChange={e => setSourceB(e.target.value)}>
+                <option value="none">— (single source)</option>
+                <option value="mock">mock (Lissajous)</option>
+                <option value="oculus">oculus (Quest3s)</option>
+                <option value="steamvr">steamvr (Vive tracker)</option>
+              </select>
+            </Field>
+            {(sourceA === 'oculus' || sourceB === 'oculus') && (
               <Field label="adb ip">
                 <input className="input" placeholder="(blank = USB)" value={oculusIp}
                   disabled={connected}
@@ -316,6 +340,15 @@ export function LinkCalibTab() {
           <Chk checked={showTraj} onChange={setShowTraj}>trajectories</Chk>
           <Chk checked={showLink} onChange={setShowLink}>rigid link</Chk>
           <Chk checked={showGround} onChange={setShowGround}>ground grid</Chk>
+          <button
+            className={`btn ${showAfter ? 'primary' : 'ghost'}`}
+            disabled={!result?.ok}
+            onClick={() => setShowAfter(v => !v)}
+            title={result?.ok
+              ? 'overlay B re-projected through T_a_b onto A'
+              : 'solve first to enable'}>
+            {showAfter ? '◉' : '○'} after extrinsics
+          </button>
           <div className="spacer"/>
           <div className="read">
             {result?.ok
@@ -336,6 +369,9 @@ export function LinkCalibTab() {
                   {showTraj && viz.b.length > 1 && (
                     <Traj3D points={pts(viz.b)} cam={cam} color="#b78cff" dotEvery={8}/>
                   )}
+                  {showAfter && predictedA.length > 1 && (
+                    <Traj3D points={predictedA} cam={cam} color="#7fffbf" dotEvery={8}/>
+                  )}
                   {viz.curA && <Tracker3D    T={viz.curA} cam={cam} label={devA}/>}
                   {viz.curB && <Controller3D T={viz.curB} cam={cam} label={devB}/>}
                   {showLink && viz.curA && viz.curB && (
@@ -350,6 +386,9 @@ export function LinkCalibTab() {
             <div className="vp-corner-read">
               <div>A <b style={{color:'#ffa95a'}}>{devA}</b> · {countA} pts</div>
               <div>B <b style={{color:'#b78cff'}}>{devB}</b> · {countB} pts</div>
+              {showAfter && predictedA.length > 0 && (
+                <div><b style={{color:'#7fffbf'}}>B·X⁻¹</b> → predicted A</div>
+              )}
               {viz.curA && (
                 <div>pA [{(viz.curA[0][3]).toFixed(3)}, {(viz.curA[1][3]).toFixed(3)}, {(viz.curA[2][3]).toFixed(3)}]</div>
               )}

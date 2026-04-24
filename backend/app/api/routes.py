@@ -289,9 +289,11 @@ async def stream(ws: WebSocket) -> None:
 
 
 # ---- pose stream -----------------------------------------------------------
-# Pluggable source behind `?source=mock|oculus`. The wire format is stable:
-# first message is `hello` (devices, fps, optional ground-truth link), then
-# `sample` messages carrying {device_id: 4x4 pose} at the requested rate.
+# Multiplexes one or more pluggable `PoseSource`s behind `?sources=a,b,...`.
+# Wire format: first message is `hello` with the concatenated device list; then
+# `sample` messages carry a merged {device_id: 4x4 pose} dict per tick. Sources
+# sample independently, so the merged tick conflates up to ~one period of skew
+# between them — acceptable for slow rigid-body calibration.
 
 from app.sources.poses import PoseSource
 from app.sources.poses.mock import MockPoseSource
@@ -312,67 +314,87 @@ def _build_pose_source(source: str, ip_address: str | None) -> PoseSource:
     raise ValueError(f"unknown pose source: {source!r}")
 
 
+def _parse_sources(sources: str) -> list[str]:
+    names = [s.strip().lower() for s in (sources or "mock").split(",") if s.strip()]
+    return names or ["mock"]
+
+
 @router.websocket("/poses/stream")
 async def poses_stream(
     ws: WebSocket,
     fps: int = 30,
-    source: str = "mock",
+    sources: str = "mock",
     ip: str | None = None,
 ) -> None:
-    """Streams paired poses for the Link tab from the selected source.
+    """Streams merged poses from one or more sources.
 
     Query params:
-      - fps:    tick rate (clamped ≥ 1)
-      - source: "mock" (default) | "oculus"
-      - ip:     optional IP for network ADB when source=oculus
+      - fps:     tick rate (clamped ≥ 1)
+      - sources: comma list, e.g. "mock" or "oculus,steamvr"
+      - ip:      optional IP for network ADB (applies to the oculus source)
     """
     await ws.accept()
+    names = _parse_sources(sources)
+    built: list[tuple[str, PoseSource]] = []
     try:
-        try:
-            src: PoseSource = _build_pose_source(source, ip)
-        except Exception as e:
-            log.warning("pose source %r failed to init: %s", source, e)
-            await ws.send_text(json.dumps({
-                "type": "error",
-                "source": source,
-                "message": str(e),
-            }))
-            await ws.close(code=1011)
-            return
+        for name in names:
+            try:
+                built.append((name, _build_pose_source(name, ip)))
+            except Exception as e:
+                log.warning("pose source %r failed to init: %s", name, e)
+                await ws.send_text(json.dumps({
+                    "type": "error",
+                    "source": name,
+                    "message": str(e),
+                }))
+                await ws.close(code=1011)
+                return
 
-        hello = src.hello()
+        # Merge hello envelopes: union of device lists (ordered by source),
+        # first non-null gt_T_a_b wins (mock is the only source that sets it).
+        all_devices: list[str] = []
+        seen: set[str] = set()
+        gt_link = None
+        for _name, src in built:
+            h = src.hello()
+            for d in h.get("devices") or []:
+                if d not in seen:
+                    seen.add(d)
+                    all_devices.append(d)
+            if gt_link is None and h.get("gt_T_a_b") is not None:
+                gt_link = h["gt_T_a_b"]
+
         await ws.send_text(json.dumps({
             "type": "hello",
-            "source": source,
+            "sources": names,
             "fps": int(fps),
-            "devices": hello.get("devices", []),
-            "gt_T_a_b": hello.get("gt_T_a_b"),
+            "devices": all_devices,
+            "gt_T_a_b": gt_link,
         }))
 
         period = 1.0 / max(1, fps)
         seq = 0
         t0 = time.monotonic()
-        try:
-            while True:
-                t = time.monotonic() - t0
-                poses = src.poll(t)
-                msg = {
-                    "type": "sample",
-                    "seq": seq, "ts": t,
-                    "poses": poses,
-                }
-                try:
-                    await ws.send_text(json.dumps(msg))
-                except (WebSocketDisconnect, RuntimeError):
-                    break
-                seq += 1
-                await asyncio.sleep(period)
-        finally:
-            src.close()
+        while True:
+            t = time.monotonic() - t0
+            merged: dict = {}
+            for _name, src in built:
+                merged.update(src.poll(t))
+            msg = {"type": "sample", "seq": seq, "ts": t, "poses": merged}
+            try:
+                await ws.send_text(json.dumps(msg))
+            except (WebSocketDisconnect, RuntimeError):
+                break
+            seq += 1
+            await asyncio.sleep(period)
     except WebSocketDisconnect:
         pass
     except Exception:
         log.exception("poses/stream failed")
+    finally:
+        for _name, src in built:
+            try: src.close()
+            except Exception: log.exception("source close failed")
 
 
 @router.websocket("/stream/ws")
