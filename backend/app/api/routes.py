@@ -18,7 +18,7 @@ from app import __version__
 from app.models import (
     Board, DetectRequest, DetectFileRequest, DetectResponse,
     IntrinsicsRequest, FisheyeRequest, ExtrinsicsRequest,
-    HandEyeRequest, ChainRequest, CalibrationResult, DatasetListResponse,
+    HandEyeRequest, ChainRequest, LinkRequest, CalibrationResult, DatasetListResponse,
     CalibrationSavePayload, CalibrationLoadResponse,
 )
 from app.calib import intrinsics, fisheye, extrinsics, handeye, chain, _io
@@ -256,6 +256,12 @@ async def calibrate_chain(req: ChainRequest) -> CalibrationResult:
     return chain.calibrate(req)
 
 
+@router.post("/calibrate/link", response_model=CalibrationResult)
+async def calibrate_link(req: LinkRequest) -> CalibrationResult:
+    """Inline rigid-link solver. Same math as /calibrate/chain, poses passed as dicts."""
+    return chain.calibrate_link(req)
+
+
 @router.post("/calibration/save")
 async def calibration_save(payload: CalibrationSavePayload) -> dict:
     path = yaml_io.save_calibration(payload)
@@ -280,6 +286,93 @@ async def stream(ws: WebSocket) -> None:
             await asyncio.sleep(1.0)
     except WebSocketDisconnect:
         log.info("stream client disconnected")
+
+
+# ---- pose stream -----------------------------------------------------------
+# Pluggable source behind `?source=mock|oculus`. The wire format is stable:
+# first message is `hello` (devices, fps, optional ground-truth link), then
+# `sample` messages carrying {device_id: 4x4 pose} at the requested rate.
+
+from app.sources.poses import PoseSource
+from app.sources.poses.mock import MockPoseSource
+
+
+def _build_pose_source(source: str, ip_address: str | None) -> PoseSource:
+    s = (source or "mock").lower()
+    if s == "mock":
+        return MockPoseSource()
+    if s == "oculus":
+        # Import lazily — pulls in the vendored submodule + adb client only
+        # when this source is actually requested.
+        from app.sources.poses.oculus import OculusPoseSource
+        return OculusPoseSource(ip_address=ip_address)
+    if s == "steamvr":
+        from app.sources.poses.steamvr import SteamVRPoseSource
+        return SteamVRPoseSource()
+    raise ValueError(f"unknown pose source: {source!r}")
+
+
+@router.websocket("/poses/stream")
+async def poses_stream(
+    ws: WebSocket,
+    fps: int = 30,
+    source: str = "mock",
+    ip: str | None = None,
+) -> None:
+    """Streams paired poses for the Link tab from the selected source.
+
+    Query params:
+      - fps:    tick rate (clamped ≥ 1)
+      - source: "mock" (default) | "oculus"
+      - ip:     optional IP for network ADB when source=oculus
+    """
+    await ws.accept()
+    try:
+        try:
+            src: PoseSource = _build_pose_source(source, ip)
+        except Exception as e:
+            log.warning("pose source %r failed to init: %s", source, e)
+            await ws.send_text(json.dumps({
+                "type": "error",
+                "source": source,
+                "message": str(e),
+            }))
+            await ws.close(code=1011)
+            return
+
+        hello = src.hello()
+        await ws.send_text(json.dumps({
+            "type": "hello",
+            "source": source,
+            "fps": int(fps),
+            "devices": hello.get("devices", []),
+            "gt_T_a_b": hello.get("gt_T_a_b"),
+        }))
+
+        period = 1.0 / max(1, fps)
+        seq = 0
+        t0 = time.monotonic()
+        try:
+            while True:
+                t = time.monotonic() - t0
+                poses = src.poll(t)
+                msg = {
+                    "type": "sample",
+                    "seq": seq, "ts": t,
+                    "poses": poses,
+                }
+                try:
+                    await ws.send_text(json.dumps(msg))
+                except (WebSocketDisconnect, RuntimeError):
+                    break
+                seq += 1
+                await asyncio.sleep(period)
+        finally:
+            src.close()
+    except WebSocketDisconnect:
+        pass
+    except Exception:
+        log.exception("poses/stream failed")
 
 
 @router.websocket("/stream/ws")

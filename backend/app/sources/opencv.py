@@ -47,13 +47,20 @@ class CameraSource:
             if not cap.isOpened():
                 self._refs -= 1
                 raise RuntimeError(f"cannot open {self.device}")
-            # Ask for a reasonable default resolution; many webcams ignore this but it's harmless.
-            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+            # UVC webcams usually expose both YUYV and MJPG; YUYV eats far more USB
+            # bandwidth, which can cap effective fps even when the driver advertises 60.
+            # Requesting MJPG typically unlocks the full rate. Leave BUFFERSIZE at the
+            # driver default — setting it to 1 forces driver/consumer ping-pong over a
+            # single V4L2 buffer and halves throughput (observed: ~37 fps vs 60). Our
+            # grabber thread keeps the ring drained into `_latest`, so a larger ring
+            # doesn't increase latency.
+            cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+            cap.set(cv2.CAP_PROP_FPS, 60)
             self.cap = cap
             self._stop.clear()
             self._thread = threading.Thread(target=self._run, name=f"grab-{self.device}", daemon=True)
             self._thread.start()
-            log.info("opened camera %s", self.device)
+            log.info("opened camera %s · %d fps", self.device, int(cap.get(cv2.CAP_PROP_FPS)))
 
     def _run(self) -> None:
         misses = 0

@@ -48,6 +48,16 @@ export async function mjpegUrl(device, opts = {}) {
   return `${baseUrl}/stream/mjpeg?${qs.toString()}`;
 }
 
+export async function posesWsUrl(opts = {}) {
+  const { port } = await info();
+  const qs = new URLSearchParams({
+    fps: String(opts.fps ?? 30),
+    source: opts.source ?? 'mock',
+  });
+  if (opts.ip) qs.set('ip', opts.ip);
+  return `ws://127.0.0.1:${port}/poses/stream?${qs.toString()}`;
+}
+
 export async function streamWsUrl(device, opts = {}) {
   const { port } = await info();
   const qs = new URLSearchParams({

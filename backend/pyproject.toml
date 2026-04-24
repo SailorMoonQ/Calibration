@@ -17,6 +17,9 @@ dependencies = [
 dev = ["pyinstaller>=6.11", "pytest>=8.3"]
 # On Linux with SteamVR installed:
 steamvr = ["triad-openvr>=1.0.0"]
+# Quest3(s) via OculusReader submodule (third_party/oculus_reader).
+# Requires `adb` on the host and the teleop APK installed on the device.
+oculus = ["pure-python-adb>=0.3.0"]
 
 [build-system]
 requires = ["setuptools>=68", "wheel"]
