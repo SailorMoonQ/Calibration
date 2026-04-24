@@ -1,0 +1,54 @@
+{
+  "name": "calibration-workbench",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Camera / fish-eye / hand-eye / chain calibration GUI for VR rigs.",
+  "main": "electron/main.js",
+  "scripts": {
+    "dev": "concurrently -k -n vite,electron -c cyan,magenta \"npm:dev:vite\" \"npm:dev:electron\"",
+    "dev:vite": "vite --config renderer/vite.config.js",
+    "dev:electron": "wait-on http://localhost:5173 && cross-env NODE_ENV=development electron .",
+    "build:renderer": "vite build --config renderer/vite.config.js",
+    "build:backend": "bash scripts/build-backend.sh",
+    "build:linux": "npm run build:renderer && npm run build:backend && electron-builder --linux",
+    "postinstall": "electron-builder install-app-deps"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.4",
+    "concurrently": "^9.1.0",
+    "cross-env": "^7.0.3",
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8",
+    "vite": "^6.0.3",
+    "wait-on": "^8.0.1"
+  },
+  "dependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "build": {
+    "appId": "ai.calibration.workbench",
+    "productName": "Calibration Workbench",
+    "asar": true,
+    "files": [
+      "electron/**/*",
+      "renderer/dist/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "backend/dist/calib-backend",
+        "to": "backend/calib-backend"
+      }
+    ],
+    "linux": {
+      "target": ["AppImage"],
+      "category": "Science",
+      "artifactName": "${productName}-${version}-${arch}.${ext}"
+    },
+    "directories": {
+      "buildResources": "build",
+      "output": "dist"
+    }
+  }
+}
