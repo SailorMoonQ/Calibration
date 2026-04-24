@@ -50,9 +50,12 @@ export async function mjpegUrl(device, opts = {}) {
 
 export async function posesWsUrl(opts = {}) {
   const { port } = await info();
+  const list = Array.isArray(opts.sources) && opts.sources.length
+    ? opts.sources
+    : [opts.source ?? 'mock'];
   const qs = new URLSearchParams({
     fps: String(opts.fps ?? 30),
-    source: opts.source ?? 'mock',
+    sources: list.join(','),
   });
   if (opts.ip) qs.set('ip', opts.ip);
   return `ws://127.0.0.1:${port}/poses/stream?${qs.toString()}`;
