@@ -21,7 +21,7 @@ import os
 import cv2
 import numpy as np
 
-from app.models import ChainRequest, CalibrationResult
+from app.models import ChainRequest, LinkRequest, CalibrationResult
 
 log = logging.getLogger("calib.chain")
 
@@ -56,22 +56,32 @@ def _angle_deg(R: np.ndarray) -> float:
     return float(np.degrees(np.arccos(np.clip(c, -1.0, 1.0))))
 
 
-def calibrate(req: ChainRequest) -> CalibrationResult:
-    try:
-        poses_a = _load_poses_json(req.poses_a_path)
-        poses_b = _load_poses_json(req.poses_b_path)
-    except (FileNotFoundError, ValueError, json.JSONDecodeError) as e:
-        return CalibrationResult(ok=False, rms=0.0, message=f"chain input error: {e}")
+def _as_pose_dict(raw: dict[str, list[list[float]]]) -> dict[str, np.ndarray]:
+    out: dict[str, np.ndarray] = {}
+    for k, v in raw.items():
+        M = np.array(v, dtype=np.float64)
+        if M.shape == (4, 4):
+            out[str(k)] = M
+        elif M.shape == (3, 4):
+            T = np.eye(4); T[:3] = M; out[str(k)] = T
+        else:
+            raise ValueError(f"pose for {k!r} must be 4x4 or 3x4, got {M.shape}")
+    return out
 
+
+def _solve_rigid_link(
+    poses_a: dict[str, np.ndarray],
+    poses_b: dict[str, np.ndarray],
+    label: str,
+) -> CalibrationResult:
     common = sorted(set(poses_a) & set(poses_b))
     if len(common) < 2:
         return CalibrationResult(
             ok=False, rms=0.0,
-            message=f"need ≥ 2 matched frames, got {len(common)} (A:{len(poses_a)} B:{len(poses_b)}).",
+            message=f"need ≥ 2 matched samples, got {len(common)} (A:{len(poses_a)} B:{len(poses_b)}).",
         )
 
     deltas = [np.linalg.inv(poses_a[n]) @ poses_b[n] for n in common]
-    # chordal-mean rotation + arithmetic-mean translation
     R_sum = np.sum([D[:3, :3] for D in deltas], axis=0)
     R_hat = _project_to_SO3(R_sum)
     t_hat = np.mean([D[:3, 3] for D in deltas], axis=0)
@@ -79,24 +89,22 @@ def calibrate(req: ChainRequest) -> CalibrationResult:
     X[:3, :3] = R_hat
     X[:3, 3] = t_hat
 
-    # Per-frame residuals: compare estimated T_base_b_hat = T_a · X vs observed T_b.
     per_frame_err: list[float] = []
     rot_errs_deg: list[float] = []
     trans_errs_mm: list[float] = []
     for n in common:
         T_b_hat = poses_a[n] @ X
         dR = T_b_hat[:3, :3].T @ poses_b[n][:3, :3]
-        rot_deg = _angle_deg(dR)
+        rot_errs_deg.append(_angle_deg(dR))
         dt_mm = float(np.linalg.norm(T_b_hat[:3, 3] - poses_b[n][:3, 3]) * 1000.0)
-        rot_errs_deg.append(rot_deg)
         trans_errs_mm.append(dt_mm)
-        per_frame_err.append(dt_mm)  # primary per-frame scalar for histograms/strips
+        per_frame_err.append(dt_mm)
 
     rot_rms = float(np.sqrt(np.mean(np.square(rot_errs_deg))))
     trans_rms = float(np.sqrt(np.mean(np.square(trans_errs_mm))))
 
-    log.info("chain(%s) pairs=%d · rot_rms=%.3f° trans_rms=%.2fmm",
-             req.link_label, len(common), rot_rms, trans_rms)
+    log.info("link(%s) pairs=%d · rot_rms=%.3f° trans_rms=%.2fmm",
+             label, len(common), rot_rms, trans_rms)
 
     return CalibrationResult(
         ok=True,
@@ -107,5 +115,23 @@ def calibrate(req: ChainRequest) -> CalibrationResult:
         detected_paths=common,
         iterations=len(common),
         final_cost=float(trans_rms),
-        message=f"chain/{req.link_label} · {len(common)} pairs · rot {rot_rms:.3f}° · trans {trans_rms:.2f} mm",
+        message=f"link/{label} · {len(common)} pairs · rot {rot_rms:.3f}° · trans {trans_rms:.2f} mm",
     )
+
+
+def calibrate(req: ChainRequest) -> CalibrationResult:
+    try:
+        poses_a = _load_poses_json(req.poses_a_path)
+        poses_b = _load_poses_json(req.poses_b_path)
+    except (FileNotFoundError, ValueError, json.JSONDecodeError) as e:
+        return CalibrationResult(ok=False, rms=0.0, message=f"chain input error: {e}")
+    return _solve_rigid_link(poses_a, poses_b, req.link_label)
+
+
+def calibrate_link(req: LinkRequest) -> CalibrationResult:
+    try:
+        poses_a = _as_pose_dict(req.poses_a)
+        poses_b = _as_pose_dict(req.poses_b)
+    except ValueError as e:
+        return CalibrationResult(ok=False, rms=0.0, message=f"link input error: {e}")
+    return _solve_rigid_link(poses_a, poses_b, req.link_label)

@@ -84,6 +84,14 @@ class ChainRequest(BaseModel):
     link_label: str = "a_b"
 
 
+class LinkRequest(BaseModel):
+    # Same solver as ChainRequest but poses come inline (from a live collector rather than
+    # JSON on disk). Keyed by arbitrary sample id; the solver matches by common keys.
+    poses_a: dict[str, list[list[float]]]
+    poses_b: dict[str, list[list[float]]]
+    link_label: str = "a_b"
+
+
 class CalibrationResult(BaseModel):
     ok: bool
     rms: float
