@@ -1,0 +1,26 @@
+[project]
+name = "calib-backend"
+version = "0.1.0"
+description = "Calibration Workbench backend — OpenCV + SteamVR + bundle adjustment."
+requires-python = ">=3.10"
+dependencies = [
+  "fastapi>=0.115",
+  "uvicorn[standard]>=0.32",
+  "pydantic>=2.9",
+  "numpy>=1.26",
+  "opencv-contrib-python>=4.10",
+  "scipy>=1.13",
+  "ruamel.yaml>=0.18",
+]
+
+[project.optional-dependencies]
+dev = ["pyinstaller>=6.11", "pytest>=8.3"]
+# On Linux with SteamVR installed:
+steamvr = ["triad-openvr>=1.0.0"]
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["app*"]
