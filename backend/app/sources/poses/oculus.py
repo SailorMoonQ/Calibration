@@ -47,7 +47,7 @@ class OculusPoseSource(PoseSource):
         log.info("OculusReader started (ip=%s)", ip_address or "usb")
 
     def hello(self) -> dict:
-        return {"devices": list(DEVICES), "gt_T_a_b": None}
+        return {"devices": list(DEVICES), "gt_T_a_b": None, "bases": 0}
 
     def poll(self, t: float) -> dict[str, list[list[float]]]:
         transforms, _buttons = self._reader.get_transformations_and_buttons()

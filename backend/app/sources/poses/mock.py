@@ -50,7 +50,7 @@ class MockPoseSource(PoseSource):
         self._gt = _ground_truth_link()
 
     def hello(self) -> dict:
-        return {"devices": list(DEVICES), "gt_T_a_b": self._gt.tolist()}
+        return {"devices": list(DEVICES), "gt_T_a_b": self._gt.tolist(), "bases": 0}
 
     def poll(self, t: float) -> dict[str, list[list[float]]]:
         Ta = _tracker_pose(t)
