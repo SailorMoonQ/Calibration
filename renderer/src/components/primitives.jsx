@@ -124,13 +124,14 @@ export function Spark({ data, w = 200, h = 44, color = 'var(--accent)', threshol
 }
 
 export function Histogram({ data, bins = 20, w = 280, h = 60, color = 'var(--accent)' }) {
+  if (!data?.length) return null;
   const counts = Array(bins).fill(0);
-  const max = Math.max(...data);
+  const max = Math.max(...data) || 1;  // avoid div-by-zero when all values are 0
   data.forEach(v => {
     const b = Math.min(bins - 1, Math.floor(v / max * bins));
     counts[b]++;
   });
-  const cmax = Math.max(...counts);
+  const cmax = Math.max(...counts) || 1;
   const bw = (w - 4) / bins;
   return (
     <svg width={w} height={h}>

@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useRef } from 'react';
 import { Section, Seg, Field, Chk, KV, NumInput, Spark, Histogram } from './primitives.jsx';
 
 function FrameThumb({ f }) {
@@ -16,6 +16,15 @@ function FrameThumb({ f }) {
 }
 
 export function FrameStrip({ frames, selected, onSelect, coverage }) {
+  const activeRef = useRef(null);
+  // Whenever the selection changes, slide the strip so the active thumb is centered.
+  // `block: 'nearest'` keeps the page from also scrolling vertically.
+  useEffect(() => {
+    if (activeRef.current && typeof activeRef.current.scrollIntoView === 'function') {
+      activeRef.current.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+    }
+  }, [selected]);
+
   return (
     <div className="framestrip">
       <div style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 110, fontSize: 10, color: 'var(--text-3)', fontFamily: 'JetBrains Mono' }}>
@@ -23,14 +32,20 @@ export function FrameStrip({ frames, selected, onSelect, coverage }) {
         <div>coverage <b style={{color: 'var(--text)'}}>{coverage}%</b></div>
       </div>
       <div style={{ width: 1, height: 38, background: 'var(--border-soft)' }}/>
-      {frames.map(f => (
-        <div key={f.id} className={"frame-thumb" + (selected === f.id ? ' active' : '')} onClick={() => onSelect(f.id)}>
-          <FrameThumb f={f}/>
-          <span className="fnum">#{f.id.toString().padStart(2,'0')}</span>
-          <span className="ferr" style={{ color: f.err > 0.6 ? 'oklch(0.75 0.17 25)' : f.err > 0.35 ? 'oklch(0.8 0.15 70)' : 'oklch(0.82 0.14 150)' }}>{f.err.toFixed(2)}</span>
-          <span className="fbar" style={{ width: (1 - Math.min(1, f.err)) * 100 + '%', background: f.err > 0.6 ? 'var(--err)' : f.err > 0.35 ? 'var(--warn)' : 'var(--ok)' }}/>
-        </div>
-      ))}
+      {frames.map(f => {
+        const isActive = selected === f.id;
+        return (
+          <div key={f.id}
+               ref={isActive ? activeRef : null}
+               className={"frame-thumb" + (isActive ? ' active' : '')}
+               onClick={() => onSelect(f.id)}>
+            <FrameThumb f={f}/>
+            <span className="fnum">#{f.id.toString().padStart(2,'0')}</span>
+            <span className="ferr" style={{ color: f.err > 0.6 ? 'oklch(0.75 0.17 25)' : f.err > 0.35 ? 'oklch(0.8 0.15 70)' : 'oklch(0.82 0.14 150)' }}>{f.err.toFixed(2)}</span>
+            <span className="fbar" style={{ width: (1 - Math.min(1, f.err)) * 100 + '%', background: f.err > 0.6 ? 'var(--err)' : f.err > 0.35 ? 'var(--warn)' : 'var(--ok)' }}/>
+          </div>
+        );
+      })}
       <button className="btn sm ghost" style={{ marginLeft: 4, flex: '0 0 auto' }}>+ add</button>
     </div>
   );
@@ -89,7 +104,7 @@ export function ErrorPanel({ rms, frames, histData }) {
   );
 }
 
-export function CaptureControls({ live, onLive, autoCapture, onAuto, onSnap, coverage, coverageCells }) {
+export function CaptureControls({ live, onLive, autoCapture, onAuto, onSnap, onDrop, coverage, coverageCells }) {
   return (
     <Section title="Capture" hint="live feed">
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
@@ -98,7 +113,7 @@ export function CaptureControls({ live, onLive, autoCapture, onAuto, onSnap, cov
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
         <button className="btn" onClick={onSnap}>⌁ snap frame</button>
-        <button className="btn danger">⌧ drop selected</button>
+        <button className="btn danger" onClick={onDrop} disabled={!onDrop}>⌧ drop selected</button>
       </div>
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 4 }}>
         <CoverageGrid cells={coverageCells}/>
@@ -112,15 +127,26 @@ export function CaptureControls({ live, onLive, autoCapture, onAuto, onSnap, cov
   );
 }
 
-export function SolverButton({ onSolve, busy, label = "Run calibration" }) {
+export function SolverButton({ onSolve, busy, label = "Run calibration", status, statusKind }) {
+  // statusKind: 'err' | 'warn' | 'ok' | undefined — drives the color of the status line.
+  const color =
+    statusKind === 'err'  ? 'var(--err)'  :
+    statusKind === 'warn' ? 'var(--warn)' :
+    statusKind === 'ok'   ? 'var(--ok)'   : 'var(--text-3)';
   return (
     <div style={{ padding: 10, borderTop: '1px solid var(--border-soft)', background: 'var(--surface-2)' }}>
       <button className="btn primary block lg" onClick={onSolve} disabled={busy}>
         {busy ? '◉ solving…' : '▶ ' + label}
       </button>
-      <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 6, fontSize: 10.5, color: 'var(--text-3)', fontFamily: 'JetBrains Mono' }}>
-        <span>⌘↵ run</span><span>⌘S export YAML</span>
-      </div>
+      {status ? (
+        <div className="mono" style={{ marginTop: 6, fontSize: 11, color, lineHeight: 1.35, wordBreak: 'break-word' }}>
+          {status}
+        </div>
+      ) : (
+        <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 6, fontSize: 10.5, color: 'var(--text-3)', fontFamily: 'JetBrains Mono' }}>
+          <span>⌘↵ run</span><span>⌘S export YAML</span>
+        </div>
+      )}
     </div>
   );
 }
@@ -139,7 +165,11 @@ export function SolverPanel({ iters = 28, cost = 0.184, cond = 142.3, algo = "Le
   );
 }
 
-export function SourcePanel({ live, onLive, device, onDevice, bagPath, onBagPath }) {
+export function SourcePanel({ live, onLive, device, onDevice, bagPath, onBagPath, streamInfo }) {
+  const hasInfo = streamInfo && streamInfo.open && streamInfo.width;
+  const resLabel = hasInfo
+    ? `${streamInfo.width} × ${streamInfo.height} @ ${streamInfo.capture_fps?.toFixed(1) ?? '—'} / ${streamInfo.fps_advertised?.toFixed(0) ?? '—'} fps`
+    : 'no live device';
   return (
     <Section title="Source" hint={live ? 'live' : 'recorded'} right={
       <Seg value={live ? 'live' : 'bag'} onChange={v => onLive(v === 'live')} options={[{value:'live', label:'live'},{value:'bag',label:'bag'}]}/>
@@ -155,7 +185,9 @@ export function SourcePanel({ live, onLive, device, onDevice, bagPath, onBagPath
             </select>
           </Field>
           <Field label="resolution">
-            <select className="select"><option>1920 × 1200 @ 30</option><option>1280 × 720 @ 60</option></select>
+            <div className="input mono" style={{ display:'flex', alignItems:'center', color: hasInfo ? 'var(--text-1)' : 'var(--text-4)', fontSize: 11.5 }}>
+              {resLabel}
+            </div>
           </Field>
           <Field label="exposure">
             <div style={{ display:'flex', gap: 4, alignItems:'center', width: '100%' }}>
