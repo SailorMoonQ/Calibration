@@ -38,17 +38,24 @@ class SteamVRPoseSource(PoseSource):
             raise RuntimeError(f"SteamVR init failed: {e}") from e
 
         # Snapshot the tracked set at connect time. Tracking-reference entries
-        # are base stations — stationary by design, so not useful for the Link tab.
+        # are base stations — stationary by design, so not useful for the Link
+        # tab — but the count is surfaced via hello() so the Topbar's SteamVR
+        # pill can show "N bases".
+        all_names = list(self._ov.devices)
+        self._bases = sum(1 for n in all_names if n.startswith("tracking_reference"))
         self._devices = sorted(
-            name for name in self._ov.devices
+            name for name in all_names
             if not name.startswith("tracking_reference")
         )
         if not self._devices:
             raise RuntimeError("SteamVR initialized but no tracked devices visible")
-        log.info("SteamVR: %d device(s) — %s", len(self._devices), self._devices)
+        log.info(
+            "SteamVR: %d device(s) — %s · %d base(s)",
+            len(self._devices), self._devices, self._bases,
+        )
 
     def hello(self) -> dict:
-        return {"devices": list(self._devices), "gt_T_a_b": None}
+        return {"devices": list(self._devices), "gt_T_a_b": None, "bases": self._bases}
 
     def poll(self, t: float) -> dict[str, list[list[float]]]:
         out: dict[str, list[list[float]]] = {}
