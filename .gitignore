@@ -533,3 +533,7 @@ venv/
 # Electron
 out/
 release/
+
+# Calibration capture sessions (working data, not source)
+dataset/
+**/.trash/

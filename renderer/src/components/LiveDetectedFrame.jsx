@@ -16,6 +16,7 @@ export function LiveDetectedFrame({
   device, board,
   fps = 10, quality = 70, detect = true,
   showCorners = true, showOrigin = true,
+  onMeta,                 // optional: called each frame with the parsed meta { seq, ts, image_size, corners, ids }
 }) {
   const [state, setState] = useState({ url: null, meta: null });
   const [err, setErr] = useState(null);
@@ -23,6 +24,10 @@ export function LiveDetectedFrame({
   const wsRef = useRef(null);
   const urlRef = useRef(null);
   const tickRef = useRef({ recent: [], last: 0 });
+  // Keep onMeta in a ref so the websocket handler always sees the latest closure
+  // without re-binding (which would tear down the stream on every parent render).
+  const onMetaRef = useRef(onMeta);
+  useEffect(() => { onMetaRef.current = onMeta; }, [onMeta]);
 
   // board key for effect deps
   const bType  = board?.type ?? 'chess';
@@ -58,6 +63,9 @@ export function LiveDetectedFrame({
         if (urlRef.current) URL.revokeObjectURL(urlRef.current);
         urlRef.current = u;
         setState({ url: u, meta });
+        if (onMetaRef.current) {
+          try { onMetaRef.current(meta); } catch (_) {}
+        }
 
         // rolling client-side fps (arrival rate)
         const now = performance.now();

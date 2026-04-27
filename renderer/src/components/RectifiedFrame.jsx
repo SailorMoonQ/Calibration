@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { fetchRectifiedBlob } from '../api/client.js';
 
-export function RectifiedFrame({ path, K, D, balance = 0.5, fovScale = 1.0 }) {
+export function RectifiedFrame({ path, K, D, balance = 0.5, fovScale = 1.0, method = 'remap' }) {
   const [url, setUrl] = useState(null);
   const [err, setErr] = useState(null);
 
@@ -15,7 +15,7 @@ export function RectifiedFrame({ path, K, D, balance = 0.5, fovScale = 1.0 }) {
     let objectUrl = null;
     if (!path || !K || !D) { setUrl(null); return; }
     setErr(null);
-    fetchRectifiedBlob({ path, K, D, balance, fov_scale: fovScale })
+    fetchRectifiedBlob({ path, K, D, balance, fov_scale: fovScale, method })
       .then(blob => {
         if (cancelled) return;
         objectUrl = URL.createObjectURL(blob);
@@ -26,7 +26,7 @@ export function RectifiedFrame({ path, K, D, balance = 0.5, fovScale = 1.0 }) {
       cancelled = true;
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
-  }, [path, kKey, dKey, balance, fovScale]);
+  }, [path, kKey, dKey, balance, fovScale, method]);
 
   if (err) {
     return (
