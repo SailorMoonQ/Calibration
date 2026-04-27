@@ -28,14 +28,20 @@ export function DetectedFrame({
   }, [path]);
 
   // Detection — skipped when residuals are provided (calibration already detected).
+  // We always reset state at the top of the effect so a previous frame's
+  // {detected: false} doesn't bleed into the next frame and leave a stale
+  // "no board detected" overlay on top of a perfectly-detected image.
   useEffect(() => {
-    if (!path || residuals) return;
+    setErr(null);
+    if (!path) { setDet(null); return; }
+    if (residuals) { setDet(null); return; }  // calibrated frame — trust the residuals
+
     const key = `${path}|${boardKey(board)}`;
     const cached = detectionCache.get(key);
-    if (cached) { setDet(cached); setErr(null); return; }
+    if (cached) { setDet(cached); return; }
 
     const seq = ++reqSeq.current;
-    setDet(null); setErr(null);
+    setDet(null);
     api.detectFile({
       path,
       board: {

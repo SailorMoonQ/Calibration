@@ -57,7 +57,11 @@ ipcMain.handle('dialog:pickSaveFile', async (_evt, { defaultPath, filters } = {}
   const res = await dialog.showSaveDialog(mainWindow, {
     title: 'Save calibration',
     defaultPath: defaultPath || 'calibration.yaml',
-    filters: filters || [{ name: 'YAML', extensions: ['yaml', 'yml'] }],
+    filters: filters || [
+      { name: 'Calibration (YAML / JSON)', extensions: ['yaml', 'yml', 'json'] },
+      { name: 'YAML', extensions: ['yaml', 'yml'] },
+      { name: 'JSON', extensions: ['json'] },
+    ],
   });
   if (res.canceled || !res.filePath) return null;
   return res.filePath;
@@ -68,7 +72,11 @@ ipcMain.handle('dialog:pickOpenFile', async (_evt, { defaultPath, filters } = {}
     title: 'Load calibration',
     defaultPath: defaultPath || undefined,
     properties: ['openFile'],
-    filters: filters || [{ name: 'YAML', extensions: ['yaml', 'yml'] }],
+    filters: filters || [
+      { name: 'Calibration (YAML / JSON)', extensions: ['yaml', 'yml', 'json'] },
+      { name: 'YAML', extensions: ['yaml', 'yml'] },
+      { name: 'JSON', extensions: ['json'] },
+    ],
   });
   if (res.canceled || !res.filePaths.length) return null;
   return res.filePaths[0];

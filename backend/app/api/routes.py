@@ -106,6 +106,89 @@ async def stream_mjpeg(device: str, fps: int = 30, quality: int = 70):
     )
 
 
+@router.get("/stream/mjpeg_rect")
+async def stream_mjpeg_rect(
+    device: str,
+    fx: float, fy: float, cx: float, cy: float,
+    k1: float = 0.0, k2: float = 0.0, k3: float = 0.0, k4: float = 0.0,
+    balance: float = 0.5, fov_scale: float = 1.0, method: str = "remap",
+    fps: int = 30, quality: int = 70,
+):
+    """Live-rectified MJPEG: same as /stream/mjpeg but each frame is undistorted with the
+    given fisheye intrinsics before encoding. Maps are built once from the first frame's
+    image_size and reused — flip a query param to rebuild (changes K/D/balance close the
+    stream client-side and reopen with a new URL)."""
+    if method not in ("remap", "undistort"):
+        raise HTTPException(status_code=400, detail=f"unknown method: {method}")
+    src = source_manager.get(device)
+    if not src.wait_frame(timeout=3.0):
+        source_manager.release(device)
+        raise HTTPException(status_code=503, detail="camera did not produce a frame")
+
+    # Probe the first frame to size the rectification maps.
+    probe = src.read()
+    if probe is None:
+        source_manager.release(device)
+        raise HTTPException(status_code=503, detail="no frame yet")
+    h, w = probe.shape[:2]
+    K = np.array([[fx, 0.0, cx], [0.0, fy, cy], [0.0, 0.0, 1.0]], dtype=np.float64)
+    D = np.array([k1, k2, k3, k4], dtype=np.float64).reshape(-1, 1)
+    new_K = _fisheye_new_K(K, D, w, h, balance, fov_scale)
+    try:
+        if method == "remap":
+            map1, map2 = cv2.fisheye.initUndistortRectifyMap(
+                K, D, np.eye(3), new_K, (w, h), cv2.CV_16SC2,
+            )
+    except cv2.error as e:
+        source_manager.release(device)
+        raise HTTPException(status_code=400, detail=f"rectify init failed: {e}")
+
+    boundary = b"--frame"
+    min_interval = 1.0 / max(1, fps)
+
+    async def gen():
+        last_seq = -1
+        last_sent = 0.0
+        try:
+            while True:
+                while src._latest_seq == last_seq:
+                    await asyncio.sleep(0.003)
+                now = time.time()
+                if last_sent and now - last_sent < min_interval:
+                    await asyncio.sleep(min_interval - (now - last_sent))
+                frame = src.read()
+                if frame is None:
+                    continue
+                last_seq = src._latest_seq
+                if method == "remap":
+                    rect = cv2.remap(frame, map1, map2,
+                                     interpolation=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT)
+                else:
+                    rect = cv2.fisheye.undistortImage(frame, K, D, Knew=new_K, new_size=(w, h))
+                ok, buf = await asyncio.to_thread(
+                    cv2.imencode, ".jpg", rect, [cv2.IMWRITE_JPEG_QUALITY, int(quality)]
+                )
+                if not ok:
+                    continue
+                yield (
+                    boundary + b"\r\n"
+                    b"Content-Type: image/jpeg\r\n"
+                    b"Content-Length: " + str(buf.size).encode() + b"\r\n\r\n"
+                    + buf.tobytes() + b"\r\n"
+                )
+                last_sent = time.time()
+        except asyncio.CancelledError:
+            pass
+        finally:
+            source_manager.release(device)
+
+    return StreamingResponse(
+        gen(),
+        media_type="multipart/x-mixed-replace; boundary=frame",
+        headers={"Cache-Control": "no-cache, no-store, private", "Pragma": "no-cache"},
+    )
+
+
 @router.post("/stream/snap")
 async def stream_snap(body: dict) -> dict:
     device = body.get("device")
@@ -183,9 +266,93 @@ async def dataset_frame(path: str):
     return FileResponse(path)
 
 
+def _fisheye_new_K(K: np.ndarray, D: np.ndarray, w: int, h: int,
+                   balance: float, fov_scale: float) -> np.ndarray:
+    """Pick the new camera matrix for rectification, with a fallback.
+
+    cv2.fisheye.estimateNewCameraMatrixForUndistortRectify is mathematically slick when
+    it works, but on some D vectors it returns a degenerate matrix with fx=fy=0 (every
+    output pixel collapses to the principal point — that's what causes the 'bowtie of
+    streaks' rectified preview). Detect that and fall back to scaling K's own focal by
+    fov_scale and re-centering — produces a sensible rectification at the cost of some
+    of the original FoV at the periphery."""
+    try:
+        nK = cv2.fisheye.estimateNewCameraMatrixForUndistortRectify(
+            K, D, (w, h), np.eye(3), balance=balance, fov_scale=fov_scale,
+        )
+    except cv2.error:
+        nK = None
+    if nK is None or nK[0, 0] < 1.0 or nK[1, 1] < 1.0:
+        nK = K.copy()
+        nK[0, 0] *= fov_scale
+        nK[1, 1] *= fov_scale
+        nK[0, 2] = w / 2.0
+        nK[1, 2] = h / 2.0
+    return nK
+
+
+_IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff")
+
+
+@router.post("/dataset/delete")
+async def dataset_delete(body: dict):
+    """Soft-delete: move the file into <dataset_dir>/.trash/ so the renderer can undo
+    the action by hitting /dataset/restore. Restricted to image extensions so a stray
+    POST with `path: '/etc/passwd'` can't move arbitrary files."""
+    path = body.get("path")
+    if not path or not os.path.isfile(path):
+        raise HTTPException(status_code=404, detail="not found")
+    ext = os.path.splitext(path)[1].lower()
+    if ext not in _IMAGE_EXTS:
+        raise HTTPException(status_code=400, detail=f"refusing to delete non-image: {ext}")
+    parent = os.path.dirname(path)
+    trash_dir = os.path.join(parent, ".trash")
+    base = os.path.basename(path)
+    try:
+        os.makedirs(trash_dir, exist_ok=True)
+        dest = os.path.join(trash_dir, base)
+        if os.path.exists(dest):
+            stem, suf = os.path.splitext(base)
+            dest = os.path.join(trash_dir, f"{stem}_{int(time.time() * 1000)}{suf}")
+        os.rename(path, dest)
+    except OSError as e:
+        raise HTTPException(status_code=500, detail=f"delete failed: {e}")
+    return {"ok": True, "path": path, "trash_path": dest}
+
+
+@router.post("/dataset/restore")
+async def dataset_restore(body: dict):
+    """Move a file out of the trash back to its original dataset path. Used by the
+    renderer's undo flow. Both paths are validated to image extensions."""
+    trash_path = body.get("trash_path")
+    original = body.get("original_path")
+    if not trash_path or not os.path.isfile(trash_path):
+        raise HTTPException(status_code=404, detail="trash file not found")
+    if not original:
+        raise HTTPException(status_code=400, detail="need original_path")
+    for p in (trash_path, original):
+        if os.path.splitext(p)[1].lower() not in _IMAGE_EXTS:
+            raise HTTPException(status_code=400, detail=f"non-image path: {p}")
+    if os.path.exists(original):
+        raise HTTPException(status_code=409, detail=f"original path already exists: {original}")
+    try:
+        os.makedirs(os.path.dirname(original), exist_ok=True)
+        os.rename(trash_path, original)
+    except OSError as e:
+        raise HTTPException(status_code=500, detail=f"restore failed: {e}")
+    return {"ok": True, "path": original}
+
+
 @router.post("/dataset/rectified")
 async def dataset_rectified(body: dict):
-    """Fisheye-rectify the image at `path` with {K, D, balance, fov_scale}. Returns JPEG bytes."""
+    """Fisheye-rectify the image at `path` with {K, D, balance, fov_scale, method}.
+
+    `method` selects the implementation:
+      - "remap"     (default): initUndistortRectifyMap + cv2.remap — exposes the maps
+                    so the same warp can be reused across frames.
+      - "undistort": cv2.fisheye.undistortImage — single-call API, equivalent output.
+    Returns JPEG bytes.
+    """
     path = body.get("path")
     if not path or not os.path.isfile(path):
         raise HTTPException(status_code=404, detail="not found")
@@ -196,19 +363,23 @@ async def dataset_rectified(body: dict):
         raise HTTPException(status_code=400, detail=f"bad K/D: {e}")
     balance = float(body.get("balance", 0.5))
     fov_scale = float(body.get("fov_scale", 1.0))
+    method = (body.get("method") or "remap").lower()
+    if method not in ("remap", "undistort"):
+        raise HTTPException(status_code=400, detail=f"unknown method: {method}")
 
     img = cv2.imread(path)
     if img is None:
         raise HTTPException(status_code=415, detail="cannot decode image")
     h, w = img.shape[:2]
+    new_K = _fisheye_new_K(K, D, w, h, balance, fov_scale)
     try:
-        new_K = cv2.fisheye.estimateNewCameraMatrixForUndistortRectify(
-            K, D, (w, h), np.eye(3), balance=balance, fov_scale=fov_scale,
-        )
-        map1, map2 = cv2.fisheye.initUndistortRectifyMap(
-            K, D, np.eye(3), new_K, (w, h), cv2.CV_16SC2,
-        )
-        rect = cv2.remap(img, map1, map2, interpolation=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT)
+        if method == "undistort":
+            rect = cv2.fisheye.undistortImage(img, K, D, Knew=new_K, new_size=(w, h))
+        else:
+            map1, map2 = cv2.fisheye.initUndistortRectifyMap(
+                K, D, np.eye(3), new_K, (w, h), cv2.CV_16SC2,
+            )
+            rect = cv2.remap(img, map1, map2, interpolation=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT)
     except cv2.error as e:
         raise HTTPException(status_code=500, detail=f"rectify failed: {e}")
 
