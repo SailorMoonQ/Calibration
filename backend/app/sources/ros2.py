@@ -39,9 +39,19 @@ class Ros2ImageSource:
             if self._sub is not None:
                 return
             node = ros2_context.ensure_started()
-            from cv_bridge import CvBridge
-            from rclpy.qos import qos_profile_sensor_data
-            from sensor_msgs.msg import CompressedImage
+            try:
+                from cv_bridge import CvBridge
+                from rclpy.qos import qos_profile_sensor_data
+                from sensor_msgs.msg import CompressedImage
+            except ImportError as e:
+                # The original ImportError gets buried as a 500; surface a clear
+                # actionable hint so the renderer rail status reads cleanly.
+                self._refs -= 1
+                missing = str(e).split("'")[-2] if "'" in str(e) else str(e)
+                raise RuntimeError(
+                    f"ros2 dep missing ({missing}) — apt install "
+                    f"ros-$ROS_DISTRO-cv-bridge ros-$ROS_DISTRO-sensor-msgs"
+                ) from e
             self._bridge = CvBridge()
             self._sub = node.create_subscription(
                 CompressedImage, self.topic, self._on_msg, qos_profile_sensor_data
