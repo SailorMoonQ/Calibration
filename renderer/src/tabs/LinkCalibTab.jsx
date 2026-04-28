@@ -8,6 +8,7 @@ import {
 } from '../components/panels.jsx';
 import { applyT, invT } from '../lib/math3d.js';
 import { api, posesWsUrl, pickSaveFile, pickOpenFile } from '../api/client.js';
+import { useReportPoses } from '../lib/telemetry.jsx';
 
 const basename = (p) => (p || '').split('/').pop();
 
@@ -55,6 +56,14 @@ export function LinkCalibTab() {
   const samplesRef = useRef({});  // device → array of {seq, ts, T}
   const wsRef = useRef(null);
   const [tickCount, setTickCount] = useState(0); // one re-render per ~10 samples to refresh viz
+
+  // Telemetry state for the topbar pills. Refs so the WS onmessage closure
+  // doesn't have to be rebuilt on every update; the React state is what we
+  // hand to useReportPoses (so context updates flow normally).
+  const helloRef    = useRef({ source: [], bases: 0, devices: [] });
+  const ticksRef    = useRef({});                 // { [name]: Array<{ts, present}> }
+  const [poseStats, setPoseStats] = useState(null);
+  useReportPoses(poseStats);
 
   // Snapshot of the two trajectories for rendering; rebuilt from samplesRef each tick.
   const [viz, setViz] = useState({ a: [], b: [], curA: null, curB: null });
@@ -109,13 +118,28 @@ export function LinkCalibTab() {
           setGtLink(m.gt_T_a_b || null);
           const srcTag = Array.isArray(m.sources) ? m.sources.join('+') : (m.source ?? 'mock');
           setStatus(`hello · ${srcTag} · ${m.devices?.length ?? 0} devices · ${m.fps} Hz`);
+          helloRef.current = {
+            source: Array.isArray(m.sources) ? m.sources : (m.source ? [m.source] : []),
+            bases: Number.isFinite(m.bases) ? m.bases : 0,
+            devices: Array.isArray(m.devices) ? m.devices : [],
+          };
+          ticksRef.current = Object.fromEntries((m.devices ?? []).map(d => [d, []]));
           return;
         }
         if (m.type !== 'sample') return;
+        const samplePoses = m.poses || {};
+        const nowMs = performance.now();
+        const cutoffMs = nowMs - 5000;
+        for (const dev of helloRef.current.devices) {
+          const arr = ticksRef.current[dev] || (ticksRef.current[dev] = []);
+          arr.push({ ts: nowMs, present: dev in samplePoses });
+          // Trim the ring to the 5 s window.
+          while (arr.length && arr[0].ts < cutoffMs) arr.shift();
+        }
         // Sample collection gate — controlled by `streaming`. Read the ref so the
         // onmessage closure doesn't need to be rebuilt every time the flag flips.
         if (!collectingRef.current) return;
-        const poses = m.poses || {};
+        const poses = samplePoses;
         for (const [dev, T] of Object.entries(poses)) {
           if (!samplesRef.current[dev]) samplesRef.current[dev] = [];
           samplesRef.current[dev].push({ seq: m.seq, ts: m.ts, T });
@@ -134,6 +158,7 @@ export function LinkCalibTab() {
   const disconnect = useCallback(() => {
     if (wsRef.current) { try { wsRef.current.close(); } catch {} wsRef.current = null; }
     setConnected(false); setStreaming(false);
+    setPoseStats(null);
   }, []);
 
   // Use a ref for `streaming` inside onmessage to avoid re-subscribing.
@@ -141,6 +166,31 @@ export function LinkCalibTab() {
   useEffect(() => { collectingRef.current = streaming; }, [streaming]);
 
   useEffect(() => () => disconnect(), [disconnect]);
+
+  // Recompute per-device drop% from the rolling 5 s window and push to the
+  // TelemetryProvider so the topbar's SteamVR/tracker pills update. Cleared
+  // when no WS is connected.
+  useEffect(() => {
+    if (!connected) {
+      setPoseStats(null);
+      return;
+    }
+    const id = setInterval(() => {
+      const { source, bases, devices } = helloRef.current;
+      const perDevice = {};
+      for (const dev of devices) {
+        const arr = ticksRef.current[dev] || [];
+        if (arr.length === 0) {
+          perDevice[dev] = { dropPct: 0 };
+          continue;
+        }
+        const absent = arr.reduce((n, e) => n + (e.present ? 0 : 1), 0);
+        perDevice[dev] = { dropPct: (absent / arr.length) * 100 };
+      }
+      setPoseStats({ source, bases, perDevice });
+    }, 500);
+    return () => clearInterval(id);
+  }, [connected]);
 
   const clearSamples = () => {
     samplesRef.current = {};
