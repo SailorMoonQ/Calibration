@@ -4,7 +4,7 @@ import { CameraView, ChessboardOverlay, ResidualVectors } from '../components/vi
 import { DetectedFrame } from '../components/DetectedFrame.jsx';
 import { LivePreview } from '../components/LivePreview.jsx';
 import {
-  FrameStrip, ErrorPanel, SourcePanel, TargetPanel,
+  FrameStrip, ErrorPanel, TargetPanel,
   CaptureControls, SolverButton, SolverPanel,
 } from '../components/panels.jsx';
 import { genFrames, genResiduals, gridCells } from '../lib/mock.js';
@@ -29,8 +29,6 @@ function rpyDeg(R) {
 export function ExtrinsicsTab() {
   const [board, setBoard] = useState({ type: 'chess', cols: 9, rows: 6, sq: 0.025 });
   const [live, setLive] = useState(true);
-  const [device, setDevice] = useState('cam0 / cam1 paired');
-  const [bagPath, setBagPath] = useState('~/datasets/stereo_pair.mcap');
   const [showResid, setShowResid] = useState(true);
   const [showBoard, setShowBoard] = useState(true);
 
@@ -267,9 +265,13 @@ export function ExtrinsicsTab() {
           <span className="mono" style={{color:'var(--text-4)'}}>{pairs.length} pairs</span>
         </div>
         <div className="rail-scroll">
-          <SourcePanel live={live} onLive={setLive} device={device} onDevice={setDevice}
-            bagPath={bagPath} onBagPath={setBagPath}/>
-          <Section title="Live cameras" hint="pair capture">
+          <Section
+            title="Source"
+            hint={live ? 'pair capture' : 'recorded'}
+            right={<Seg value={live ? 'live' : 'bag'} onChange={v => setLive(v === 'live')} options={[
+              {value:'live',label:'live'},{value:'bag',label:'bag'}
+            ]}/>}
+          >
             <Field label="cam0">
               <select className="select" value={liveDev0} onChange={e => setLiveDev0(e.target.value)}>
                 <option value="">— none —</option>
