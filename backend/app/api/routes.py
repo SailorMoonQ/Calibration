@@ -61,7 +61,13 @@ async def stream_ros2_topics() -> dict:
 
 @router.get("/stream/info")
 async def stream_info(device: str) -> dict:
-    src = source_manager.get(device)
+    """Per-source live info. ros2:<topic> sources can fail to start when their
+    deps aren't installed — surface that as a 503 with the actionable message
+    rather than an opaque 500 from the source's RuntimeError."""
+    try:
+        src = source_manager.get(device)
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e))
     try:
         src.wait_frame(timeout=2.0)
         return src.info()
