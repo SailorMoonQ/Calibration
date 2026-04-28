@@ -548,34 +548,37 @@ async def recording_import_mcap(body: dict) -> dict:
     if not out_path:
         raise HTTPException(status_code=400, detail="out_path is required")
 
-    from mcap_protobuf.reader import read_protobuf_messages
+    from mcap.reader import make_reader
+    from mcap_protobuf.decoder import DecoderFactory
 
     samples = []
     n_drop_quat = 0
     n_seen = 0
     try:
-        for msg_tuple in read_protobuf_messages(mcap_path, topics=[topic]):
-            n_seen += 1
-            pb = msg_tuple.proto_msg
-            ts = pb.timestamp.seconds + pb.timestamp.nanos / 1e9
-            qx = pb.pose.orientation.x
-            qy = pb.pose.orientation.y
-            qz = pb.pose.orientation.z
-            qw = pb.pose.orientation.w
-            qnorm = (qx * qx + qy * qy + qz * qz + qw * qw) ** 0.5
-            if qnorm < 0.5:
-                n_drop_quat += 1
-                continue
-            qx, qy, qz, qw = qx / qnorm, qy / qnorm, qz / qnorm, qw / qnorm
-            R = np.array([
-                [1 - 2 * (qy * qy + qz * qz), 2 * (qx * qy - qz * qw), 2 * (qx * qz + qy * qw)],
-                [2 * (qx * qy + qz * qw), 1 - 2 * (qx * qx + qz * qz), 2 * (qy * qz - qx * qw)],
-                [2 * (qx * qz - qy * qw), 2 * (qy * qz + qx * qw), 1 - 2 * (qx * qx + qy * qy)],
-            ], dtype=np.float64)
-            T = np.eye(4)
-            T[:3, :3] = R
-            T[:3, 3] = [pb.pose.position.x, pb.pose.position.y, pb.pose.position.z]
-            samples.append({"ts": ts, "T": T.tolist()})
+        with open(mcap_path, "rb") as f:
+            reader = make_reader(f, decoder_factories=[DecoderFactory()])
+            iter_decoded = reader.iter_decoded_messages(topics=[topic])
+            for _schema, _channel, _msg, pb in iter_decoded:
+                n_seen += 1
+                ts = pb.timestamp.seconds + pb.timestamp.nanos / 1e9
+                qx = pb.pose.orientation.x
+                qy = pb.pose.orientation.y
+                qz = pb.pose.orientation.z
+                qw = pb.pose.orientation.w
+                qnorm = (qx * qx + qy * qy + qz * qz + qw * qw) ** 0.5
+                if qnorm < 0.5:
+                    n_drop_quat += 1
+                    continue
+                qx, qy, qz, qw = qx / qnorm, qy / qnorm, qz / qnorm, qw / qnorm
+                R = np.array([
+                    [1 - 2 * (qy * qy + qz * qz), 2 * (qx * qy - qz * qw), 2 * (qx * qz + qy * qw)],
+                    [2 * (qx * qy + qz * qw), 1 - 2 * (qx * qx + qz * qz), 2 * (qy * qz - qx * qw)],
+                    [2 * (qx * qz - qy * qw), 2 * (qy * qz + qx * qw), 1 - 2 * (qx * qx + qy * qy)],
+                ], dtype=np.float64)
+                T = np.eye(4)
+                T[:3, :3] = R
+                T[:3, 3] = [pb.pose.position.x, pb.pose.position.y, pb.pose.position.z]
+                samples.append({"ts": ts, "T": T.tolist()})
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"mcap read failed: {e}")
 

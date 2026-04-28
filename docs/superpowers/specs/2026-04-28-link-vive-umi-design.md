@@ -82,7 +82,11 @@ The calibration step reads only the synced file.
   max_skew_s = 5.0, max_pair_gap_s = 0.05 }` → cross-correlates speed
   signals to estimate `delta_t`, then nearest-neighbor pairs. Returns
   `{ok, n_pairs, delta_t, vive_rot_deg, umi_rot_deg, path}` and writes the
-  synced file. 400 if `n_pairs < 50` or rotation diversity insufficient.
+  synced file. 400 if `n_pairs < 50` (hard floor — solver is
+  underconstrained below this). Rotation diversity is reported in the
+  response body but is not a backend gate; the renderer treats `< 30°`
+  per side as a warning that disables the Solve button, so the user can
+  see the synced data and decide whether to re-record.
 - **New `POST /calibrate/handeye_pose`** body `{ synced_path, method }`
   (method ∈ `daniilidis|tsai|park|horaud|andreff`, default `daniilidis`)
   → returns the existing `CalibrationResult` shape with `T = T_vive_umi`,
