@@ -14,7 +14,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pyinstaller>=6.11", "pytest>=8.3"]
+dev = ["pyinstaller>=6.11", "pytest>=8.3", "httpx>=0.27"]
 # On Linux with SteamVR installed:
 steamvr = ["triad-openvr>=1.0.0"]
 # Quest3(s) via OculusReader submodule (third_party/oculus_reader).
