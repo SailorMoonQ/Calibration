@@ -266,29 +266,46 @@ async def dataset_frame(path: str):
     return FileResponse(path)
 
 
-def _fisheye_new_K(K: np.ndarray, D: np.ndarray, w: int, h: int,
-                   balance: float, fov_scale: float) -> np.ndarray:
-    """Pick the new camera matrix for rectification, with a fallback.
+def _new_K(model: str, K: np.ndarray, D: np.ndarray, w: int, h: int, **kwargs) -> np.ndarray:
+    """Pick the new camera matrix for rectification, dispatching by model.
 
-    cv2.fisheye.estimateNewCameraMatrixForUndistortRectify is mathematically slick when
-    it works, but on some D vectors it returns a degenerate matrix with fx=fy=0 (every
-    output pixel collapses to the principal point — that's what causes the 'bowtie of
-    streaks' rectified preview). Detect that and fall back to scaling K's own focal by
-    fov_scale and re-centering — produces a sensible rectification at the cost of some
-    of the original FoV at the periphery."""
-    try:
-        nK = cv2.fisheye.estimateNewCameraMatrixForUndistortRectify(
-            K, D, (w, h), np.eye(3), balance=balance, fov_scale=fov_scale,
-        )
-    except cv2.error:
-        nK = None
-    if nK is None or nK[0, 0] < 1.0 or nK[1, 1] < 1.0:
-        nK = K.copy()
-        nK[0, 0] *= fov_scale
-        nK[1, 1] *= fov_scale
-        nK[0, 2] = w / 2.0
-        nK[1, 2] = h / 2.0
-    return nK
+    Each branch falls back to scaling K's own focal and recentring if the
+    OpenCV estimator returns a degenerate matrix (fx<1 or fy<1) — keeps the
+    rectified preview sensible even when the distortion vector is bad."""
+    if model == "fisheye":
+        balance = float(kwargs.get("balance", 0.5))
+        fov_scale = float(kwargs.get("fov_scale", 1.0))
+        try:
+            nK = cv2.fisheye.estimateNewCameraMatrixForUndistortRectify(
+                K, D, (w, h), np.eye(3), balance=balance, fov_scale=fov_scale,
+            )
+        except cv2.error:
+            nK = None
+        if nK is None or nK[0, 0] < 1.0 or nK[1, 1] < 1.0:
+            nK = K.copy()
+            nK[0, 0] *= fov_scale
+            nK[1, 1] *= fov_scale
+            nK[0, 2] = w / 2.0
+            nK[1, 2] = h / 2.0
+        return nK
+    if model == "pinhole":
+        alpha_raw = float(kwargs.get("alpha", 0.5))
+        alpha = max(0.0, min(1.0, alpha_raw))
+        try:
+            nK, _roi = cv2.getOptimalNewCameraMatrix(K, D, (w, h), alpha)
+        except cv2.error:
+            nK = None
+        if nK is None or nK[0, 0] < 1.0 or nK[1, 1] < 1.0:
+            nK = K.copy()
+            nK[0, 2] = w / 2.0
+            nK[1, 2] = h / 2.0
+        return np.asarray(nK, dtype=np.float64)
+    raise ValueError(f"unknown model: {model!r}")
+
+
+# Back-compat shim — old name still callable for any internal users.
+def _fisheye_new_K(K, D, w, h, balance, fov_scale):
+    return _new_K("fisheye", K, D, w, h, balance=balance, fov_scale=fov_scale)
 
 
 _IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff")
