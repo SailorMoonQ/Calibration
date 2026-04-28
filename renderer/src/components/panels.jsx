@@ -104,13 +104,33 @@ export function ErrorPanel({ rms, frames, histData }) {
   );
 }
 
-export function CaptureControls({ live, onLive, autoCapture, onAuto, onSnap, onDrop, coverage, coverageCells }) {
+export function CaptureControls({
+  live, onLive,
+  autoCapture, onAuto,
+  autoRate, onAutoRate,
+  onSnap, onDrop,
+  coverage, coverageCells,
+}) {
+  const rate = typeof autoRate === 'number' ? autoRate : 0.5;
+  const fps = rate > 0 ? (1 / rate) : 0;
   return (
     <Section title="Capture" hint="live feed">
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
-        <Chk checked={live} onChange={onLive}>live stream</Chk>
+        {onLive
+          ? <Chk checked={live} onChange={onLive}>live stream</Chk>
+          : <div/>}
         <Chk checked={autoCapture} onChange={onAuto}>auto-capture</Chk>
       </div>
+      {autoCapture && onAutoRate && (
+        <Field label={`auto rate · ${rate.toFixed(1)}s (≈${fps.toFixed(1)} fps)`}>
+          <div className="slider-row">
+            <input type="range" min="20" max="300" step="10"
+                   value={Math.round(rate * 100)}
+                   onChange={e => onAutoRate(+e.target.value / 100)}/>
+            <span className="mono">{rate.toFixed(1)}s</span>
+          </div>
+        </Field>
+      )}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
         <button className="btn" onClick={onSnap}>⌁ snap frame</button>
         <button className="btn danger" onClick={onDrop} disabled={!onDrop}>⌧ drop selected</button>
