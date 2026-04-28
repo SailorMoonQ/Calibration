@@ -104,6 +104,28 @@ export function IntrinsicsTab() {
     return () => { cancelled = true; };
   }, [datasetPath]);
 
+  // Refs the global keydown handler reads from so it always sees fresh closures
+  // without re-attaching the listener on every render.
+  const onSnapRef = useRef(null);
+  const onUndoRef = useRef(null);
+  const datasetCountRef = useRef(0);
+  useEffect(() => { datasetCountRef.current = datasetFiles.length; }, [datasetFiles.length]);
+
+  // Bounded undo stack of {kind: 'snap'|'drop', path, trashPath?}.
+  const UNDO_LIMIT = 20;
+  const undoStackRef = useRef([]);
+  const pushUndo = (entry) => {
+    const stack = undoStackRef.current;
+    stack.push(entry);
+    if (stack.length > UNDO_LIMIT) stack.shift();
+  };
+
+  // Auto-capture state: claimed coverage cells (so we don't spam) + debounce + inflight gate.
+  const snappedCellsRef = useRef(new Set());
+  const lastAutoSnapRef = useRef(0);
+  const autoSnapInFlightRef = useRef(false);
+  useEffect(() => { snappedCellsRef.current = new Set(); }, [datasetPath]);
+
   const onPickFolder = async () => {
     const p = await pickFolder(datasetPath || undefined);
     if (p) setDatasetPath(p);
@@ -116,8 +138,52 @@ export function IntrinsicsTab() {
     return r.files;
   };
 
-  const onDrop = useCallback(() => { /* wired in Task 7 */ }, []);
-  const onAutoMeta = useCallback(() => { /* wired in Task 7 */ }, []);
+  const onDrop = async () => {
+    const path = datasetFiles[selectedFrame - 1];
+    if (!path) { setStatus('no frame selected to drop'); return; }
+    const name = path.split('/').pop();
+    try {
+      const r = await api.deleteFrame(path);
+      pushUndo({ kind: 'drop', path, trashPath: r.trash_path });
+      const files = await refreshDataset();
+      const newLen = files?.length ?? 0;
+      setSelected(Math.min(Math.max(1, selectedFrame), Math.max(1, newLen)));
+      if (newLen === 0) setViewMode('live');
+      setStatus(`dropped ${name} · ⌘Z to undo`);
+    } catch (e) { setStatus(`drop failed: ${e.message}`); }
+  };
+  const onAutoMeta = useCallback((meta) => {
+    if (!autoCapture || !liveDevice || !datasetPath) return;
+    const corners = meta?.corners;
+    const size = meta?.image_size;
+    if (!corners || corners.length < 4 || !size) return;
+    const now = performance.now();
+    if (now - lastAutoSnapRef.current < 500) return;
+    if (autoSnapInFlightRef.current) return;
+    let sx = 0, sy = 0;
+    for (const c of corners) { sx += c[0]; sy += c[1]; }
+    const cx = sx / corners.length, cy = sy / corners.length;
+    const idx = cellIndexFor(cx, cy, size);
+    if (idx == null) return;
+    if (snappedCellsRef.current.has(idx)) return;
+    autoSnapInFlightRef.current = true;
+    lastAutoSnapRef.current = now;
+    snappedCellsRef.current.add(idx);
+    (async () => {
+      try {
+        const r = await api.snap(liveDevice, datasetPath);
+        pushUndo({ kind: 'snap', path: r.path });
+        setStatus(`auto-snapped → ${r.path.split('/').pop()} (cell ${idx})`);
+        const files = await refreshDataset();
+        if (files) setSelected(files.length);
+      } catch (e) {
+        snappedCellsRef.current.delete(idx);
+        setStatus(`auto-snap failed: ${e.message}`);
+      } finally {
+        autoSnapInFlightRef.current = false;
+      }
+    })();
+  }, [autoCapture, liveDevice, datasetPath]);
 
   const onSnap = async () => {
     let dir = datasetPath;
@@ -130,14 +196,67 @@ export function IntrinsicsTab() {
     if (!liveDevice) { setStatus('pick a camera first'); return; }
     try {
       const r = await api.snap(liveDevice, dir);
-      setStatus(`snapped → ${r.path.split('/').pop()}`);
-      // When we just snapped into the active datasetPath, listing is stale — refresh.
+      pushUndo({ kind: 'snap', path: r.path });
+      setStatus(`snapped → ${r.path.split('/').pop()} · ⌘Z to undo`);
       if (dir === datasetPath) {
         const files = await refreshDataset();
         if (files) { setSelected(files.length); setViewMode('frame'); }
       }
     } catch (e) { setStatus(`snap failed: ${e.message}`); }
   };
+
+  const onUndo = async () => {
+    const stack = undoStackRef.current;
+    if (!stack.length) { setStatus('nothing to undo'); return; }
+    const entry = stack.pop();
+    try {
+      if (entry.kind === 'snap') {
+        await api.deleteFrame(entry.path);
+        await refreshDataset();
+        setStatus(`undid snap · ${entry.path.split('/').pop()}`);
+      } else if (entry.kind === 'drop') {
+        await api.restoreFrame(entry.trashPath, entry.path);
+        await refreshDataset();
+        setStatus(`undid drop · ${entry.path.split('/').pop()}`);
+      }
+    } catch (e) {
+      stack.push(entry);
+      setStatus(`undo failed: ${e.message}`);
+    }
+  };
+
+  // Keep refs pointed at the latest closures so the keydown handler always sees fresh.
+  useEffect(() => { onSnapRef.current = onSnap; });
+  useEffect(() => { onUndoRef.current = onUndo; });
+
+  useEffect(() => {
+    const onKey = (e) => {
+      const t = e.target;
+      const tag = t?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || tag === 'BUTTON' || t?.isContentEditable) {
+        return;
+      }
+      if (e.key === 'ArrowRight') {
+        if (datasetCountRef.current === 0) return;
+        e.preventDefault();
+        setSelected(s => Math.min(datasetCountRef.current, s + 1));
+        setViewMode('frame');
+      } else if (e.key === 'ArrowLeft') {
+        if (datasetCountRef.current === 0) return;
+        e.preventDefault();
+        setSelected(s => Math.max(1, s - 1));
+        setViewMode('frame');
+      } else if (e.code === 'Space' || e.key === ' ') {
+        e.preventDefault();
+        onSnapRef.current?.();
+      } else if ((e.ctrlKey || e.metaKey) && !e.shiftKey && (e.key === 'z' || e.key === 'Z')) {
+        e.preventDefault();
+        onUndoRef.current?.();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
 
   const boardPayload = () => ({
     type: board.type,
