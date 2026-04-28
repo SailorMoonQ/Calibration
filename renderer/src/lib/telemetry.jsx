@@ -20,11 +20,10 @@ export function TelemetryProvider({ children }) {
   const [cameras, setCameras] = useState({});
   const [poses, setPoses] = useState(null);
 
-  // Mutable refs accessed by writer callbacks without re-binding.
+  // Mutable mirror of `cameras` so reportCamera's throttle check doesn't
+  // re-bind the callback on every state change.
   const camerasRef = useRef(cameras);
-  const posesRef = useRef(poses);
   useEffect(() => { camerasRef.current = cameras; }, [cameras]);
-  useEffect(() => { posesRef.current = poses; }, [poses]);
 
   const reportCamera = useCallback((device, fps, target) => {
     if (!device) return;
@@ -45,14 +44,7 @@ export function TelemetryProvider({ children }) {
 
   const reportPoses = useCallback((stats) => {
     if (stats == null) { setPoses(null); return; }
-    const now = performance.now();
-    const prev = posesRef.current;
-    if (prev && now - prev.ts < THROTTLE_MS) {
-      // Replace contents without bumping ts; next call past the throttle
-      // window will commit a fresh ts. Keeps reads fresh enough without
-      // firing a render every tick.
-    }
-    setPoses({ ...stats, ts: now });
+    setPoses({ ...stats, ts: performance.now() });
   }, []);
 
   // Janitor: drop stale entries. Runs at JANITOR_MS, so worst-case staleness
