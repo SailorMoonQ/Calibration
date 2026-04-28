@@ -496,6 +496,72 @@ async def calibration_load(body: dict) -> CalibrationLoadResponse:
     return yaml_io.load_calibration(path)
 
 
+@router.post("/recording/save")
+async def recording_save(body: dict) -> dict:
+    """Write a canonical pose-list JSON to disk."""
+    kind = body.get("kind")
+    samples = body.get("samples")
+    path = body.get("path")
+    if kind not in ("vive", "umi"):
+        raise HTTPException(status_code=400, detail=f"unknown kind: {kind}")
+    if not isinstance(samples, list) or not samples:
+        raise HTTPException(status_code=400, detail="samples must be a non-empty list")
+    if not path:
+        raise HTTPException(status_code=400, detail="path is required")
+    for i, s in enumerate(samples[:5]):
+        if not isinstance(s, dict) or "ts" not in s or "T" not in s:
+            raise HTTPException(status_code=400, detail=f"sample[{i}] must have ts and T")
+    try:
+        ts_list = [float(s["ts"]) for s in samples]
+        out = {
+            "meta": {
+                "kind": kind,
+                "n": len(samples),
+                "t_first": ts_list[0],
+                "t_last": ts_list[-1],
+            },
+            "samples": samples,
+        }
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        with open(path, "w") as f:
+            json.dump(out, f)
+    except OSError as e:
+        raise HTTPException(status_code=500, detail=f"write failed: {e}")
+    return {"ok": True, "path": path, "n": len(samples)}
+
+
+@router.get("/recording/list_topics")
+async def recording_list_topics(mcap_path: str) -> dict:
+    """Peek at the MCAP file and return topics whose schema is foxglove.PoseInFrame."""
+    if not mcap_path or not os.path.isfile(mcap_path):
+        raise HTTPException(status_code=404, detail="mcap not found")
+    from mcap.reader import make_reader
+    try:
+        with open(mcap_path, "rb") as f:
+            reader = make_reader(f)
+            summary = reader.get_summary()
+            schemas = summary.schemas
+            channels = summary.channels
+            stats = summary.statistics.channel_message_counts
+            pose_schema_ids = {
+                s.id for s in schemas.values()
+                if s.name == "foxglove.PoseInFrame"
+            }
+            topics = [
+                {
+                    "topic": ch.topic,
+                    "n": int(stats.get(ch.id, 0)),
+                    "schema": schemas[ch.schema_id].name if ch.schema_id in schemas else None,
+                }
+                for ch in channels.values()
+                if ch.schema_id in pose_schema_ids
+            ]
+            topics.sort(key=lambda t: -t["n"])
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"mcap read failed: {e}")
+    return {"topics": topics}
+
+
 @router.websocket("/stream")
 async def stream(ws: WebSocket) -> None:
     """Pushes camera frames + tracker poses. Scaffold: emits a heartbeat tick."""
