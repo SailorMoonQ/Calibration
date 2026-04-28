@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { streamWsUrl } from '../api/client.js';
+import { useReportCamera } from '../lib/telemetry.jsx';
 
 // Binary frame layout from /stream/ws: [u32 LE json_len][json meta][jpeg bytes].
 // Meta carries { seq, ts, image_size:[w,h], corners:[[x,y],...], ids }.
@@ -21,6 +22,7 @@ export function LiveDetectedFrame({
   const [state, setState] = useState({ url: null, meta: null });
   const [err, setErr] = useState(null);
   const [capFps, setCapFps] = useState(null);
+  useReportCamera(device, capFps, fps);
   const wsRef = useRef(null);
   const urlRef = useRef(null);
   const tickRef = useRef({ recent: [], last: 0 });
