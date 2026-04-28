@@ -44,3 +44,33 @@ def test_new_K_fisheye_unchanged():
     nK = _new_K("fisheye", K, D, 640, 480, balance=0.5, fov_scale=1.0)
     assert nK.shape == (3, 3)
     assert nK[0, 0] > 0 and nK[1, 1] > 0
+
+
+from fastapi.testclient import TestClient
+
+from app.main import app
+
+
+@pytest.fixture
+def client():
+    return TestClient(app)
+
+
+def test_dataset_rectified_unknown_model_returns_400(client, tmp_path):
+    img_path = tmp_path / "x.jpg"
+    # Write a tiny valid JPEG so the path-existence check passes; the model
+    # validation should fire before the image is decoded.
+    import cv2
+    img = np.zeros((8, 8, 3), dtype=np.uint8)
+    cv2.imwrite(str(img_path), img)
+    resp = client.post(
+        "/dataset/rectified",
+        json={
+            "path": str(img_path),
+            "K": [[500, 0, 4], [0, 500, 4], [0, 0, 1]],
+            "D": [0.0, 0.0, 0.0, 0.0],
+            "model": "bogus",
+        },
+    )
+    assert resp.status_code == 400
+    assert "unknown model" in resp.text.lower()
