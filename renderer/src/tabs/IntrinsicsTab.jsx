@@ -5,6 +5,7 @@ import { RectifiedFrame } from '../components/RectifiedFrame.jsx';
 import { RectifiedLivePreview } from '../components/RectifiedLivePreview.jsx';
 import { LivePreview } from '../components/LivePreview.jsx';
 import { LiveDetectedFrame } from '../components/LiveDetectedFrame.jsx';
+import { Ros2TopicPicker } from '../components/Ros2TopicPicker.jsx';
 import {
   FrameStrip, ErrorPanel, TargetPanel,
   CaptureControls, SolverButton, SolverPanel,
@@ -16,8 +17,10 @@ const ZERO_K = [[0,0,0,0],[0,0,0,0],[0,0,0,0],[0,0,0,1]];
 
 export function IntrinsicsTab() {
   const [board, setBoard] = useState({ type: 'chess', cols: 11, rows: 8, sq: 0.045 });
-  const [live, setLive] = useState(true);
+  const [sourceMode, setSourceMode] = useState('live');  // 'live' | 'ros2'
+  const [ros2Topic, setRos2Topic] = useState('');
   const [autoCapture, setAuto] = useState(false);
+  const [autoRate, setAutoRate] = useState(0.5);
   const [view, setView] = useState('split');                 // 'split' | 'raw' | 'rect'
   const [method, setMethod] = useState('remap');             // 'remap' | 'undistort'
   const [alpha, setAlpha] = useState(0.5);
@@ -156,7 +159,7 @@ export function IntrinsicsTab() {
     const size = meta?.image_size;
     if (!corners || corners.length < 4 || !size) return;
     const now = performance.now();
-    if (now - lastAutoSnapRef.current < 500) return;
+    if (now - lastAutoSnapRef.current < autoRate * 1000) return;
     if (autoSnapInFlightRef.current) return;
     let sx = 0, sy = 0;
     for (const c of corners) { sx += c[0]; sy += c[1]; }
@@ -181,7 +184,7 @@ export function IntrinsicsTab() {
         autoSnapInFlightRef.current = false;
       }
     })();
-  }, [autoCapture, liveDevice, datasetPath]);
+  }, [autoCapture, liveDevice, datasetPath, autoRate]);
 
   const onSnap = async () => {
     let dir = datasetPath;
@@ -400,21 +403,46 @@ export function IntrinsicsTab() {
         <div className="rail-scroll">
           <Section
             title="Source"
-            hint={live ? (liveDevice || 'no device') : 'recorded'}
-            right={<Seg value={live ? 'live' : 'bag'} onChange={v => setLive(v === 'live')} options={[
-              {value:'live',label:'live'},{value:'bag',label:'bag'}
-            ]}/>}
+            hint={sourceMode === 'live'
+              ? (liveDevice || 'no device')
+              : (ros2Topic || 'no topic')
+            }
+            right={<Seg
+              value={sourceMode}
+              onChange={(v) => {
+                setSourceMode(v);
+                setLiveDevice('');
+                setRos2Topic('');
+              }}
+              options={[
+                { value: 'live', label: 'live' },
+                { value: 'ros2', label: 'ros2' },
+              ]}/>}
           >
-            <Field label="device">
-              <select className="select" value={liveDevice} onChange={e => setLiveDevice(e.target.value)}>
-                <option value="">— none —</option>
-                {devices.map(d => <option key={d.device} value={d.device}>{d.label}</option>)}
-              </select>
-            </Field>
-            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:6 }}>
-              <button className="btn" onClick={() => setViewMode('live')}>👁 live preview</button>
-              <button className="btn ghost" onClick={() => api.listStreamDevices().then(r => setDevices(r.cameras || []))}>↻ rescan</button>
-            </div>
+            {sourceMode === 'live' ? (
+              <>
+                <Field label="device">
+                  <select className="select" value={liveDevice} onChange={e => setLiveDevice(e.target.value)}>
+                    <option value="">— none —</option>
+                    {devices.map(d => <option key={d.device} value={d.device}>{d.label}</option>)}
+                  </select>
+                </Field>
+                <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:6 }}>
+                  <button className="btn" onClick={() => setViewMode('live')}>👁 live preview</button>
+                  <button className="btn ghost" onClick={() => api.listStreamDevices().then(r => setDevices(r.cameras || []))}>↻ rescan</button>
+                </div>
+              </>
+            ) : (
+              <>
+                <Ros2TopicPicker
+                  topic={ros2Topic}
+                  onTopic={(t) => { setRos2Topic(t); setLiveDevice(t ? 'ros2:' + t : ''); }}/>
+                <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:6 }}>
+                  <button className="btn" onClick={() => setViewMode('live')}>👁 live preview</button>
+                  <div/>
+                </div>
+              </>
+            )}
           </Section>
           <Section title="Dataset" hint={datasetFiles.length ? `${datasetFiles.length} images` : 'not loaded'}>
             <Field label="folder">
@@ -442,9 +470,11 @@ export function IntrinsicsTab() {
               </div>
             </Field>
           </Section>
-          <CaptureControls live={live} onLive={setLive}
+          <CaptureControls
             autoCapture={autoCapture}
             onAuto={(v) => { setAuto(v); if (v) setLiveDetect(true); }}
+            autoRate={autoRate}
+            onAutoRate={setAutoRate}
             onSnap={onSnap} onDrop={onDrop}
             coverage={coverage.percent} coverageCells={coverage.cells}/>
         </div>
