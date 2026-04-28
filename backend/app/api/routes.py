@@ -380,12 +380,14 @@ async def dataset_restore(body: dict):
 
 @router.post("/dataset/rectified")
 async def dataset_rectified(body: dict):
-    """Fisheye-rectify the image at `path` with {K, D, balance, fov_scale, method}.
+    """Rectify the image at `path` with {K, D, model, ...params, method}.
 
+    `model` selects the rectification family:
+      - "fisheye" (default): cv2.fisheye.* with k1..k4 + balance/fov_scale.
+      - "pinhole":           cv2.* (non-fisheye) with full Brown-Conrady D + alpha.
     `method` selects the implementation:
-      - "remap"     (default): initUndistortRectifyMap + cv2.remap — exposes the maps
-                    so the same warp can be reused across frames.
-      - "undistort": cv2.fisheye.undistortImage — single-call API, equivalent output.
+      - "remap"     (default): initUndistortRectifyMap + cv2.remap.
+      - "undistort":           cv2.fisheye.undistortImage / cv2.undistort.
     Returns JPEG bytes.
     """
     path = body.get("path")
@@ -396,8 +398,9 @@ async def dataset_rectified(body: dict):
         D = np.array(body["D"], dtype=np.float64).reshape(-1, 1)
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"bad K/D: {e}")
-    balance = float(body.get("balance", 0.5))
-    fov_scale = float(body.get("fov_scale", 1.0))
+    model = (body.get("model") or "fisheye").lower()
+    if model not in ("fisheye", "pinhole"):
+        raise HTTPException(status_code=400, detail=f"unknown model: {model}")
     method = (body.get("method") or "remap").lower()
     if method not in ("remap", "undistort"):
         raise HTTPException(status_code=400, detail=f"unknown method: {method}")
@@ -406,14 +409,28 @@ async def dataset_rectified(body: dict):
     if img is None:
         raise HTTPException(status_code=415, detail="cannot decode image")
     h, w = img.shape[:2]
-    new_K = _fisheye_new_K(K, D, w, h, balance, fov_scale)
+    if model == "fisheye":
+        balance = float(body.get("balance", 0.5))
+        fov_scale = float(body.get("fov_scale", 1.0))
+        new_K = _new_K("fisheye", K, D, w, h, balance=balance, fov_scale=fov_scale)
+    else:
+        alpha = float(body.get("alpha", 0.5))
+        new_K = _new_K("pinhole", K, D, w, h, alpha=alpha)
     try:
         if method == "undistort":
-            rect = cv2.fisheye.undistortImage(img, K, D, Knew=new_K, new_size=(w, h))
+            if model == "fisheye":
+                rect = cv2.fisheye.undistortImage(img, K, D, Knew=new_K, new_size=(w, h))
+            else:
+                rect = cv2.undistort(img, K, D, None, new_K)
         else:
-            map1, map2 = cv2.fisheye.initUndistortRectifyMap(
-                K, D, np.eye(3), new_K, (w, h), cv2.CV_16SC2,
-            )
+            if model == "fisheye":
+                map1, map2 = cv2.fisheye.initUndistortRectifyMap(
+                    K, D, np.eye(3), new_K, (w, h), cv2.CV_16SC2,
+                )
+            else:
+                map1, map2 = cv2.initUndistortRectifyMap(
+                    K, D, np.eye(3), new_K, (w, h), cv2.CV_16SC2,
+                )
             rect = cv2.remap(img, map1, map2, interpolation=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT)
     except cv2.error as e:
         raise HTTPException(status_code=500, detail=f"rectify failed: {e}")
