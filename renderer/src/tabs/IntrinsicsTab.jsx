@@ -1,13 +1,15 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { Section, Seg, Chk, Field, Matrix } from '../components/primitives.jsx';
 import { DetectedFrame } from '../components/DetectedFrame.jsx';
+import { RectifiedFrame } from '../components/RectifiedFrame.jsx';
+import { RectifiedLivePreview } from '../components/RectifiedLivePreview.jsx';
 import { LivePreview } from '../components/LivePreview.jsx';
 import { LiveDetectedFrame } from '../components/LiveDetectedFrame.jsx';
 import {
   FrameStrip, ErrorPanel, SourcePanel, TargetPanel,
   CaptureControls, SolverButton, SolverPanel,
 } from '../components/panels.jsx';
-import { computeCoverage } from '../lib/coverage.js';
+import { computeCoverage, cellIndexFor } from '../lib/coverage.js';
 import { api, pickFolder, pickSaveFile, pickOpenFile } from '../api/client.js';
 
 const ZERO_K = [[0,0,0,0],[0,0,0,0],[0,0,0,0],[0,0,0,1]];
@@ -17,9 +19,12 @@ export function IntrinsicsTab() {
   const [live, setLive] = useState(true);
   const [device, setDevice] = useState('/dev/video0 · Basler acA1920');
   const [bagPath, setBagPath] = useState('');
-  const [autoCapture, setAuto] = useState(true);
-  const [overlay, setOverlay] = useState('residuals');
+  const [autoCapture, setAuto] = useState(false);
+  const [view, setView] = useState('split');                 // 'split' | 'raw' | 'rect'
+  const [method, setMethod] = useState('remap');             // 'remap' | 'undistort'
+  const [alpha, setAlpha] = useState(0.5);
   const [showBoard, setShowBoard] = useState(true);
+  const [showResid, setShowResid] = useState(true);
   const [showOrigin, setShowOrigin] = useState(true);
   const [model, setModel] = useState('pinhole-k3');
 
@@ -31,7 +36,7 @@ export function IntrinsicsTab() {
 
   const [devices, setDevices] = useState([]);
   const [liveDevice, setLiveDevice] = useState('');
-  const [viewMode, setViewMode] = useState('live'); // 'live' | 'frame'
+  const [viewMode, setViewMode] = useState('live');          // 'live' | 'frame'
   const [liveDetect, setLiveDetect] = useState(false);
 
   // per-detected-path maps so FrameStrip / DetectedFrame align even when some frames skipped.
@@ -70,6 +75,11 @@ export function IntrinsicsTab() {
     : ZERO_K;
   const D = result?.D ?? [];
 
+  const calibrated = !!(result?.ok && result?.K && D.length);
+  const selectedPath = datasetFiles[selectedFrame - 1];
+  const canRectifyFrame = !!(calibrated && selectedPath);
+  const showLive = liveDevice && (viewMode === 'live' || datasetFiles.length === 0);
+
   useEffect(() => {
     let cancelled = false;
     api.listStreamDevices().then(r => {
@@ -105,6 +115,9 @@ export function IntrinsicsTab() {
     setDatasetFiles(r.files);
     return r.files;
   };
+
+  const onDrop = useCallback(() => { /* wired in Task 7 */ }, []);
+  const onAutoMeta = useCallback(() => { /* wired in Task 7 */ }, []);
 
   const onSnap = async () => {
     let dir = datasetPath;
@@ -198,6 +211,71 @@ export function IntrinsicsTab() {
 
   const converged = result?.ok ?? false;
 
+  const emptyCell = (text) => (
+    <div style={{
+      display:'flex', alignItems:'center', justifyContent:'center',
+      width:'100%', height:'100%', color:'var(--view-text-2)',
+      fontFamily:'JetBrains Mono', fontSize: 11, padding: 16, textAlign:'center',
+    }}>{text}</div>
+  );
+
+  const rawCell = (
+    <div className="vp-cell" key="raw">
+      <span className="vp-label">
+        {showLive ? `live · ${liveDevice}${liveDetect ? ' · detect' : ''}` : 'raw'}
+      </span>
+      {showLive ? (
+        liveDetect
+          ? <LiveDetectedFrame device={liveDevice} board={board}
+                showCorners={showBoard} showOrigin={showOrigin}
+                onMeta={onAutoMeta}/>
+          : <LivePreview device={liveDevice}/>
+      ) : datasetFiles.length > 0 && selectedPath ? (
+        <DetectedFrame
+          path={selectedPath}
+          board={board}
+          showCorners={showBoard}
+          showOrigin={showOrigin}
+          overlay={showResid ? 'residuals' : 'none'}
+          residuals={residualsByPath?.get(selectedPath)}/>
+      ) : (
+        emptyCell('connect a camera or load a dataset')
+      )}
+      <div className="vp-corner-read">
+        <div>fx <b>{K[0][0].toFixed(2)}</b>  fy <b>{K[1][1].toFixed(2)}</b></div>
+        <div>cx <b>{K[0][2].toFixed(2)}</b>  cy <b>{K[1][2].toFixed(2)}</b></div>
+        <div>k₁ <b>{(D[0] ?? 0).toFixed(3)}</b>  k₂ <b>{(D[1] ?? 0).toFixed(3)}</b></div>
+        <div>p₁ <b>{(D[2] ?? 0).toFixed(4)}</b>  p₂ <b>{(D[3] ?? 0).toFixed(4)}</b></div>
+      </div>
+    </div>
+  );
+
+  const rectCell = (() => {
+    const useLive = showLive && calibrated && liveDevice;
+    let body;
+    if (useLive) {
+      body = <RectifiedLivePreview device={liveDevice} K={result.K} D={D}
+                model="pinhole" alpha={alpha} method={method}/>;
+    } else if (canRectifyFrame) {
+      body = <RectifiedFrame path={selectedPath} K={result.K} D={D}
+                model="pinhole" alpha={alpha} method={method}/>;
+    } else if (calibrated) {
+      body = emptyCell('connect a camera or select a frame to see the undistorted view');
+    } else {
+      body = emptyCell('run calibration to see the undistorted view');
+    }
+    return (
+      <div className="vp-cell" key="rect">
+        <span className="vp-label">{useLive ? `undistorted · live` : 'undistorted'}</span>
+        {body}
+        <div className="vp-corner-read">
+          <div>method <b>{method === 'undistort' ? 'cv2.undistort' : 'initUndistortRectifyMap + remap'}</b></div>
+          <div>alpha <b>{alpha.toFixed(2)}</b></div>
+        </div>
+      </div>
+    );
+  })();
+
   return (
     <div className="workspace">
       <div className="rail">
@@ -221,25 +299,32 @@ export function IntrinsicsTab() {
               <input className="input" value={datasetPath} placeholder="/path/to/frames/"
                      onChange={e => setDatasetPath(e.target.value)}/>
             </Field>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
+            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:6 }}>
               <button className="btn" onClick={onPickFolder}>📁 pick folder</button>
               <button className="btn ghost" onClick={() => { setDatasetPath(''); setDatasetFiles([]); setResult(null); setStatus(''); }}>clear</button>
             </div>
-            {status && <div className="mono" style={{ fontSize: 10.5, color: 'var(--text-3)', marginTop: 2 }}>{status}</div>}
+            {status && <div className="mono" style={{ fontSize: 10.5, color:'var(--text-3)', marginTop: 2 }}>{status}</div>}
           </Section>
           <TargetPanel board={board} onBoard={setBoard}/>
           <Section title="Model" hint={model}>
-            <Field label="projection">
-              <Seg value={model} onChange={setModel} full options={[{value:'pinhole-k3',label:'k3'},{value:'pinhole-k5',label:'k5'},{value:'pinhole-rt',label:'rational'}]}/>
-            </Field>
-            <Chk checked={true} onChange={()=>{}}>estimate skew</Chk>
-            <Chk checked={false} onChange={()=>{}}>fix aspect ratio (fx = fy)</Chk>
-            <Chk checked={true} onChange={()=>{}}>bundle adjust extrinsics</Chk>
-            <Chk checked={false} onChange={()=>{}}>use robust loss (Huber)</Chk>
+            <Seg value={model} onChange={setModel} full options={[
+              {value:'pinhole-k3',label:'k3'},{value:'pinhole-k5',label:'k5'},{value:'pinhole-rt',label:'rational'}
+            ]}/>
           </Section>
-          <CaptureControls live={live} onLive={setLive} autoCapture={autoCapture} onAuto={setAuto}
-            onSnap={onSnap} coverage={coverage.percent}
-            coverageCells={coverage.cells}/>
+          <Section title="Undistortion preview">
+            <Field label="alpha">
+              <div className="slider-row">
+                <input type="range" min="0" max="100" value={Math.round(alpha * 100)}
+                       onChange={e => setAlpha(+e.target.value / 100)}/>
+                <span className="mono">{alpha.toFixed(2)}</span>
+              </div>
+            </Field>
+          </Section>
+          <CaptureControls live={live} onLive={setLive}
+            autoCapture={autoCapture}
+            onAuto={(v) => { setAuto(v); if (v) setLiveDetect(true); }}
+            onSnap={onSnap} onDrop={onDrop}
+            coverage={coverage.percent} coverageCells={coverage.cells}/>
         </div>
         <SolverButton onSolve={onRun} busy={busy}
           status={status}
@@ -252,11 +337,17 @@ export function IntrinsicsTab() {
 
       <div className="viewport">
         <div className="vp-toolbar">
-          <Seg value={overlay} onChange={setOverlay} options={[
-            {value:'none',label:'raw'},{value:'residuals',label:'residuals'},{value:'heatmap',label:'heatmap'}
+          <Seg value={view} onChange={setView} options={[
+            {value:'split',label:'split'},{value:'raw',label:'raw'},{value:'rect',label:'rectified'},
           ]}/>
+          {view !== 'raw' && (
+            <Seg value={method} onChange={setMethod} options={[
+              {value:'remap',label:'remap'},{value:'undistort',label:'undistort'},
+            ]}/>
+          )}
           <Chk checked={showBoard} onChange={setShowBoard}>board</Chk>
           <Chk checked={showOrigin} onChange={setShowOrigin}>origin</Chk>
+          <Chk checked={showResid} onChange={setShowResid}>residuals</Chk>
           <Chk checked={liveDetect} onChange={setLiveDetect}>detect live</Chk>
           <div className="spacer"/>
           <div className="read">
@@ -267,43 +358,24 @@ export function IntrinsicsTab() {
           </div>
         </div>
         <FrameStrip frames={frames} selected={selectedFrame} onSelect={(id) => { setSelected(id); setViewMode('frame'); }} coverage={coverage.percent}/>
-        <div className="vp-body">
-          <div className="vp-cell">
-            {(viewMode === 'live' || datasetFiles.length === 0) && liveDevice ? (
-              <>
-                <span className="vp-label">live · {liveDevice}{liveDetect ? ' · detect' : ''}</span>
-                {liveDetect
-                  ? <LiveDetectedFrame device={liveDevice} board={board}
-                       showCorners={showBoard} showOrigin={showOrigin}/>
-                  : <LivePreview device={liveDevice}/>}
-              </>
-            ) : datasetFiles.length > 0 ? (
-              <>
-                <span className="vp-label">{datasetFiles[selectedFrame - 1]?.split('/').pop() ?? ''}</span>
-                <DetectedFrame
-                  path={datasetFiles[selectedFrame - 1]}
-                  board={board}
-                  showCorners={showBoard}
-                  showOrigin={showOrigin}
-                  overlay={overlay}
-                  residuals={residualsByPath?.get(datasetFiles[selectedFrame - 1])}/>
-              </>
-            ) : (
-              <div style={{
-                display:'flex', alignItems:'center', justifyContent:'center',
-                width:'100%', height:'100%', color:'var(--view-text-2)',
-                fontFamily:'JetBrains Mono', fontSize: 11, padding: 16, textAlign:'center',
-              }}>connect a camera or load a dataset</div>
-            )}
-            <div className="vp-corner-read">
-              <div>fx <b>{K[0][0].toFixed(2)}</b>  fy <b>{K[1][1].toFixed(2)}</b></div>
-              <div>cx <b>{K[0][2].toFixed(2)}</b>  cy <b>{K[1][2].toFixed(2)}</b></div>
-              <div>k₁ <b>{(D[0] ?? 0).toFixed(3)}</b>  k₂ <b>{(D[1] ?? 0).toFixed(3)}</b></div>
-              <div>p₁ <b>{(D[2] ?? 0).toFixed(4)}</b> p₂ <b>{(D[3] ?? 0).toFixed(4)}</b></div>
+        {(() => {
+          let cells;
+          if (!calibrated) {
+            cells = [rawCell];
+          } else if (view === 'raw') {
+            cells = [rawCell];
+          } else if (view === 'rect') {
+            cells = [rectCell];
+          } else {
+            cells = [rawCell, rectCell];
+          }
+          const cols = cells.length === 2 ? '1fr 1fr' : '1fr';
+          return (
+            <div className="vp-body vp-split" style={{ gridTemplateColumns: cols }}>
+              {cells}
             </div>
-            <div className="vp-scale"><span className="bar"/> <span>100 px</span></div>
-          </div>
-        </div>
+          );
+        })()}
       </div>
 
       <div className="rail">
@@ -333,7 +405,7 @@ export function IntrinsicsTab() {
             cost={result?.final_cost ?? 0}
             cond={0}/>
         </div>
-        <div style={{ padding: 10, borderTop: '1px solid var(--border-soft)', background: 'var(--surface-2)', display: 'flex', gap: 6 }}>
+        <div style={{ padding: 10, borderTop: '1px solid var(--border-soft)', background: 'var(--surface-2)', display:'flex', gap: 6 }}>
           <button className="btn" style={{flex:1}} onClick={onLoad}>↓ load</button>
           <button className="btn primary" style={{flex:1}} onClick={onSave} disabled={!result?.ok}>↑ save</button>
         </div>
