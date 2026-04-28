@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -17,16 +18,23 @@ if TYPE_CHECKING:  # pragma: no cover
 
 log = logging.getLogger("calib.ros2")
 
+# DDS discovery is asynchronous: the executor thread builds the graph cache as
+# publishers/subscribers are seen, so a topic list called immediately after the
+# node starts can return an incomplete view. We track first-list time and give
+# the graph at least this much wall-clock to populate before returning.
+_GRAPH_WARMUP_S = 1.5
+
 _lock = threading.Lock()
 _node: "Node | None" = None
 _executor = None
 _thread: threading.Thread | None = None
 _started = False
+_started_at: float = 0.0
 
 
 def ensure_started() -> "Node":
     """Lazy-init rclpy. Idempotent. Raises RuntimeError if rclpy is unavailable."""
-    global _node, _executor, _thread, _started
+    global _node, _executor, _thread, _started, _started_at
     with _lock:
         if _started and _node is not None:
             return _node
@@ -48,6 +56,7 @@ def ensure_started() -> "Node":
         )
         _thread.start()
         _started = True
+        _started_at = time.monotonic()
         log.info("ros2 context started · node=calib_backend")
         return _node
 
@@ -58,8 +67,16 @@ def get_node() -> "Node | None":
 
 
 def list_compressed_image_topics() -> list[dict]:
-    """Filter live graph topics to sensor_msgs/msg/CompressedImage."""
+    """Filter live graph topics to sensor_msgs/msg/CompressedImage.
+
+    DDS discovery is async, so on the very first call after node start we wait
+    out the warmup window. Subsequent calls return immediately — the cache is
+    only stale if a brand-new publisher hasn't propagated yet, in which case
+    the user can rescan."""
     node = ensure_started()
+    elapsed = time.monotonic() - _started_at
+    if elapsed < _GRAPH_WARMUP_S:
+        time.sleep(_GRAPH_WARMUP_S - elapsed)
     out = []
     for topic, types in node.get_topic_names_and_types():
         if "sensor_msgs/msg/CompressedImage" in types:
