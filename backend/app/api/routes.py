@@ -522,10 +522,12 @@ async def poses_stream(
                 return
 
         # Merge hello envelopes: union of device lists (ordered by source),
-        # first non-null gt_T_a_b wins (mock is the only source that sets it).
+        # first non-null gt_T_a_b wins (mock is the only source that sets it),
+        # max bases wins (only steamvr sets non-zero).
         all_devices: list[str] = []
         seen: set[str] = set()
         gt_link = None
+        bases = 0
         for _name, src in built:
             h = src.hello()
             for d in h.get("devices") or []:
@@ -534,6 +536,7 @@ async def poses_stream(
                     all_devices.append(d)
             if gt_link is None and h.get("gt_T_a_b") is not None:
                 gt_link = h["gt_T_a_b"]
+            bases = max(bases, int(h.get("bases") or 0))
 
         await ws.send_text(json.dumps({
             "type": "hello",
@@ -541,6 +544,7 @@ async def poses_stream(
             "fps": int(fps),
             "devices": all_devices,
             "gt_T_a_b": gt_link,
+            "bases": bases,
         }))
 
         period = 1.0 / max(1, fps)
