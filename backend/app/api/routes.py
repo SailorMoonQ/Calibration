@@ -111,34 +111,50 @@ async def stream_mjpeg_rect(
     device: str,
     fx: float, fy: float, cx: float, cy: float,
     k1: float = 0.0, k2: float = 0.0, k3: float = 0.0, k4: float = 0.0,
-    balance: float = 0.5, fov_scale: float = 1.0, method: str = "remap",
+    k5: float = 0.0, k6: float = 0.0,
+    p1: float = 0.0, p2: float = 0.0,
+    model: str = "fisheye",
+    balance: float = 0.5, fov_scale: float = 1.0,
+    alpha: float = 0.5,
+    method: str = "remap",
     fps: int = 30, quality: int = 70,
 ):
-    """Live-rectified MJPEG: same as /stream/mjpeg but each frame is undistorted with the
-    given fisheye intrinsics before encoding. Maps are built once from the first frame's
-    image_size and reused — flip a query param to rebuild (changes K/D/balance close the
-    stream client-side and reopen with a new URL)."""
+    """Live-rectified MJPEG. `model='fisheye'` uses cv2.fisheye.* with k1..k4 +
+    balance/fov_scale; `model='pinhole'` uses cv2.* (non-fisheye) with the full
+    Brown-Conrady [k1, k2, p1, p2, k3, k4, k5, k6] vector + alpha. Maps are built
+    once from the first frame's image_size; flip a query param to rebuild."""
     if method not in ("remap", "undistort"):
         raise HTTPException(status_code=400, detail=f"unknown method: {method}")
+    if model not in ("fisheye", "pinhole"):
+        raise HTTPException(status_code=400, detail=f"unknown model: {model}")
     src = source_manager.get(device)
     if not src.wait_frame(timeout=3.0):
         source_manager.release(device)
         raise HTTPException(status_code=503, detail="camera did not produce a frame")
 
-    # Probe the first frame to size the rectification maps.
     probe = src.read()
     if probe is None:
         source_manager.release(device)
         raise HTTPException(status_code=503, detail="no frame yet")
     h, w = probe.shape[:2]
     K = np.array([[fx, 0.0, cx], [0.0, fy, cy], [0.0, 0.0, 1.0]], dtype=np.float64)
-    D = np.array([k1, k2, k3, k4], dtype=np.float64).reshape(-1, 1)
-    new_K = _fisheye_new_K(K, D, w, h, balance, fov_scale)
+    if model == "fisheye":
+        D = np.array([k1, k2, k3, k4], dtype=np.float64).reshape(-1, 1)
+        new_K = _new_K("fisheye", K, D, w, h, balance=balance, fov_scale=fov_scale)
+    else:
+        D = np.array([k1, k2, p1, p2, k3, k4, k5, k6], dtype=np.float64).reshape(-1, 1)
+        new_K = _new_K("pinhole", K, D, w, h, alpha=alpha)
+
     try:
         if method == "remap":
-            map1, map2 = cv2.fisheye.initUndistortRectifyMap(
-                K, D, np.eye(3), new_K, (w, h), cv2.CV_16SC2,
-            )
+            if model == "fisheye":
+                map1, map2 = cv2.fisheye.initUndistortRectifyMap(
+                    K, D, np.eye(3), new_K, (w, h), cv2.CV_16SC2,
+                )
+            else:
+                map1, map2 = cv2.initUndistortRectifyMap(
+                    K, D, np.eye(3), new_K, (w, h), cv2.CV_16SC2,
+                )
     except cv2.error as e:
         source_manager.release(device)
         raise HTTPException(status_code=400, detail=f"rectify init failed: {e}")
@@ -163,8 +179,10 @@ async def stream_mjpeg_rect(
                 if method == "remap":
                     rect = cv2.remap(frame, map1, map2,
                                      interpolation=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT)
-                else:
+                elif model == "fisheye":
                     rect = cv2.fisheye.undistortImage(frame, K, D, Knew=new_K, new_size=(w, h))
+                else:
+                    rect = cv2.undistort(frame, K, D, None, new_K)
                 ok, buf = await asyncio.to_thread(
                     cv2.imencode, ".jpg", rect, [cv2.IMWRITE_JPEG_QUALITY, int(quality)]
                 )
