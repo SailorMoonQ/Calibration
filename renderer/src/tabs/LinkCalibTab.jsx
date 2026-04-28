@@ -67,6 +67,10 @@ export function LinkCalibTab() {
   const [umiCount, setUmiCount] = useState(0);
   const [umiTimespan, setUmiTimespan] = useState(0);
 
+  const [syncPath, setSyncPath] = useState('');
+  const [syncDiag, setSyncDiag] = useState(null);     // { delta_t, n_pairs, vive_rot_deg, umi_rot_deg }
+  const [solveMethod, setSolveMethod] = useState('daniilidis');
+
   // Sample store (kept in refs to avoid React thrash at 30 Hz).
   const samplesRef = useRef({});  // device → array of {seq, ts, T}
   const wsRef = useRef(null);
@@ -235,6 +239,45 @@ export function LinkCalibTab() {
       setStatus(`imported ${r.count} samples · ${(r.t_last - r.t_first).toFixed(1)}s`);
     } catch (e) { setStatus(`import failed: ${e.message}`); }
   }, [umiTopic]);
+
+  const onSync = useCallback(async () => {
+    if (!vivePath) { setStatus('record vive first'); return; }
+    if (!umiPath) { setStatus('import mcap first'); return; }
+    const out_path = await pickSaveFile({ defaultPath: 'synced.json' });
+    if (!out_path) return;
+    setStatus('syncing…');
+    try {
+      const r = await recording.sync({ vive_path: vivePath, umi_path: umiPath, out_path });
+      setSyncPath(r.path);
+      setSyncDiag({
+        delta_t: r.delta_t,
+        n_pairs: r.n_pairs,
+        vive_rot_deg: r.vive_rot_deg,
+        umi_rot_deg: r.umi_rot_deg,
+      });
+      setStatus(`synced · Δt ${r.delta_t.toFixed(3)}s · ${r.n_pairs} pairs`);
+    } catch (e) { setStatus(`sync failed: ${e.message}`); }
+  }, [vivePath, umiPath]);
+
+  const onSolveLink = useCallback(async () => {
+    if (!syncPath) { setStatus('sync first'); return; }
+    setBusy(true);
+    setStatus('solving handeye…');
+    try {
+      const r = await recording.calibrateHandeyePose({ synced_path: syncPath, method: solveMethod });
+      setResult(r);
+      setStatus(r.ok ? `T_vive_umi · rms ${r.rms.toFixed(3)}° · ${r.message}` : `failed: ${r.message}`);
+    } catch (e) { setStatus(`solve failed: ${e.message}`); }
+    finally { setBusy(false); }
+  }, [syncPath, solveMethod]);
+
+  const solveGate = (() => {
+    if (!syncDiag) return 'run sync first';
+    if (syncDiag.n_pairs < 50) return `only ${syncDiag.n_pairs} pairs (need ≥ 50)`;
+    if (syncDiag.vive_rot_deg < 30) return `vive rotation diversity too low: ${syncDiag.vive_rot_deg.toFixed(1)}°`;
+    if (syncDiag.umi_rot_deg < 30) return `umi rotation diversity too low: ${syncDiag.umi_rot_deg.toFixed(1)}°`;
+    return null;
+  })();
 
   // Use a ref for `streaming` inside onmessage to avoid re-subscribing.
   const collectingRef = useRef(false);
@@ -498,6 +541,34 @@ export function LinkCalibTab() {
                     </Field>
                   )}
                   {umiPath && <div className="mono" style={{ fontSize: 10.5, color:'var(--text-3)' }}>{umiPath}</div>}
+                </Section>
+                <Section title="Sync" hint={syncDiag ? `${syncDiag.n_pairs} pairs · Δt ${syncDiag.delta_t.toFixed(3)}s` : 'not synced'}>
+                  <button className="btn" onClick={onSync} disabled={!vivePath || !umiPath}>⚡ sync</button>
+                  {syncDiag && (
+                    <div className="mono" style={{ fontSize: 10.5, color:'var(--text-3)', display:'grid', gridTemplateColumns:'auto 1fr', columnGap: 8, rowGap: 2 }}>
+                      <span>Δt</span><span>{syncDiag.delta_t.toFixed(3)} s</span>
+                      <span>pairs</span><span>{syncDiag.n_pairs}</span>
+                      <span>vive rot</span><span>{syncDiag.vive_rot_deg.toFixed(1)}°</span>
+                      <span>umi rot</span><span>{syncDiag.umi_rot_deg.toFixed(1)}°</span>
+                    </div>
+                  )}
+                </Section>
+                <Section title="Solve" hint={solveGate ? 'gated' : 'ready'}>
+                  <Field label="method">
+                    <select className="select" value={solveMethod} onChange={e => setSolveMethod(e.target.value)}>
+                      <option value="daniilidis">daniilidis</option>
+                      <option value="tsai">tsai</option>
+                      <option value="park">park</option>
+                      <option value="horaud">horaud</option>
+                      <option value="andreff">andreff</option>
+                    </select>
+                  </Field>
+                  <button className="btn primary" onClick={onSolveLink}
+                          disabled={!!solveGate || busy}
+                          title={solveGate || ''}>
+                    Solve T_vive_umi
+                  </button>
+                  {solveGate && <div className="mono" style={{ fontSize: 10.5, color:'var(--warn)' }}>{solveGate}</div>}
                 </Section>
             </>
           )}
