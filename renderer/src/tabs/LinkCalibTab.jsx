@@ -60,6 +60,13 @@ export function LinkCalibTab() {
   const [viveRecCount, setViveRecCount] = useState(0);
   const [vivePath, setVivePath] = useState('');
 
+  // UMI MCAP import state.
+  const [umiPath, setUmiPath] = useState('');
+  const [umiTopics, setUmiTopics] = useState([]);
+  const [umiTopic, setUmiTopic] = useState('/robot0/vio/eef_pose');
+  const [umiCount, setUmiCount] = useState(0);
+  const [umiTimespan, setUmiTimespan] = useState(0);
+
   // Sample store (kept in refs to avoid React thrash at 30 Hz).
   const samplesRef = useRef({});  // device → array of {seq, ts, T}
   const wsRef = useRef(null);
@@ -206,6 +213,28 @@ export function LinkCalibTab() {
       setStatus(`saved vive ${r.n} samples → ${path.split('/').pop()}`);
     } catch (e) { setStatus(`save failed: ${e.message}`); }
   }, []);
+
+  const onImportMcap = useCallback(async () => {
+    const mcap_path = await pickOpenFile({ filters: [{ name: 'MCAP', extensions: ['mcap'] }] });
+    if (!mcap_path) return;
+    setStatus('listing topics…');
+    try {
+      const t = await recording.listTopics(mcap_path);
+      const topics = t.topics || [];
+      setUmiTopics(topics);
+      if (topics.length === 0) { setStatus('no PoseInFrame topics in that mcap'); return; }
+      const default_topic = topics.find(x => x.topic === umiTopic) ? umiTopic : topics[0].topic;
+      setUmiTopic(default_topic);
+      const out_path = await pickSaveFile({ defaultPath: 'umi_recording.json' });
+      if (!out_path) { setStatus('import cancelled'); return; }
+      setStatus(`importing ${default_topic}…`);
+      const r = await recording.importMcap({ mcap_path, topic: default_topic, out_path });
+      setUmiPath(r.path);
+      setUmiCount(r.count);
+      setUmiTimespan(r.t_last - r.t_first);
+      setStatus(`imported ${r.count} samples · ${(r.t_last - r.t_first).toFixed(1)}s`);
+    } catch (e) { setStatus(`import failed: ${e.message}`); }
+  }, [umiTopic]);
 
   // Use a ref for `streaming` inside onmessage to avoid re-subscribing.
   const collectingRef = useRef(false);
@@ -459,6 +488,17 @@ export function LinkCalibTab() {
                 </div>
                 {vivePath && <div className="mono" style={{ fontSize: 10.5, color:'var(--text-3)' }}>saved: {vivePath}</div>}
               </Section>
+                <Section title="UMI MCAP" hint={umiCount ? `${umiCount} samples · ${umiTimespan.toFixed(1)}s` : 'not loaded'}>
+                  <button className="btn" onClick={onImportMcap}>↓ import mcap</button>
+                  {umiTopics.length > 0 && (
+                    <Field label="topic">
+                      <select className="select" value={umiTopic} onChange={e => setUmiTopic(e.target.value)}>
+                        {umiTopics.map(t => <option key={t.topic} value={t.topic}>{t.topic} ({t.n})</option>)}
+                      </select>
+                    </Field>
+                  )}
+                  {umiPath && <div className="mono" style={{ fontSize: 10.5, color:'var(--text-3)' }}>{umiPath}</div>}
+                </Section>
             </>
           )}
           {status && <div className="mono" style={{ fontSize: 10.5, color: 'var(--text-3)', padding: '0 2px' }}>{status}</div>}
