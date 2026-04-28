@@ -530,6 +530,88 @@ async def recording_save(body: dict) -> dict:
     return {"ok": True, "path": path, "n": len(samples)}
 
 
+@router.post("/recording/import_mcap")
+async def recording_import_mcap(body: dict) -> dict:
+    """Read an MCAP file and extract foxglove.PoseInFrame messages on the given topic.
+
+    Body: { mcap_path, topic, out_path }
+    Writes a canonical pose-list JSON to out_path.
+    Returns { ok, count, t_first, t_last, path }.
+    """
+    mcap_path = body.get("mcap_path")
+    topic = body.get("topic")
+    out_path = body.get("out_path")
+    if not mcap_path or not os.path.isfile(mcap_path):
+        raise HTTPException(status_code=404, detail="mcap not found")
+    if not topic:
+        raise HTTPException(status_code=400, detail="topic is required")
+    if not out_path:
+        raise HTTPException(status_code=400, detail="out_path is required")
+
+    from mcap_protobuf.reader import read_protobuf_messages
+
+    samples = []
+    n_drop_quat = 0
+    n_seen = 0
+    try:
+        for msg_tuple in read_protobuf_messages(mcap_path, topics=[topic]):
+            n_seen += 1
+            pb = msg_tuple.proto_msg
+            ts = pb.timestamp.seconds + pb.timestamp.nanos / 1e9
+            qx = pb.pose.orientation.x
+            qy = pb.pose.orientation.y
+            qz = pb.pose.orientation.z
+            qw = pb.pose.orientation.w
+            qnorm = (qx * qx + qy * qy + qz * qz + qw * qw) ** 0.5
+            if qnorm < 0.5:
+                n_drop_quat += 1
+                continue
+            qx, qy, qz, qw = qx / qnorm, qy / qnorm, qz / qnorm, qw / qnorm
+            R = np.array([
+                [1 - 2 * (qy * qy + qz * qz), 2 * (qx * qy - qz * qw), 2 * (qx * qz + qy * qw)],
+                [2 * (qx * qy + qz * qw), 1 - 2 * (qx * qx + qz * qz), 2 * (qy * qz - qx * qw)],
+                [2 * (qx * qz - qy * qw), 2 * (qy * qz + qx * qw), 1 - 2 * (qx * qx + qy * qy)],
+            ], dtype=np.float64)
+            T = np.eye(4)
+            T[:3, :3] = R
+            T[:3, 3] = [pb.pose.position.x, pb.pose.position.y, pb.pose.position.z]
+            samples.append({"ts": ts, "T": T.tolist()})
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"mcap read failed: {e}")
+
+    if n_seen == 0:
+        raise HTTPException(status_code=400, detail=f"no messages found on topic {topic!r}")
+
+    if not samples:
+        raise HTTPException(status_code=400, detail=f"all {n_seen} messages had degenerate quaternions")
+
+    out = {
+        "meta": {
+            "kind": "umi",
+            "n": len(samples),
+            "t_first": samples[0]["ts"],
+            "t_last": samples[-1]["ts"],
+            "topic": topic,
+            "n_dropped_quat": n_drop_quat,
+        },
+        "samples": samples,
+    }
+    try:
+        os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
+        with open(out_path, "w") as f:
+            json.dump(out, f)
+    except OSError as e:
+        raise HTTPException(status_code=500, detail=f"write failed: {e}")
+
+    return {
+        "ok": True,
+        "count": len(samples),
+        "t_first": out["meta"]["t_first"],
+        "t_last": out["meta"]["t_last"],
+        "path": out_path,
+    }
+
+
 @router.get("/recording/list_topics")
 async def recording_list_topics(mcap_path: str) -> dict:
     """Peek at the MCAP file and return topics whose schema is foxglove.PoseInFrame."""
