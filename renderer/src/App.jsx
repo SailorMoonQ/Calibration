@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { TelemetryProvider } from './lib/telemetry.jsx';
 import { Topbar } from './components/Topbar.jsx';
 import { Tabs } from './components/Tabs.jsx';
 import { TweaksPanel, TWEAKS_DEFAULTS } from './components/TweaksPanel.jsx';
@@ -54,15 +55,17 @@ export function App() {
   const ActiveComp = tabDef.Comp;
 
   return (
-    <div className="app">
-      <Topbar mode={mode} onMode={setMode}/>
-      <Tabs tabs={TAB_DEFS} value={active} onChange={setActive}/>
-      <ActiveComp/>
-      <LogStrip lines={[
-        active === 'intrinsics' ? 'solver: LM converged in 24 iters · Δcost 7.2e-7' : 'joint bundle adjustment · 132 constraints active',
-        active === 'fisheye' ? 'fisheye/equidistant · k₁…k₄ estimated · ω 195.3°' : 'T_ctrl_cam saved to session_0419.toml [calib.hand_eye]'
-      ]}/>
-      <TweaksPanel visible={tweaksVisible} tweaks={tweaks} setTweaks={setTweaks} onClose={() => setTweaksVisible(false)}/>
-    </div>
+    <TelemetryProvider>
+      <div className="app">
+        <Topbar mode={mode} onMode={setMode}/>
+        <Tabs tabs={TAB_DEFS} value={active} onChange={setActive}/>
+        <ActiveComp/>
+        <LogStrip lines={[
+          active === 'intrinsics' ? 'solver: LM converged in 24 iters · Δcost 7.2e-7' : 'joint bundle adjustment · 132 constraints active',
+          active === 'fisheye' ? 'fisheye/equidistant · k₁…k₄ estimated · ω 195.3°' : 'T_ctrl_cam saved to session_0419.toml [calib.hand_eye]'
+        ]}/>
+        <TweaksPanel visible={tweaksVisible} tweaks={tweaks} setTweaks={setTweaks} onClose={() => setTweaksVisible(false)}/>
+      </div>
+    </TelemetryProvider>
   );
 }
