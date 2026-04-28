@@ -39,16 +39,21 @@ function waitForHealth(port, timeoutMs = 15000) {
 }
 
 function resolveBackendCommand(isDev) {
+  const py = process.env.CALIB_PYTHON || 'python3';
   if (isDev) {
     const repo = path.resolve(__dirname, '..');
-    const py = process.env.CALIB_PYTHON || 'python3';
     return { cmd: py, args: ['-m', 'app.main'], cwd: path.join(repo, 'backend') };
   }
-  // Packaged: electron-builder extraResources places the binary under resources/backend/
-  const binName = process.platform === 'win32' ? 'calib-backend.exe' : 'calib-backend';
-  const bin = path.join(process.resourcesPath, 'backend', binName);
-  if (!fs.existsSync(bin)) throw new Error(`packaged backend not found at ${bin}`);
-  return { cmd: bin, args: [], cwd: path.dirname(bin) };
+  // Packaged: electron-builder extraResources places backend/app/*.py and
+  // backend/requirements.txt under resources/backend/. We launch the system
+  // Python interpreter against the bundled source so the user's ROS2-sourced
+  // environment (rclpy, cv_bridge, plus the rest of requirements.txt) is
+  // used at runtime — nothing is frozen.
+  const cwd = path.join(process.resourcesPath, 'backend');
+  if (!fs.existsSync(path.join(cwd, 'app', 'main.py'))) {
+    throw new Error(`packaged backend source not found at ${cwd}`);
+  }
+  return { cmd: py, args: ['-m', 'app.main'], cwd };
 }
 
 async function startSidecar({ isDev }) {

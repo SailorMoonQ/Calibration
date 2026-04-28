@@ -10,7 +10,7 @@
     "dev:electron": "wait-on http://localhost:5173 && cross-env NODE_ENV=development electron .",
     "build:renderer": "vite build --config renderer/vite.config.js",
     "build:backend": "bash scripts/build-backend.sh",
-    "build:linux": "npm run build:renderer && npm run build:backend && electron-builder --linux",
+    "build:linux": "npm run build:renderer && electron-builder --linux",
     "postinstall": "electron-builder install-app-deps"
   },
   "devDependencies": {
@@ -37,8 +37,13 @@
     ],
     "extraResources": [
       {
-        "from": "backend/dist/calib-backend",
-        "to": "backend/calib-backend"
+        "from": "backend/app",
+        "to": "backend/app",
+        "filter": ["**/*.py"]
+      },
+      {
+        "from": "backend/requirements.txt",
+        "to": "backend/requirements.txt"
       }
     ],
     "linux": {
