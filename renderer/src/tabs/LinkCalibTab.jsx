@@ -574,7 +574,7 @@ export function LinkCalibTab() {
           )}
           {status && <div className="mono" style={{ fontSize: 10.5, color: 'var(--text-3)', padding: '0 2px' }}>{status}</div>}
         </div>
-        <SolverButton onSolve={onSolve} busy={busy} label={`Solve ${linkLabel}`}/>
+        {inputsMode === 'live' && <SolverButton onSolve={onSolve} busy={busy} label={`Solve ${linkLabel}`}/>}
       </div>
 
       <div className="viewport">
