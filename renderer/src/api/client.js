@@ -41,6 +41,19 @@ export const api = {
   loadCalibration: (path) => request('/calibration/load', { method: 'POST', body: JSON.stringify({ path }) }),
 };
 
+export const recording = {
+  save: ({ kind, samples, path }) =>
+    request('/recording/save', { method: 'POST', body: JSON.stringify({ kind, samples, path }) }),
+  listTopics: (mcap_path) =>
+    request(`/recording/list_topics?mcap_path=${encodeURIComponent(mcap_path)}`),
+  importMcap: ({ mcap_path, topic, out_path }) =>
+    request('/recording/import_mcap', { method: 'POST', body: JSON.stringify({ mcap_path, topic, out_path }) }),
+  sync: ({ vive_path, umi_path, out_path, max_skew_s, max_pair_gap_s }) =>
+    request('/recording/sync', { method: 'POST', body: JSON.stringify({ vive_path, umi_path, out_path, max_skew_s, max_pair_gap_s }) }),
+  calibrateHandeyePose: ({ synced_path, method }) =>
+    request('/calibrate/handeye_pose', { method: 'POST', body: JSON.stringify({ synced_path, method }) }),
+};
+
 export async function mjpegUrl(device, opts = {}) {
   const { baseUrl } = await info();
   const qs = new URLSearchParams({
