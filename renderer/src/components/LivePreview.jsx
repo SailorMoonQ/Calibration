@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { api, mjpegUrl } from '../api/client.js';
+import { useReportCamera } from '../lib/telemetry.jsx';
 
 export function LivePreview({ device, fps = 30, quality = 70 }) {
   const [url, setUrl] = useState(null);
@@ -21,6 +22,7 @@ export function LivePreview({ device, fps = 30, quality = 70 }) {
       setUrl(null);
     };
   }, [device, fps, quality]);
+  useReportCamera(device, info?.capture_fps, fps);
 
   if (!device) {
     return (
