@@ -537,3 +537,7 @@ release/
 # Calibration capture sessions (working data, not source)
 dataset/
 **/.trash/
+
+# Un-ignore renderer JS lib (overrides the Python template's `lib/` rule above)
+!renderer/src/lib/
+!renderer/src/lib/**
