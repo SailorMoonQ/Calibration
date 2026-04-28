@@ -13,6 +13,7 @@ from fastapi.responses import FileResponse, Response, StreamingResponse
 import numpy as np
 
 from app.sources import manager as source_manager
+from app.sources import ros2_context
 
 from app import __version__
 from app.models import (
@@ -45,6 +46,17 @@ async def list_sources() -> dict:
 @router.get("/stream/devices")
 async def stream_devices() -> dict:
     return {"cameras": source_manager.list_devices()}
+
+
+@router.get("/stream/ros2_topics")
+async def stream_ros2_topics() -> dict:
+    """Live discovery of sensor_msgs/CompressedImage topics on the ROS2 graph.
+    503 when rclpy isn't importable so the renderer can show a clear hint."""
+    try:
+        topics = ros2_context.list_compressed_image_topics()
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    return {"topics": topics}
 
 
 @router.get("/stream/info")
