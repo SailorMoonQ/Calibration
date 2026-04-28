@@ -7,7 +7,7 @@ import {
   ErrorPanel, SolverButton, SolverPanel,
 } from '../components/panels.jsx';
 import { applyT, invT } from '../lib/math3d.js';
-import { api, posesWsUrl, pickSaveFile, pickOpenFile } from '../api/client.js';
+import { api, posesWsUrl, pickSaveFile, pickOpenFile, recording } from '../api/client.js';
 import { useReportPoses } from '../lib/telemetry.jsx';
 
 const basename = (p) => (p || '').split('/').pop();
@@ -52,9 +52,20 @@ export function LinkCalibTab() {
   const [result, setResult] = useState(null);
   const [gtLink, setGtLink] = useState(null);
 
+  // Inputs mode: 'live' (existing) or 'mcap' (new vive+mcap flow).
+  const [inputsMode, setInputsMode] = useState('live');
+
+  // Vive recording state (active only in mcap mode).
+  const [recordingActive, setRecordingActive] = useState(false);
+  const [viveRecCount, setViveRecCount] = useState(0);
+  const [vivePath, setVivePath] = useState('');
+
   // Sample store (kept in refs to avoid React thrash at 30 Hz).
   const samplesRef = useRef({});  // device → array of {seq, ts, T}
   const wsRef = useRef(null);
+  // Wall-clock timestamped pose buffer for the active recording session.
+  const recordingRef = useRef([]);  // [{ ts: <epoch_s>, T: [[4x4]] }]
+  const recordingActiveRef = useRef(false);
   const [tickCount, setTickCount] = useState(0); // one re-render per ~10 samples to refresh viz
 
   // Telemetry state for the topbar pills. Refs so the WS onmessage closure
@@ -136,6 +147,17 @@ export function LinkCalibTab() {
           // Trim the ring to the 5 s window.
           while (arr.length && arr[0].ts < cutoffMs) arr.shift();
         }
+        // Vive recording: capture wall-clock-stamped poses for the device the user picked.
+        if (recordingActiveRef.current && m.wall_ts != null) {
+          const T = samplePoses[devA];
+          if (T) {
+            recordingRef.current.push({ ts: m.wall_ts, T });
+            // Throttle re-renders of the count display: bump every 10 samples.
+            if (recordingRef.current.length % 10 === 0) {
+              setViveRecCount(recordingRef.current.length);
+            }
+          }
+        }
         // Sample collection gate — controlled by `streaming`. Read the ref so the
         // onmessage closure doesn't need to be rebuilt every time the flag flips.
         if (!collectingRef.current) return;
@@ -159,6 +181,30 @@ export function LinkCalibTab() {
     if (wsRef.current) { try { wsRef.current.close(); } catch {} wsRef.current = null; }
     setConnected(false); setStreaming(false);
     setPoseStats(null);
+  }, []);
+
+  const startRecording = useCallback(() => {
+    if (!connected) { setStatus('connect first'); return; }
+    recordingRef.current = [];
+    recordingActiveRef.current = true;
+    setRecordingActive(true);
+    setViveRecCount(0);
+    setStatus('recording…');
+  }, [connected]);
+
+  const stopAndSaveRecording = useCallback(async () => {
+    recordingActiveRef.current = false;
+    setRecordingActive(false);
+    const samples = recordingRef.current.slice();
+    setViveRecCount(samples.length);
+    if (samples.length === 0) { setStatus('nothing recorded'); return; }
+    const path = await pickSaveFile({ defaultPath: 'vive_recording.json' });
+    if (!path) { setStatus('save cancelled (kept buffer)'); return; }
+    try {
+      const r = await recording.save({ kind: 'vive', samples, path });
+      setVivePath(r.path);
+      setStatus(`saved vive ${r.n} samples → ${path.split('/').pop()}`);
+    } catch (e) { setStatus(`save failed: ${e.message}`); }
   }, []);
 
   // Use a ref for `streaming` inside onmessage to avoid re-subscribing.
@@ -305,6 +351,14 @@ export function LinkCalibTab() {
           </span>
         </div>
         <div className="rail-scroll">
+          <Section title="Inputs">
+            <Seg value={inputsMode} onChange={setInputsMode} full options={[
+              {value:'live', label:'live pair'},
+              {value:'mcap', label:'vive + mcap'},
+            ]}/>
+          </Section>
+          {inputsMode === 'live' && (
+            <>
           <Section title="Pose source" hint={sourceB === 'none' ? sourceA : `${sourceA} + ${sourceB}`}>
             <Field label="source A">
               <select className="select" value={sourceA} disabled={connected}
@@ -378,6 +432,34 @@ export function LinkCalibTab() {
                 t_gt = [{(gtLink[0][3]*1000).toFixed(2)}, {(gtLink[1][3]*1000).toFixed(2)}, {(gtLink[2][3]*1000).toFixed(2)}] mm
               </div>
             </Section>
+          )}
+            </>
+          )}
+          {inputsMode === 'mcap' && (
+            <>
+              <Section title="Vive recording" hint={connected ? `${viveRecCount} samples` : 'not connected'}>
+                <Field label="source">
+                  <Seg value={sourceA} onChange={setSourceA} full options={[
+                    {value:'mock', label:'mock'},
+                    {value:'steamvr', label:'steamvr'},
+                  ]}/>
+                </Field>
+                <Field label="device">
+                  <select className="select" value={devA} onChange={e => setDevA(e.target.value)}>
+                    {devices.map(d => <option key={d} value={d}>{d}</option>)}
+                  </select>
+                </Field>
+                <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:6 }}>
+                  {connected
+                    ? <button className="btn ghost" onClick={disconnect}>disconnect</button>
+                    : <button className="btn" onClick={connect}>connect</button>}
+                  {recordingActive
+                    ? <button className="btn primary" onClick={stopAndSaveRecording}>⏹ stop & save</button>
+                    : <button className="btn" disabled={!connected} onClick={startRecording}>● start recording</button>}
+                </div>
+                {vivePath && <div className="mono" style={{ fontSize: 10.5, color:'var(--text-3)' }}>saved: {vivePath}</div>}
+              </Section>
+            </>
           )}
           {status && <div className="mono" style={{ fontSize: 10.5, color: 'var(--text-3)', padding: '0 2px' }}>{status}</div>}
         </div>
