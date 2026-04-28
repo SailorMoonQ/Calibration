@@ -23,6 +23,7 @@ export const api = {
   health: () => request('/health'),
   listSources: () => request('/sources'),
   listStreamDevices: () => request('/stream/devices'),
+  listRos2Topics: () => request('/stream/ros2_topics'),
   streamInfo: (device) => request(`/stream/info?device=${encodeURIComponent(device)}`),
   snap: (device, dir) => request('/stream/snap', { method: 'POST', body: JSON.stringify({ device, dir }) }),
   snapPair: (device0, device1, dir0, dir1) => request('/stream/snap_pair', {
