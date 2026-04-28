@@ -5,6 +5,7 @@ import { RectifiedFrame } from '../components/RectifiedFrame.jsx';
 import { RectifiedLivePreview } from '../components/RectifiedLivePreview.jsx';
 import { LivePreview } from '../components/LivePreview.jsx';
 import { LiveDetectedFrame } from '../components/LiveDetectedFrame.jsx';
+import { Ros2TopicPicker } from '../components/Ros2TopicPicker.jsx';
 import {
   FrameStrip, ErrorPanel, TargetPanel,
   CaptureControls, SolverButton, SolverPanel,
@@ -16,7 +17,8 @@ const ZERO_K = [[0,0,0,0],[0,0,0,0],[0,0,0,0],[0,0,0,1]];
 
 export function FisheyeTab() {
   const [board, setBoard] = useState({ type: 'chess', cols: 11, rows: 8, sq: 0.045 });
-  const [live, setLive] = useState(true);
+  const [sourceMode, setSourceMode] = useState('live');  // 'live' | 'ros2'
+  const [ros2Topic, setRos2Topic] = useState('');
   const [model, setModel] = useState('equidistant');
   const [view, setView] = useState('split');
   const [showBoard, setShowBoard] = useState(true);
@@ -26,7 +28,7 @@ export function FisheyeTab() {
   const [method, setMethod] = useState('remap'); // 'remap' | 'undistort'
   const [liveDetect, setLiveDetect] = useState(false);
   const [autoCapture, setAutoCapture] = useState(false);
-  const [bagPath, setBagPath] = useState('');
+  const [autoRate, setAutoRate] = useState(0.5);  // seconds between auto-snaps
   const [streamInfo, setStreamInfo] = useState(null);
 
   // When onLoad sets datasetPath from a loaded calibration, the dataset-listing effect
@@ -177,7 +179,7 @@ export function FisheyeTab() {
     const size = meta?.image_size;
     if (!corners || corners.length < 4 || !size) return;
     const now = performance.now();
-    if (now - lastAutoSnapRef.current < 500) return;  // 0.5s debounce
+    if (now - lastAutoSnapRef.current < autoRate * 1000) return;  // user-tuned debounce
     if (autoSnapInFlightRef.current) return;
     // Centroid of detected corners → cell index.
     let sx = 0, sy = 0;
@@ -205,7 +207,7 @@ export function FisheyeTab() {
         autoSnapInFlightRef.current = false;
       }
     })();
-  }, [autoCapture, liveDevice, datasetPath]);
+  }, [autoCapture, liveDevice, datasetPath, autoRate]);
 
   const onDrop = async () => {
     if (!selectedPath) { setStatus('no frame selected to drop'); return; }
@@ -465,17 +467,25 @@ export function FisheyeTab() {
         <div className="rail-scroll">
           <Section
             title="Source"
-            hint={live
+            hint={sourceMode === 'live'
               ? (streamInfo?.open
                   ? `${streamInfo.width}×${streamInfo.height} · ${streamInfo.capture_fps?.toFixed(1) ?? '—'} fps`
                   : (liveDevice || 'no device'))
-              : 'recorded'
+              : (ros2Topic || 'no topic')
             }
-            right={<Seg value={live ? 'live' : 'bag'} onChange={v => setLive(v === 'live')} options={[
-              {value:'live',label:'live'},{value:'bag',label:'bag'}
-            ]}/>}
+            right={<Seg
+              value={sourceMode}
+              onChange={(v) => {
+                setSourceMode(v);
+                setLiveDevice('');
+                setRos2Topic('');
+              }}
+              options={[
+                { value: 'live', label: 'live' },
+                { value: 'ros2', label: 'ros2' },
+              ]}/>}
           >
-            {live ? (
+            {sourceMode === 'live' ? (
               <>
                 <Field label="device">
                   <select className="select" value={liveDevice} onChange={e => setLiveDevice(e.target.value)}>
@@ -506,13 +516,19 @@ export function FisheyeTab() {
               </>
             ) : (
               <>
-                <Field label="bag file">
-                  <input className="input" value={bagPath} placeholder="/path/to/run.mcap"
-                         onChange={e => setBagPath(e.target.value)}/>
-                </Field>
-                <Field label="topic">
-                  <select className="select"><option>/camera/image_raw</option><option>/cam0/image</option></select>
-                </Field>
+                <Ros2TopicPicker
+                  topic={ros2Topic}
+                  onTopic={(t) => { setRos2Topic(t); setLiveDevice(t ? 'ros2:' + t : ''); }}/>
+                {streamInfo?.open && (
+                  <div className="mono" style={{ fontSize: 11, color:'var(--text-3)', display:'grid', gridTemplateColumns:'auto 1fr', columnGap: 8, rowGap: 2 }}>
+                    <span>resolution</span><span style={{ color:'var(--text-1)' }}>{streamInfo.width} × {streamInfo.height}</span>
+                    <span>fps (measured)</span><span style={{ color:'var(--text-1)' }}>{streamInfo.capture_fps?.toFixed(2) ?? '—'}</span>
+                  </div>
+                )}
+                <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:6 }}>
+                  <button className="btn" onClick={() => setViewMode('live')}>👁 live preview</button>
+                  <div/>
+                </div>
               </>
             )}
           </Section>
@@ -553,7 +569,7 @@ export function FisheyeTab() {
               </div>
             </Field>
           </Section>
-          <CaptureControls live={live} onLive={setLive}
+          <CaptureControls
             autoCapture={autoCapture}
             onAuto={(v) => {
               setAutoCapture(v);
@@ -562,6 +578,8 @@ export function FisheyeTab() {
               // the toggle silently inert.
               if (v) setLiveDetect(true);
             }}
+            autoRate={autoRate}
+            onAutoRate={setAutoRate}
             onSnap={onSnap} onDrop={onDrop}
             coverage={coverage.percent} coverageCells={coverage.cells}/>
         </div>
