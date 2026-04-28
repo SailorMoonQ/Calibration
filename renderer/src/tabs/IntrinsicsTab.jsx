@@ -6,7 +6,7 @@ import { RectifiedLivePreview } from '../components/RectifiedLivePreview.jsx';
 import { LivePreview } from '../components/LivePreview.jsx';
 import { LiveDetectedFrame } from '../components/LiveDetectedFrame.jsx';
 import {
-  FrameStrip, ErrorPanel, SourcePanel, TargetPanel,
+  FrameStrip, ErrorPanel, TargetPanel,
   CaptureControls, SolverButton, SolverPanel,
 } from '../components/panels.jsx';
 import { computeCoverage, cellIndexFor } from '../lib/coverage.js';
@@ -17,8 +17,6 @@ const ZERO_K = [[0,0,0,0],[0,0,0,0],[0,0,0,0],[0,0,0,1]];
 export function IntrinsicsTab() {
   const [board, setBoard] = useState({ type: 'chess', cols: 11, rows: 8, sq: 0.045 });
   const [live, setLive] = useState(true);
-  const [device, setDevice] = useState('/dev/video0 · Basler acA1920');
-  const [bagPath, setBagPath] = useState('');
   const [autoCapture, setAuto] = useState(false);
   const [view, setView] = useState('split');                 // 'split' | 'raw' | 'rect'
   const [method, setMethod] = useState('remap');             // 'remap' | 'undistort'
@@ -400,8 +398,13 @@ export function IntrinsicsTab() {
       <div className="rail">
         <div className="rail-header"><span>Pinhole Intrinsics</span><button className="btn sm ghost">⛶</button></div>
         <div className="rail-scroll">
-          <SourcePanel live={live} onLive={setLive} device={device} onDevice={setDevice} bagPath={bagPath} onBagPath={setBagPath}/>
-          <Section title="Live camera" hint={liveDevice || 'no device'}>
+          <Section
+            title="Source"
+            hint={live ? (liveDevice || 'no device') : 'recorded'}
+            right={<Seg value={live ? 'live' : 'bag'} onChange={v => setLive(v === 'live')} options={[
+              {value:'live',label:'live'},{value:'bag',label:'bag'}
+            ]}/>}
+          >
             <Field label="device">
               <select className="select" value={liveDevice} onChange={e => setLiveDevice(e.target.value)}>
                 <option value="">— none —</option>
