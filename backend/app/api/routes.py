@@ -604,7 +604,7 @@ async def poses_stream(
             merged: dict = {}
             for _name, src in built:
                 merged.update(src.poll(t))
-            msg = {"type": "sample", "seq": seq, "ts": t, "poses": merged}
+            msg = {"type": "sample", "seq": seq, "ts": t, "wall_ts": time.time(), "poses": merged}
             try:
                 await ws.send_text(json.dumps(msg))
             except (WebSocketDisconnect, RuntimeError):
