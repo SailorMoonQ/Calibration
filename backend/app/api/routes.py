@@ -612,6 +612,66 @@ async def recording_import_mcap(body: dict) -> dict:
     }
 
 
+@router.post("/recording/sync")
+async def recording_sync(body: dict) -> dict:
+    """Sync a Vive recording + UMI import into a paired-sample JSON."""
+    from app.calib.sync import sync_streams
+
+    vive_path = body.get("vive_path")
+    umi_path = body.get("umi_path")
+    out_path = body.get("out_path")
+    if not (vive_path and os.path.isfile(vive_path)):
+        raise HTTPException(status_code=404, detail="vive_path not found")
+    if not (umi_path and os.path.isfile(umi_path)):
+        raise HTTPException(status_code=404, detail="umi_path not found")
+    if not out_path:
+        raise HTTPException(status_code=400, detail="out_path required")
+
+    max_skew_s = float(body.get("max_skew_s", 5.0))
+    max_pair_gap_s = float(body.get("max_pair_gap_s", 0.05))
+
+    with open(vive_path) as f:
+        vive_data = json.load(f)
+    with open(umi_path) as f:
+        umi_data = json.load(f)
+
+    res = sync_streams(
+        vive_data["samples"], umi_data["samples"],
+        max_skew_s=max_skew_s, max_pair_gap_s=max_pair_gap_s,
+    )
+    if not res["ok"]:
+        raise HTTPException(status_code=400, detail=res.get("reason") or "sync failed")
+    if res["n_pairs"] < 50:
+        raise HTTPException(status_code=400, detail=f"only {res['n_pairs']} pairs after sync (need >= 50)")
+
+    out = {
+        "meta": {
+            "kind": "synced",
+            "n": res["n_pairs"],
+            "delta_t": res["delta_t"],
+            "vive_rot_deg": res["vive_rot_deg"],
+            "umi_rot_deg": res["umi_rot_deg"],
+        },
+        "samples": res["pairs"],
+    }
+    try:
+        os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
+        with open(out_path, "w") as f:
+            json.dump(out, f)
+    except OSError as e:
+        raise HTTPException(status_code=500, detail=f"write failed: {e}")
+
+    return {
+        "ok": True,
+        "n_pairs": res["n_pairs"],
+        "delta_t": res["delta_t"],
+        "snr": res.get("snr"),
+        "vive_rot_deg": res["vive_rot_deg"],
+        "umi_rot_deg": res["umi_rot_deg"],
+        "path": out_path,
+    }
+
+
 @router.get("/recording/list_topics")
 async def recording_list_topics(mcap_path: str) -> dict:
     """Peek at the MCAP file and return topics whose schema is foxglove.PoseInFrame."""
