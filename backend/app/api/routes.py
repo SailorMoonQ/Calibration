@@ -672,6 +672,26 @@ async def recording_sync(body: dict) -> dict:
     }
 
 
+@router.post("/calibrate/handeye_pose")
+async def calibrate_handeye_pose(body: dict) -> CalibrationResult:
+    """Solve T_vive_umi from a synced JSON file (Task 5 output).
+    Body: { synced_path, method = "daniilidis" }.
+    """
+    from app.calib.handeye_pose import solve_handeye_pose
+
+    synced_path = body.get("synced_path")
+    method = (body.get("method") or "daniilidis").lower()
+    if not (synced_path and os.path.isfile(synced_path)):
+        raise HTTPException(status_code=404, detail="synced_path not found")
+    if method not in ("tsai", "park", "horaud", "andreff", "daniilidis"):
+        raise HTTPException(status_code=400, detail=f"unknown method: {method}")
+
+    with open(synced_path) as f:
+        data = json.load(f)
+    pairs = data.get("samples") or []
+    return solve_handeye_pose(pairs, method=method)
+
+
 @router.get("/recording/list_topics")
 async def recording_list_topics(mcap_path: str) -> dict:
     """Peek at the MCAP file and return topics whose schema is foxglove.PoseInFrame."""
