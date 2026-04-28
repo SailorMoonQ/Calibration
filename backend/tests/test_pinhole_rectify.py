@@ -1,10 +1,13 @@
 """Tests for the pinhole branch of the rectify helpers in app.api.routes."""
 from __future__ import annotations
 
+import cv2
 import numpy as np
 import pytest
+from fastapi.testclient import TestClient
 
 from app.api.routes import _new_K
+from app.main import app
 
 
 def _synthetic_K(w=640, h=480, fx=500.0, fy=500.0):
@@ -46,11 +49,6 @@ def test_new_K_fisheye_unchanged():
     assert nK[0, 0] > 0 and nK[1, 1] > 0
 
 
-from fastapi.testclient import TestClient
-
-from app.main import app
-
-
 @pytest.fixture
 def client():
     return TestClient(app)
@@ -60,7 +58,6 @@ def test_dataset_rectified_unknown_model_returns_400(client, tmp_path):
     img_path = tmp_path / "x.jpg"
     # Write a tiny valid JPEG so the path-existence check passes; the model
     # validation should fire before the image is decoded.
-    import cv2
     img = np.zeros((8, 8, 3), dtype=np.uint8)
     cv2.imwrite(str(img_path), img)
     resp = client.post(
