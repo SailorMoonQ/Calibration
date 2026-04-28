@@ -15,11 +15,15 @@ pip3 install --user \
   fastapi>=0.115 \
   'uvicorn[standard]>=0.32' \
   pydantic>=2.9 \
-  numpy>=1.26 \
+  'numpy>=1.26,<2' \
   opencv-contrib-python>=4.10 \
   scipy>=1.13 \
   ruamel.yaml>=0.18
 ```
+
+**Important — NumPy must be `<2`.** ROS2 Humble's `cv_bridge` is built
+against NumPy 1.x and segfaults when loaded alongside NumPy 2.x. If you
+already have NumPy 2 installed, downgrade with `pip3 install --user 'numpy<2'`.
 
 ## 2. ROS2 dependencies (for the ros2 image source)
 
