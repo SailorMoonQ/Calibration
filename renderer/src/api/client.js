@@ -52,19 +52,43 @@ export async function mjpegUrl(device, opts = {}) {
   return `${baseUrl}/stream/mjpeg?${qs.toString()}`;
 }
 
-// Live-undistorted MJPEG. K is a 3x3 nested array, D is k1..k4. Returns a URL the
-// browser drives via <img src=...> just like the plain mjpegUrl above. The cache-bust
-// `t` is intentional — when intrinsics or balance change we want the stream to reopen.
-export async function rectifiedMjpegUrl(device, { K, D, balance = 0.5, fov_scale = 1.0, method = 'remap', fps = 15, quality = 80 } = {}) {
+// Live-undistorted MJPEG. `model='fisheye'` (default, K/D = 3x3 + [k1..k4],
+// balance + fov_scale) or `model='pinhole'` (K/D = 3x3 + Brown-Conrady up to
+// 8 elements, alpha). Cache-bust `t` ensures intrinsics changes reopen the stream.
+export async function rectifiedMjpegUrl(device, {
+  K, D,
+  model = 'fisheye',
+  balance = 0.5, fov_scale = 1.0,
+  alpha = 0.5,
+  method = 'remap', fps = 15, quality = 80,
+} = {}) {
   const { baseUrl } = await info();
   const qs = new URLSearchParams({
     device,
     fx: String(K[0][0]), fy: String(K[1][1]), cx: String(K[0][2]), cy: String(K[1][2]),
-    k1: String(D[0] ?? 0), k2: String(D[1] ?? 0), k3: String(D[2] ?? 0), k4: String(D[3] ?? 0),
-    balance: String(balance), fov_scale: String(fov_scale), method,
+    model, method,
     fps: String(fps), quality: String(quality),
     t: String(Date.now()),
   });
+  if (model === 'fisheye') {
+    qs.set('k1', String(D[0] ?? 0));
+    qs.set('k2', String(D[1] ?? 0));
+    qs.set('k3', String(D[2] ?? 0));
+    qs.set('k4', String(D[3] ?? 0));
+    qs.set('balance', String(balance));
+    qs.set('fov_scale', String(fov_scale));
+  } else {
+    // Brown-Conrady: D = [k1, k2, p1, p2, k3, k4, k5, k6] (last four optional, default 0).
+    qs.set('k1', String(D[0] ?? 0));
+    qs.set('k2', String(D[1] ?? 0));
+    qs.set('p1', String(D[2] ?? 0));
+    qs.set('p2', String(D[3] ?? 0));
+    qs.set('k3', String(D[4] ?? 0));
+    qs.set('k4', String(D[5] ?? 0));
+    qs.set('k5', String(D[6] ?? 0));
+    qs.set('k6', String(D[7] ?? 0));
+    qs.set('alpha', String(alpha));
+  }
   return `${baseUrl}/stream/mjpeg_rect?${qs.toString()}`;
 }
 
@@ -105,12 +129,25 @@ export async function frameUrl(path) {
   return `${baseUrl}/dataset/frame?path=${encodeURIComponent(path)}`;
 }
 
-export async function fetchRectifiedBlob({ path, K, D, balance = 0.5, fov_scale = 1.0, method = 'remap' }) {
+export async function fetchRectifiedBlob({
+  path, K, D,
+  model = 'fisheye',
+  balance = 0.5, fov_scale = 1.0,
+  alpha = 0.5,
+  method = 'remap',
+}) {
   const { baseUrl } = await info();
+  const body = { path, K, D, model, method };
+  if (model === 'fisheye') {
+    body.balance = balance;
+    body.fov_scale = fov_scale;
+  } else {
+    body.alpha = alpha;
+  }
   const res = await fetch(`${baseUrl}/dataset/rectified`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ path, K, D, balance, fov_scale, method }),
+    body: JSON.stringify(body),
   });
   if (!res.ok) {
     const txt = await res.text().catch(() => res.statusText);
