@@ -123,6 +123,8 @@ async def stream_mjpeg_rect(
     balance/fov_scale; `model='pinhole'` uses cv2.* (non-fisheye) with the full
     Brown-Conrady [k1, k2, p1, p2, k3, k4, k5, k6] vector + alpha. Maps are built
     once from the first frame's image_size; flip a query param to rebuild."""
+    method = method.lower()
+    model = model.lower()
     if method not in ("remap", "undistort"):
         raise HTTPException(status_code=400, detail=f"unknown method: {method}")
     if model not in ("fisheye", "pinhole"):
@@ -319,11 +321,6 @@ def _new_K(model: str, K: np.ndarray, D: np.ndarray, w: int, h: int, **kwargs) -
             nK[1, 2] = h / 2.0
         return np.asarray(nK, dtype=np.float64)
     raise ValueError(f"unknown model: {model!r}")
-
-
-# Back-compat shim — old name still callable for any internal users.
-def _fisheye_new_K(K, D, w, h, balance, fov_scale):
-    return _new_K("fisheye", K, D, w, h, balance=balance, fov_scale=fov_scale)
 
 
 _IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff")
