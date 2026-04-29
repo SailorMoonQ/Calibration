@@ -545,3 +545,8 @@ dataset/
 # Claude
 .claude/
 
+# Electron-builder resources (icons, installer assets) — overrides the generic
+# build/ rule from the ROS2 template above.
+!/build/
+!/build/**
+
