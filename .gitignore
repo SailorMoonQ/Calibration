@@ -541,3 +541,7 @@ dataset/
 # Un-ignore renderer JS lib (overrides the Python template's `lib/` rule above)
 !renderer/src/lib/
 !renderer/src/lib/**
+
+# Claude
+.claude/
+
