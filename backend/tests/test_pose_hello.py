@@ -64,3 +64,45 @@ def test_steamvr_hello_zero_bases(fake_triad):
     src = SteamVRPoseSource()
     h = src.hello()
     assert h["bases"] == 0
+
+
+def test_poses_stream_uses_pose_manager(monkeypatch):
+    """The /poses/stream handler must acquire/release through pose_manager so
+    a second concurrent client doesn't double-open the underlying source."""
+    from fastapi.testclient import TestClient
+    from app.main import app
+    from app.sources.poses import manager as pose_manager
+
+    class FakePose:
+        def __init__(self, **kw): self.closed = False
+        def hello(self): return {"devices": ["d"]}
+        def poll(self, t): return {"d": [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]]}
+        def close(self): self.closed = True
+
+    monkeypatch.setattr(pose_manager, "_sources", {})
+    monkeypatch.setattr(pose_manager, "_refs", {})
+    monkeypatch.setattr(pose_manager, "_BUILDERS", {"mock": lambda **kw: FakePose()})
+
+    client = TestClient(app)
+    with client.websocket_connect("/poses/stream?sources=mock&fps=30") as ws1:
+        hello = ws1.receive_json()
+        assert hello["type"] == "hello"
+        assert pose_manager._refs.get("mock") == 1
+        with client.websocket_connect("/poses/stream?sources=mock&fps=30") as ws2:
+            ws2.receive_json()  # discard hello
+            assert pose_manager._refs.get("mock") == 2
+        # ws2 closed — ref drops to 1, source still alive.
+        # Give the server a beat to run its finally block.
+        import time as _t
+        for _ in range(50):
+            if pose_manager._refs.get("mock") == 1:
+                break
+            _t.sleep(0.02)
+        assert pose_manager._refs.get("mock") == 1
+    # Both closed — manager evicts. Same brief poll for the cleanup.
+    import time as _t
+    for _ in range(50):
+        if "mock" not in pose_manager._refs:
+            break
+        _t.sleep(0.02)
+    assert "mock" not in pose_manager._refs
