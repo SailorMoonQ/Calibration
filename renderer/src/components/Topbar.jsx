@@ -27,7 +27,7 @@ function dropStatus(pct) {
   return 'bad';
 }
 
-export function Topbar({ mode, onMode }) {
+export function Topbar() {
   const { cameras, poses } = useTelemetry();
 
   const camPills = Object.entries(cameras)
@@ -67,12 +67,6 @@ export function Topbar({ mode, onMode }) {
       <span className="divider"/>
       <span className="session"><span className="path">~/projects/vr_rig/calib/session_0419.toml</span></span>
       <span className="spacer"/>
-      <div className="mode-toggle">
-        <button className={mode === 'live' ? 'on' : ''} onClick={() => onMode('live')}>live</button>
-        <button className={mode === 'bag' ? 'on' : ''} onClick={() => onMode('bag')}>bag</button>
-      </div>
-      <button className="btn">↓ import yaml</button>
-      <button className="btn">↑ export bundle</button>
       <button className="btn ghost icon" title="settings">⚙</button>
     </div>
   );
