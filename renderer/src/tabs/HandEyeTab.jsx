@@ -3,6 +3,7 @@ import { Section, Seg, Chk, Field, Matrix, KV } from '../components/primitives.j
 import { CameraView, ChessboardOverlay } from '../components/viewport.jsx';
 import { DetectedFrame } from '../components/DetectedFrame.jsx';
 import { LivePreview } from '../components/LivePreview.jsx';
+import { LiveDetectedFrame } from '../components/LiveDetectedFrame.jsx';
 import { Ros2TopicPicker } from '../components/Ros2TopicPicker.jsx';
 import { useCameraSource, CameraSourcePanel } from '../components/CameraSource.jsx';
 import {
@@ -13,8 +14,9 @@ import {
   CaptureControls, SolverButton, SolverPanel,
 } from '../components/panels.jsx';
 import { makeT, applyT, composeT } from '../lib/math3d.js';
-import { genFrames, gridCells } from '../lib/mock.js';
+import { genFrames } from '../lib/mock.js';
 import { DEFAULT_BOARD } from '../lib/board.js';
+import { computeCoverage, cellIndexFor } from '../lib/coverage.js';
 import { api, pickFolder, pickSaveFile, pickOpenFile, openPath, posesWsUrl } from '../api/client.js';
 
 const basename = (p) => (p || '').split('/').pop();
@@ -139,6 +141,16 @@ export function HandEyeTab() {
   // Hold the latest onSnap in a ref so the auto-capture timer always calls
   // through to the up-to-date closure without resubscribing on every state tick.
   const onSnapRef = useRef(null);
+
+  // Coverage tracking. snappedCellsRef holds the grid cells that already
+  // contributed a frame this session — auto-capture skips frames whose
+  // board centre lands in a claimed cell so the user spreads the rig
+  // around the FOV instead of dwelling on one spot. Reset whenever the
+  // dataset folder changes (each session starts fresh).
+  const snappedCellsRef = useRef(new Set());
+  const lastAutoSnapRef = useRef(0);
+  const autoSnapInFlightRef = useRef(false);
+  useEffect(() => { snappedCellsRef.current = new Set(); }, [datasetPath]);
 
   const mockFrames = useMemo(() => genFrames(30, 0.38), []);
   const mockPoses = useMemo(() => Array.from({ length: 56 }, (_, i) => {
@@ -270,13 +282,36 @@ export function HandEyeTab() {
   };
   onSnapRef.current = onSnap;
 
-  // Auto-capture: drive paired (image, pose) snaps on a timer.
-  useEffect(() => {
-    if (!autoCapture) return;
-    const period = Math.max(50, Math.round(autoCaptureRate * 1000));
-    const id = setInterval(() => { onSnapRef.current?.(); }, period);
-    return () => clearInterval(id);
-  }, [autoCapture, autoCaptureRate]);
+  // Auto-capture, cell-aware. LiveDetectedFrame fires onMeta on every
+  // detected tick; we snap only if (a) auto-capture is on, (b) we're
+  // outside the rate-limit window, (c) no snap is already in flight,
+  // (d) a tracker pose is fresh (handled inside onSnap), and (e) the
+  // board's centroid lands in a coverage cell we haven't claimed yet.
+  // This drives the user to fan out across the FOV — same UX the
+  // Intrinsics tab already uses.
+  const onAutoMeta = useCallback((meta) => {
+    if (!autoCapture || !liveDevice || !datasetPath) return;
+    const corners = meta?.corners;
+    const size = meta?.image_size;
+    if (!corners || corners.length < 4 || !size) return;
+    const now = performance.now();
+    if (now - lastAutoSnapRef.current < autoCaptureRate * 1000) return;
+    if (autoSnapInFlightRef.current) return;
+    let sx = 0, sy = 0;
+    for (const c of corners) { sx += c[0]; sy += c[1]; }
+    const cx = sx / corners.length, cy = sy / corners.length;
+    const idx = cellIndexFor(cx, cy, size);
+    if (idx == null) return;
+    if (snappedCellsRef.current.has(idx)) return;
+    autoSnapInFlightRef.current = true;
+    lastAutoSnapRef.current = now;
+    snappedCellsRef.current.add(idx);
+    (async () => {
+      try { await onSnapRef.current?.(); }
+      catch { snappedCellsRef.current.delete(idx); }
+      finally { autoSnapInFlightRef.current = false; }
+    })();
+  }, [autoCapture, autoCaptureRate, liveDevice, datasetPath]);
 
   const onRun = async () => {
     if (!datasetPath) { setStatus('pick a dataset folder'); return; }
@@ -359,6 +394,29 @@ export function HandEyeTab() {
   const rotRms = result?.ok ? result.rms : 0.382;
   const transRms = result?.ok ? result.final_cost : 1.42;
   const vpW = 900, vpH = 620;
+
+  // Coverage. Two sources, in order of preference:
+  //   1. After solve — derive from per_frame_residuals + image_size, the
+  //      authoritative "where on the sensor did detected boards actually
+  //      land" view. Same path Intrinsics uses.
+  //   2. During recording — fall back to the cells the live auto-capture
+  //      callback has already claimed, so the user sees the grid fill
+  //      out as they wave the rig around even before solving.
+  // `tickCount` bumps once per auto-snap so the no-solve fallback re-renders.
+  const [coverageTick, setCoverageTick] = useState(0);
+  useEffect(() => { setCoverageTick(t => t + 1); }, [recordedCount]);
+  const coverage = useMemo(() => {
+    const fromSolve = computeCoverage(result?.per_frame_residuals, result?.image_size);
+    if (fromSolve.filled > 0) return fromSolve;
+    // Fallback: synthesize from snappedCellsRef so the grid lights up live.
+    const total = fromSolve.total;
+    const cells = new Array(total).fill(false);
+    for (const idx of snappedCellsRef.current) {
+      if (idx >= 0 && idx < total) cells[idx] = true;
+    }
+    const filled = cells.reduce((n, on) => n + (on ? 1 : 0), 0);
+    return { cells, filled, total, percent: Math.round((filled / total) * 100) };
+  }, [result, coverageTick]);
 
   const selectedPath = datasetFiles[selected - 1];
 
@@ -478,8 +536,7 @@ export function HandEyeTab() {
             autoCapture={autoCapture} onAuto={setAutoCapture}
             autoRate={autoCaptureRate} onAutoRate={setAutoCaptureRate}
             onSnap={onSnap}
-            coverage={Math.min(100, datasetFiles.length * 3)}
-            coverageCells={gridCells(40, [0,1,3,4,6,7,9,10,12,14,16,17,20,22,23,26,27,30,32,34,35,38,39])}/>
+            coverage={coverage.percent} coverageCells={coverage.cells}/>
           {status && <div className="mono" style={{ fontSize: 10.5, color: 'var(--text-3)', padding: '0 2px' }}>{status}</div>}
         </div>
         <SolverButton onSolve={onRun} busy={busy} label="Solve AX=XB"/>
@@ -501,7 +558,7 @@ export function HandEyeTab() {
         </div>
         <FrameStrip frames={frames} selected={selected}
           onSelect={(id) => { setSelected(id); setViewMode('frame'); }}
-          coverage={Math.min(100, datasetFiles.length * 3)}/>
+          coverage={coverage.percent}/>
         <div className="vp-body" style={{ gridTemplateColumns: '1fr 0.7fr', gap: 1, background: 'var(--view-border)' }}>
           <div className="vp-cell">
             <span className="vp-label">scene · world = tracker-base</span>
@@ -529,7 +586,11 @@ export function HandEyeTab() {
           <div className="vp-cell" style={{ background: 'var(--view-bg)', overflow:'hidden' }}>
             <span className="vp-label">cam image{selectedPath ? ` · ${basename(selectedPath)}` : ''}</span>
             {viewMode === 'live' && liveDevice ? (
-              <LivePreview device={liveDevice}/>
+              autoCapture
+                ? <LiveDetectedFrame device={liveDevice} board={board}
+                    showCorners={showBoard} showOrigin={true}
+                    onMeta={onAutoMeta}/>
+                : <LivePreview device={liveDevice}/>
             ) : selectedPath ? (
               <DetectedFrame path={selectedPath} board={board}
                 showCorners={showBoard} showOrigin={true} overlay="none"/>
