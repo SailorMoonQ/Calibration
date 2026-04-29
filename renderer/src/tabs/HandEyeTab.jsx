@@ -14,6 +14,7 @@ import {
 } from '../components/panels.jsx';
 import { makeT, applyT, composeT } from '../lib/math3d.js';
 import { genFrames, gridCells } from '../lib/mock.js';
+import { DEFAULT_BOARD } from '../lib/board.js';
 import { api, pickFolder, pickSaveFile, pickOpenFile, openPath, posesWsUrl } from '../api/client.js';
 
 const basename = (p) => (p || '').split('/').pop();
@@ -33,7 +34,7 @@ export function HandEyeTab() {
   const TrackerGlyph = isHMD ? HMD3D : Controller3D;
   const trackerColor = isHMD ? '#6fbcff' : '#b78cff';
 
-  const [board, setBoard] = useState({ type: 'charuco', cols: 9, rows: 6, sq: 0.025, marker: 0.018 });
+  const [board, setBoard] = useState(DEFAULT_BOARD);
   const [method, setMethod] = useState('park');
   const [showTraj, setShowTraj] = useState(true);
   const [showBoard, setShowBoard] = useState(true);
