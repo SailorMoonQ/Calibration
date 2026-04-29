@@ -1,20 +1,18 @@
 import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { Section, Seg, Chk, Field, Matrix, KV } from '../components/primitives.jsx';
-import { CameraView, ChessboardOverlay } from '../components/viewport.jsx';
 import { DetectedFrame } from '../components/DetectedFrame.jsx';
 import { LivePreview } from '../components/LivePreview.jsx';
 import { LiveDetectedFrame } from '../components/LiveDetectedFrame.jsx';
 import { Ros2TopicPicker } from '../components/Ros2TopicPicker.jsx';
 import { useCameraSource, CameraSourcePanel } from '../components/CameraSource.jsx';
 import {
-  Scene3D, Frustum3D, HMD3D, Controller3D, Traj3D, Chessboard3D, RigidLink3D,
+  Scene3D, Frustum3D, HMD3D, Controller3D, Chessboard3D, RigidLink3D,
 } from '../components/scene3d.jsx';
 import {
   FrameStrip, ErrorPanel, TargetPanel,
   CaptureControls, SolverButton, SolverPanel,
 } from '../components/panels.jsx';
 import { makeT, applyT, composeT } from '../lib/math3d.js';
-import { genFrames } from '../lib/mock.js';
 import { DEFAULT_BOARD } from '../lib/board.js';
 import { computeCoverage, cellIndexFor } from '../lib/coverage.js';
 import { api, pickFolder, pickSaveFile, pickOpenFile, openPath, posesWsUrl } from '../api/client.js';
@@ -38,7 +36,6 @@ export function HandEyeTab() {
 
   const [board, setBoard] = useState(DEFAULT_BOARD);
   const [method, setMethod] = useState('park');
-  const [showTraj, setShowTraj] = useState(true);
   const [showBoard, setShowBoard] = useState(true);
 
   const [trackerSource, setTrackerSource] = useState('file');
@@ -61,6 +58,7 @@ export function HandEyeTab() {
   const [connected, setConnected] = useState(false);
   const [poseHz, setPoseHz] = useState(0);
   const [poseStaleMs, setPoseStaleMs] = useState(null);
+  const [livePoseT, setLivePoseT] = useState(null);  // 4x4 reflected for the 3D scene
   const wsRef = useRef(null);
   const latestPoseRef = useRef(null);  // {ts, T, device}
   const poseTickWindowRef = useRef([]); // last ~1s of wall_ts for fps calc
@@ -91,6 +89,7 @@ export function HandEyeTab() {
         latestPoseRef.current = null;
         setPoseStaleMs(null);
         setPoseHz(0);
+        setLivePoseT(null);
       };
       ws.onerror = () => setStatus('tracker ws error');
       ws.onmessage = (ev) => {
@@ -118,17 +117,24 @@ export function HandEyeTab() {
     latestPoseRef.current = null;
     setPoseStaleMs(null);
     setPoseHz(0);
+    setLivePoseT(null);
   }, []);
 
-  // Refresh staleness/fps readout twice a second from the ref-held buffer.
+  // Refresh staleness/fps readout twice a second from the ref-held buffer,
+  // and reflect the latest pose into React state at 10 Hz so the 3D scene
+  // animates smoothly without re-rendering on every WS tick.
   useEffect(() => {
     if (!connected) return;
-    const id = setInterval(() => {
+    const slow = setInterval(() => {
       const lp = latestPoseRef.current;
       if (lp) setPoseStaleMs(Math.max(0, Math.round((Date.now() / 1000 - lp.ts) * 1000)));
       setPoseHz(poseTickWindowRef.current.length);
     }, 500);
-    return () => clearInterval(id);
+    const fast = setInterval(() => {
+      const lp = latestPoseRef.current;
+      setLivePoseT(lp ? lp.T : null);
+    }, 100);
+    return () => { clearInterval(slow); clearInterval(fast); };
   }, [connected]);
 
   // Always disconnect on unmount.
@@ -152,16 +158,6 @@ export function HandEyeTab() {
   const autoSnapInFlightRef = useRef(false);
   useEffect(() => { snappedCellsRef.current = new Set(); }, [datasetPath]);
 
-  const mockFrames = useMemo(() => genFrames(30, 0.38), []);
-  const mockPoses = useMemo(() => Array.from({ length: 56 }, (_, i) => {
-    const t = i / 56;
-    const r = 0.15;
-    const x = Math.sin(t * Math.PI * 2) * r;
-    const y = 0.05 + Math.sin(t * Math.PI * 4) * 0.04;
-    const z = Math.cos(t * Math.PI * 2) * r * 0.6 + 0.05;
-    return makeT(0.3 * Math.sin(t*6), -Math.PI/2 + t*0.8, 0.25 * Math.cos(t*5), x, y, z);
-  }), []);
-
   const errByPath = useMemo(() => {
     if (!result?.ok) return null;
     const m = new Map();
@@ -169,14 +165,9 @@ export function HandEyeTab() {
     return m;
   }, [result]);
 
-  const realFrames = useMemo(() => {
-    if (!datasetFiles.length) return null;
-    return datasetFiles.map((p, i) => ({
-      id: i + 1, err: errByPath?.get(basename(p)) ?? 0, tx: 0, ty: 0, rot: 0,
-    }));
-  }, [datasetFiles, errByPath]);
-
-  const frames = realFrames ?? mockFrames;
+  const frames = useMemo(() => datasetFiles.map((p, i) => ({
+    id: i + 1, err: errByPath?.get(basename(p)) ?? 0, tx: 0, ty: 0, rot: 0,
+  })), [datasetFiles, errByPath]);
   const [selected, setSelected] = useState(1);
 
   const cam = useCameraSource({
@@ -368,9 +359,9 @@ export function HandEyeTab() {
   };
 
   const Tmat = result?.T ?? [
-    [1, 0, 0, 0.024],
-    [0, 1, 0, -0.012],
-    [0, 0, 1, 0.041],
+    [1, 0, 0, 0],
+    [0, 1, 0, 0],
+    [0, 0, 1, 0],
     [0, 0, 0, 1],
   ];
   const tVec = [Tmat[0][3], Tmat[1][3], Tmat[2][3]];
@@ -387,12 +378,10 @@ export function HandEyeTab() {
     return [r(Math.atan2(R[2][1], R[2][2])), r(Math.atan2(-R[2][0], sy)), r(Math.atan2(R[1][0], R[0][0]))];
   })();
 
-  const histData = useMemo(() => result?.per_frame_err?.length ? result.per_frame_err
-    : Array.from({ length: 22 }, (_, i) => 0.5 + Math.sin(i) * 0.3 + 0.3),
-  [result]);
+  const histData = useMemo(() => result?.per_frame_err ?? [], [result]);
 
-  const rotRms = result?.ok ? result.rms : 0.382;
-  const transRms = result?.ok ? result.final_cost : 1.42;
+  const rotRms = result?.ok ? result.rms : 0;
+  const transRms = result?.ok ? result.final_cost : 0;
   const vpW = 900, vpH = 620;
 
   // Coverage. Two sources, in order of preference:
@@ -547,7 +536,6 @@ export function HandEyeTab() {
           <Seg value={viewMode} onChange={setViewMode} options={[
             {value:'live',label:'live'},{value:'frame',label:'frame'},{value:'scene',label:'3D scene'}
           ]}/>
-          <Chk checked={showTraj} onChange={setShowTraj}>{trackerLabel} traj</Chk>
           <Chk checked={showBoard} onChange={setShowBoard}>board</Chk>
           <div className="spacer"/>
           <div className="read">
@@ -564,20 +552,20 @@ export function HandEyeTab() {
             <span className="vp-label">scene · world = tracker-base</span>
             <Scene3D w={vpW*0.6} h={vpH}>
               {(cam) => {
-                const selT = mockPoses[selected % mockPoses.length];
+                const Tboard = makeT(-Math.PI/2, 0, 0, 0, 0, -0.15);
                 const T_tracker_cam = makeT(
                   rpyDeg[0] * Math.PI / 180, rpyDeg[1] * Math.PI / 180, rpyDeg[2] * Math.PI / 180,
                   tVec[0], tVec[1], tVec[2],
                 );
-                const Tcam = composeT(selT, T_tracker_cam);
-                const Tboard = makeT(-Math.PI/2, 0, 0, 0, 0, -0.15);
+                const Tcam = livePoseT ? composeT(livePoseT, T_tracker_cam) : null;
                 return (
                   <g>
                     {showBoard && <Chessboard3D T={Tboard} cam={cam} cols={board.cols} rows={board.rows} sq={board.sq}/>}
-                    {showTraj && <Traj3D points={mockPoses.map(T => applyT(T,[0,0,0]))} cam={cam} color={trackerColor} dotEvery={6}/>}
-                    <TrackerGlyph T={selT} cam={cam}/>
-                    <Frustum3D T={Tcam} cam={cam} fov={0.7} aspect={1.6} label="cam"/>
-                    <RigidLink3D a={applyT(selT,[0,0,0])} b={applyT(Tcam,[0,0,0])} cam={cam} color="#e3bd56"/>
+                    {livePoseT && <TrackerGlyph T={livePoseT} cam={cam}/>}
+                    {Tcam && <Frustum3D T={Tcam} cam={cam} fov={0.7} aspect={1.6} label="cam"/>}
+                    {livePoseT && Tcam && (
+                      <RigidLink3D a={applyT(livePoseT,[0,0,0])} b={applyT(Tcam,[0,0,0])} cam={cam} color="#e3bd56"/>
+                    )}
                   </g>
                 );
               }}
@@ -595,10 +583,10 @@ export function HandEyeTab() {
               <DetectedFrame path={selectedPath} board={board}
                 showCorners={showBoard} showOrigin={true} overlay="none"/>
             ) : (
-              <CameraView w={vpW*0.4} h={vpH*0.9} seed={selected+2}>
-                {showBoard && <ChessboardOverlay cx={vpW*0.2} cy={vpH*0.45} cols={board.cols} rows={board.rows}
-                  tile={20} rotation={-0.1} skew={0.15} tilt={0.3} showOrigin={true}/>}
-              </CameraView>
+              <div className="mono" style={{
+                display:'flex', alignItems:'center', justifyContent:'center',
+                width:'100%', height:'100%', color:'var(--text-4)',
+              }}>no frame · pick a camera or load a dataset</div>
             )}
           </div>
         </div>
