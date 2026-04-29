@@ -548,6 +548,89 @@ async def recording_save(body: dict) -> dict:
     return {"ok": True, "path": path, "n": len(samples)}
 
 
+@router.post("/handeye/append_pose")
+async def handeye_append_pose(body: dict) -> dict:
+    """Append one paired (image, pose) entry to poses.json next to the
+    images. On first call (poses.meta.json absent) writes the meta sidecar
+    too. Uses tmp+rename for atomicity so an interrupted call leaves the
+    previous file intact."""
+    poses_path = body.get("poses_path")
+    basename = body.get("basename")
+    T = body.get("T")
+    ts = body.get("ts")
+    meta = body.get("meta") or {}
+    if not poses_path or not basename or T is None:
+        raise HTTPException(status_code=400, detail="need poses_path + basename + T")
+    # Validate T shape: 4x4 nested lists of numbers.
+    try:
+        arr = np.array(T, dtype=np.float64)
+    except Exception:
+        raise HTTPException(status_code=400, detail="T must be a numeric 4x4 array")
+    if arr.shape != (4, 4):
+        raise HTTPException(status_code=400, detail=f"T must be 4x4, got {arr.shape}")
+
+    out_dir = os.path.dirname(poses_path) or "."
+    os.makedirs(out_dir, exist_ok=True)
+
+    if os.path.exists(poses_path):
+        try:
+            with open(poses_path, "r") as f:
+                poses_doc = json.load(f)
+            if not isinstance(poses_doc, dict):
+                raise ValueError("poses.json root must be a dict")
+        except (OSError, ValueError, json.JSONDecodeError) as e:
+            raise HTTPException(status_code=500, detail=f"read failed: {e}")
+    else:
+        poses_doc = {}
+
+    entry: dict = {"T": [list(map(float, row)) for row in arr.tolist()]}
+    if ts is not None:
+        try:
+            entry["ts"] = float(ts)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="ts must be numeric")
+    poses_doc[basename] = entry
+
+    tmp = poses_path + ".tmp"
+    try:
+        with open(tmp, "w") as f:
+            json.dump(poses_doc, f)
+        os.replace(tmp, poses_path)
+    except OSError as e:
+        try: os.remove(tmp)
+        except OSError: pass
+        raise HTTPException(status_code=500, detail=f"poses.json write failed: {e}")
+
+    # poses.meta.json — first-write captures source/device/kind, n updated each call.
+    meta_path = os.path.join(out_dir, "poses.meta.json")
+    if os.path.exists(meta_path):
+        try:
+            with open(meta_path, "r") as f:
+                meta_doc = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            meta_doc = {}
+    else:
+        meta_doc = {
+            "tracker_source": meta.get("tracker_source"),
+            "device": meta.get("device"),
+            "kind": meta.get("kind"),
+            "started_at": time.time(),
+        }
+    meta_doc["n"] = len(poses_doc)
+
+    meta_tmp = meta_path + ".tmp"
+    try:
+        with open(meta_tmp, "w") as f:
+            json.dump(meta_doc, f)
+        os.replace(meta_tmp, meta_path)
+    except OSError as e:
+        try: os.remove(meta_tmp)
+        except OSError: pass
+        raise HTTPException(status_code=500, detail=f"poses.meta.json write failed: {e}")
+
+    return {"ok": True, "n": len(poses_doc), "poses_path": poses_path, "meta_path": meta_path}
+
+
 @router.post("/recording/import_mcap")
 async def recording_import_mcap(body: dict) -> dict:
     """Read an MCAP file and extract foxglove.PoseInFrame messages on the given topic.
