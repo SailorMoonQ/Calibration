@@ -429,23 +429,6 @@ export function HandEyeTab() {
         </div>
         <div className="rail-scroll">
           <CameraSourcePanel source={cam} onLivePreview={() => setViewMode('live')}/>
-          <Section title="Dataset" hint={datasetFiles.length ? `${datasetFiles.length} images` : 'not loaded'}>
-            <Field label="folder">
-              <input className="input" value={datasetPath} placeholder="/path/to/frames/"
-                onChange={e => setDatasetPath(e.target.value)}/>
-            </Field>
-            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:6 }}>
-              <button className="btn" onClick={onPickDataset}>📁 pick</button>
-              <button className="btn" disabled={!datasetPath}
-                onClick={() => datasetPath && openPath(datasetPath)}>↗ open</button>
-              <button className="btn ghost" onClick={() => { setDatasetPath(''); setDatasetFiles([]); }}>clear</button>
-            </div>
-            {recordedCount > 0 && (
-              <div className="mono" style={{ fontSize: 10.5, color:'var(--text-3)' }}>
-                poses.json · {recordedCount} entries
-              </div>
-            )}
-          </Section>
           <Section
             title="Tracker source"
             hint={
@@ -520,6 +503,23 @@ export function HandEyeTab() {
                   </div>
                 )}
               </>
+            )}
+          </Section>
+          <Section title="Dataset" hint={datasetFiles.length ? `${datasetFiles.length} images` : 'not loaded'}>
+            <Field label="folder">
+              <input className="input" value={datasetPath} placeholder="/path/to/frames/"
+                onChange={e => setDatasetPath(e.target.value)}/>
+            </Field>
+            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:6 }}>
+              <button className="btn" onClick={onPickDataset}>📁 pick</button>
+              <button className="btn" disabled={!datasetPath}
+                onClick={() => datasetPath && openPath(datasetPath)}>↗ open</button>
+              <button className="btn ghost" onClick={() => { setDatasetPath(''); setDatasetFiles([]); }}>clear</button>
+            </div>
+            {recordedCount > 0 && (
+              <div className="mono" style={{ fontSize: 10.5, color:'var(--text-3)' }}>
+                poses.json · {recordedCount} entries
+              </div>
             )}
           </Section>
           <Section title="Camera intrinsics" hint={camInt ? basename(camInt.path) : 'required'}>
