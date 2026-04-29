@@ -5,20 +5,19 @@ import { RectifiedFrame } from '../components/RectifiedFrame.jsx';
 import { RectifiedLivePreview } from '../components/RectifiedLivePreview.jsx';
 import { LivePreview } from '../components/LivePreview.jsx';
 import { LiveDetectedFrame } from '../components/LiveDetectedFrame.jsx';
-import { Ros2TopicPicker } from '../components/Ros2TopicPicker.jsx';
+import { useCameraSource, CameraSourcePanel } from '../components/CameraSource.jsx';
 import {
   FrameStrip, ErrorPanel, TargetPanel,
   CaptureControls, SolverButton, SolverPanel,
 } from '../components/panels.jsx';
 import { computeCoverage, cellIndexFor } from '../lib/coverage.js';
+import { DEFAULT_CHESS_BOARD } from '../lib/board.js';
 import { api, pickFolder, pickSaveFile, pickOpenFile } from '../api/client.js';
 
 const ZERO_K = [[0,0,0,0],[0,0,0,0],[0,0,0,0],[0,0,0,1]];
 
 export function FisheyeTab() {
-  const [board, setBoard] = useState({ type: 'chess', cols: 11, rows: 8, sq: 0.045 });
-  const [sourceMode, setSourceMode] = useState('live');  // 'live' | 'ros2'
-  const [ros2Topic, setRos2Topic] = useState('');
+  const [board, setBoard] = useState(DEFAULT_CHESS_BOARD);
   const [model, setModel] = useState('equidistant');
   const [view, setView] = useState('split');
   const [showBoard, setShowBoard] = useState(true);
@@ -29,7 +28,6 @@ export function FisheyeTab() {
   const [liveDetect, setLiveDetect] = useState(false);
   const [autoCapture, setAutoCapture] = useState(false);
   const [autoRate, setAutoRate] = useState(0.5);  // seconds between auto-snaps
-  const [streamInfo, setStreamInfo] = useState(null);
 
   // When onLoad sets datasetPath from a loaded calibration, the dataset-listing effect
   // would normally clear the just-loaded result. This ref tells the effect "skip the
@@ -42,9 +40,12 @@ export function FisheyeTab() {
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState('');
 
-  const [devices, setDevices] = useState([]);
-  const [liveDevice, setLiveDevice] = useState('');
   const [viewMode, setViewMode] = useState('live'); // 'live' | 'frame'
+
+  const cam = useCameraSource({
+    pollEnabled: viewMode === 'live' || datasetFiles.length === 0,
+  });
+  const { liveDevice, streamInfo } = cam;
 
   const errByPath = useMemo(() => {
     if (!result?.ok) return null;
@@ -72,39 +73,6 @@ export function FisheyeTab() {
   })), [datasetFiles, errByPath]);
 
   const [selected, setSelected] = useState(1);
-
-  useEffect(() => {
-    let cancelled = false;
-    api.listStreamDevices().then(r => {
-      if (cancelled) return;
-      const list = r.cameras || [];
-      setDevices(list);
-      if (list.length && !liveDevice) setLiveDevice(list[0].device);
-    }).catch(() => {});
-    return () => { cancelled = true; };
-  }, []);
-
-  // Poll /stream/info while a live cell is mounted so the resolution/fps readout
-  // stays current. The moment the user switches to inspecting a saved frame, the
-  // poll stops — otherwise the source-manager would acquire and release the camera
-  // every second (nothing else holding a ref) and we'd never let the camera rest.
-  // The last fetched info stays on the panel so the resolution display doesn't
-  // flicker to "no device" mid-session.
-  useEffect(() => {
-    const wantPoll = !!(liveDevice && (viewMode === 'live' || datasetFiles.length === 0));
-    if (!liveDevice) setStreamInfo(null);
-    if (!wantPoll) return;
-    let cancelled = false;
-    let timer = null;
-    const tick = () => {
-      api.streamInfo(liveDevice)
-        .then(r => { if (!cancelled) setStreamInfo(r); })
-        .catch(() => { if (!cancelled) setStreamInfo(null); })
-        .finally(() => { if (!cancelled) timer = setTimeout(tick, 1000); });
-    };
-    tick();
-    return () => { cancelled = true; if (timer) clearTimeout(timer); };
-  }, [liveDevice, viewMode, datasetFiles.length]);
 
   useEffect(() => {
     if (!datasetPath) return;
@@ -465,73 +433,7 @@ export function FisheyeTab() {
           </span>
         </div>
         <div className="rail-scroll">
-          <Section
-            title="Source"
-            hint={sourceMode === 'live'
-              ? (streamInfo?.open
-                  ? `${streamInfo.width}×${streamInfo.height} · ${streamInfo.capture_fps?.toFixed(1) ?? '—'} fps`
-                  : (liveDevice || 'no device'))
-              : (ros2Topic || 'no topic')
-            }
-            right={<Seg
-              value={sourceMode}
-              onChange={(v) => {
-                setSourceMode(v);
-                setLiveDevice('');
-                setRos2Topic('');
-              }}
-              options={[
-                { value: 'live', label: 'live' },
-                { value: 'ros2', label: 'ros2' },
-              ]}/>}
-          >
-            {sourceMode === 'live' ? (
-              <>
-                <Field label="device">
-                  <select className="select" value={liveDevice} onChange={e => setLiveDevice(e.target.value)}>
-                    <option value="">— none —</option>
-                    {devices.map(d => <option key={d.device} value={d.device}>{d.label}</option>)}
-                  </select>
-                </Field>
-                {streamInfo?.open && (
-                  <div className="mono" style={{ fontSize: 11, color:'var(--text-3)', display:'grid', gridTemplateColumns:'auto 1fr', columnGap: 8, rowGap: 2 }}>
-                    <span>resolution</span><span style={{ color:'var(--text-1)' }}>{streamInfo.width} × {streamInfo.height}</span>
-                    {streamInfo.clipped && (
-                      <>
-                        <span>raw</span>
-                        <span style={{ color:'var(--text-3)' }}>
-                          {streamInfo.raw_width} × {streamInfo.raw_height}
-                          <span style={{ color:'var(--warn)', marginLeft: 6 }}>· clipped</span>
-                        </span>
-                      </>
-                    )}
-                    <span>fps (measured)</span><span style={{ color:'var(--text-1)' }}>{streamInfo.capture_fps?.toFixed(2) ?? '—'}</span>
-                    <span>fps (advertised)</span><span style={{ color:'var(--text-1)' }}>{streamInfo.fps_advertised?.toFixed(0) ?? '—'}</span>
-                  </div>
-                )}
-                <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:6 }}>
-                  <button className="btn" onClick={() => setViewMode('live')}>👁 live preview</button>
-                  <button className="btn ghost" onClick={() => api.listStreamDevices().then(r => setDevices(r.cameras || []))}>↻ rescan</button>
-                </div>
-              </>
-            ) : (
-              <>
-                <Ros2TopicPicker
-                  topic={ros2Topic}
-                  onTopic={(t) => { setRos2Topic(t); setLiveDevice(t ? 'ros2:' + t : ''); }}/>
-                {streamInfo?.open && (
-                  <div className="mono" style={{ fontSize: 11, color:'var(--text-3)', display:'grid', gridTemplateColumns:'auto 1fr', columnGap: 8, rowGap: 2 }}>
-                    <span>resolution</span><span style={{ color:'var(--text-1)' }}>{streamInfo.width} × {streamInfo.height}</span>
-                    <span>fps (measured)</span><span style={{ color:'var(--text-1)' }}>{streamInfo.capture_fps?.toFixed(2) ?? '—'}</span>
-                  </div>
-                )}
-                <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:6 }}>
-                  <button className="btn" onClick={() => setViewMode('live')}>👁 live preview</button>
-                  <div/>
-                </div>
-              </>
-            )}
-          </Section>
+          <CameraSourcePanel source={cam} onLivePreview={() => setViewMode('live')}/>
           <Section title="Dataset" hint={datasetFiles.length ? `${datasetFiles.length} images` : 'not loaded'}>
             <Field label="folder">
               <input className="input" value={datasetPath} placeholder="/path/to/frames/"

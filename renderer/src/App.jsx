@@ -6,20 +6,16 @@ import { TweaksPanel, TWEAKS_DEFAULTS } from './components/TweaksPanel.jsx';
 import { LogStrip } from './components/panels.jsx';
 import { IntrinsicsTab } from './tabs/IntrinsicsTab.jsx';
 import { FisheyeTab } from './tabs/FisheyeTab.jsx';
-import { ExtrinsicsTab } from './tabs/ExtrinsicsTab.jsx';
-import { HandEyeHMDTab } from './tabs/HandEyeHMDTab.jsx';
-import { HandEyeCtrlTab } from './tabs/HandEyeCtrlTab.jsx';
+import { HandEyeTab } from './tabs/HandEyeTab.jsx';
 import { ChainTab } from './tabs/ChainTab.jsx';
 import { LinkCalibTab } from './tabs/LinkCalibTab.jsx';
 
 const TAB_DEFS = [
   { id: 'intrinsics', num: '01', label: 'Pinhole',    sub: 'intrinsics',         badge: 'ok',   Comp: IntrinsicsTab },
   { id: 'fisheye',    num: '02', label: 'Fish-eye',   sub: 'intrinsics',         badge: 'warn', Comp: FisheyeTab },
-  { id: 'extrinsics', num: '03', label: 'Extrinsics', sub: 'cam ↔ cam',          badge: 'ok',   Comp: ExtrinsicsTab },
-  { id: 'he_hmd',     num: '04', label: 'Hand-Eye',   sub: 'cam ↔ HMD',          badge: 'ok',   Comp: HandEyeHMDTab },
-  { id: 'he_ctrl',    num: '05', label: 'Hand-Eye',   sub: 'cam ↔ ctrl',         badge: 'ok',   Comp: HandEyeCtrlTab },
-  { id: 'link',       num: '06', label: 'Link',       sub: 'tracker ↔ ctrl',     badge: 'ok',   Comp: LinkCalibTab },
-  { id: 'chain',      num: '07', label: 'Chain',      sub: 'ctrl → gripper',     badge: 'ok',   Comp: ChainTab },
+  { id: 'handeye',    num: '03', label: 'Hand-Eye',   sub: 'cam ↔ tracker',      badge: 'ok',   Comp: HandEyeTab },
+  { id: 'link',       num: '04', label: 'Link',       sub: 'tracker ↔ ctrl',     badge: 'ok',   Comp: LinkCalibTab },
+  { id: 'chain',      num: '05', label: 'Chain',      sub: 'ctrl → gripper',     badge: 'ok',   Comp: ChainTab },
 ];
 
 export function App() {
