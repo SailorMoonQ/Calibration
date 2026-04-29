@@ -583,7 +583,10 @@ async def handeye_append_pose(body: dict) -> dict:
     else:
         poses_doc = {}
 
-    entry: dict = {"T": [list(map(float, row)) for row in arr.tolist()]}
+    entry: dict = {
+        "image_name": basename,
+        "T": [list(map(float, row)) for row in arr.tolist()],
+    }
     if ts is not None:
         try:
             entry["ts"] = float(ts)
@@ -594,7 +597,7 @@ async def handeye_append_pose(body: dict) -> dict:
     tmp = poses_path + ".tmp"
     try:
         with open(tmp, "w") as f:
-            json.dump(poses_doc, f)
+            json.dump(poses_doc, f, indent=2)
         os.replace(tmp, poses_path)
     except OSError as e:
         try: os.remove(tmp)
@@ -621,7 +624,7 @@ async def handeye_append_pose(body: dict) -> dict:
     meta_tmp = meta_path + ".tmp"
     try:
         with open(meta_tmp, "w") as f:
-            json.dump(meta_doc, f)
+            json.dump(meta_doc, f, indent=2)
         os.replace(meta_tmp, meta_path)
     except OSError as e:
         try: os.remove(meta_tmp)
