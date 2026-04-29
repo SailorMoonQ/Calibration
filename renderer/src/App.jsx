@@ -20,7 +20,6 @@ const TAB_DEFS = [
 
 export function App() {
   const [active, setActive] = useState(() => localStorage.getItem('calib_tab') || 'intrinsics');
-  const [mode, setMode] = useState('live');
   const [tweaks, setTweaks] = useState({ ...TWEAKS_DEFAULTS });
   const [tweaksVisible, setTweaksVisible] = useState(false);
 
@@ -53,7 +52,7 @@ export function App() {
   return (
     <TelemetryProvider>
       <div className="app">
-        <Topbar mode={mode} onMode={setMode}/>
+        <Topbar/>
         <Tabs tabs={TAB_DEFS} value={active} onChange={setActive}/>
         <ActiveComp/>
         <LogStrip lines={[
