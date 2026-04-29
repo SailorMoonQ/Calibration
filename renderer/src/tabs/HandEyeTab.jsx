@@ -131,6 +131,14 @@ export function HandEyeTab() {
   // Always disconnect on unmount.
   useEffect(() => () => onDisconnectTracker(), [onDisconnectTracker]);
 
+  const [autoCapture, setAutoCapture] = useState(false);
+  const [autoCaptureRate, setAutoCaptureRate] = useState(0.5);  // seconds between snaps
+  const [recordedCount, setRecordedCount] = useState(0);
+
+  // Hold the latest onSnap in a ref so the auto-capture timer always calls
+  // through to the up-to-date closure without resubscribing on every state tick.
+  const onSnapRef = useRef(null);
+
   const mockFrames = useMemo(() => genFrames(30, 0.38), []);
   const mockPoses = useMemo(() => Array.from({ length: 56 }, (_, i) => {
     const t = i / 56;
@@ -210,17 +218,63 @@ export function HandEyeTab() {
       setDatasetPath(picked); dir = picked;
     }
     if (!liveDevice) { setStatus('pick a camera first'); return; }
+
+    // Read pose snapshot BEFORE the snap so time skew is bounded by image-write
+    // latency, not the snap RPC round trip. lp may be null (image-only snap).
+    const lp = connected ? latestPoseRef.current : null;
+    if (connected) {
+      if (!lp) { setStatus('no pose yet — wait for tracker stream'); return; }
+      const ageMs = Math.round((Date.now() / 1000 - lp.ts) * 1000);
+      if (ageMs > 200) { setStatus(`pose stale (Δt = ${ageMs} ms) — check tracker`); return; }
+    }
+
+    let imagePath;
     try {
       const r = await api.snap(liveDevice, dir);
-      setStatus(`snapped → ${basename(r.path)}`);
-      if (dir === datasetPath) {
-        const ls = await api.listDataset(datasetPath);
-        setDatasetFiles(ls.files);
-        setSelected(ls.files.length);
-        setViewMode('frame');
+      imagePath = r.path;
+    } catch (e) { setStatus(`snap failed: ${e.message}`); return; }
+
+    const fname = basename(imagePath);
+
+    if (lp) {
+      const posesPathLocal = `${dir}/poses.json`;
+      const meta = { tracker_source: trackerSource, device: lp.device, kind };
+      let appended = false;
+      for (let attempt = 0; attempt < 2 && !appended; attempt++) {
+        try {
+          const r = await api.appendHandeyePose({
+            poses_path: posesPathLocal, basename: fname, T: lp.T, ts: lp.ts, meta,
+          });
+          appended = true;
+          setRecordedCount(r.n);
+          if (posesPath !== posesPathLocal) setPosesPath(posesPathLocal);
+        } catch (e) {
+          if (attempt === 1) {
+            setStatus(`image saved, pose append failed: ${e.message}`);
+          }
+        }
       }
-    } catch (e) { setStatus(`snap failed: ${e.message}`); }
+      if (appended) setStatus(`snapped+pose → ${fname}`);
+    } else {
+      setStatus(`snap (image only — connect tracker for pose) → ${fname}`);
+    }
+
+    if (dir === datasetPath) {
+      const ls = await api.listDataset(datasetPath);
+      setDatasetFiles(ls.files);
+      setSelected(ls.files.length);
+      setViewMode('frame');
+    }
   };
+  onSnapRef.current = onSnap;
+
+  // Auto-capture: drive paired (image, pose) snaps on a timer.
+  useEffect(() => {
+    if (!autoCapture) return;
+    const period = Math.max(50, Math.round(autoCaptureRate * 1000));
+    const id = setInterval(() => { onSnapRef.current?.(); }, period);
+    return () => clearInterval(id);
+  }, [autoCapture, autoCaptureRate]);
 
   const onRun = async () => {
     if (!datasetPath) { setStatus('pick a dataset folder'); return; }
@@ -324,6 +378,11 @@ export function HandEyeTab() {
               <button className="btn" onClick={onPickDataset}>📁 pick</button>
               <button className="btn ghost" onClick={() => { setDatasetPath(''); setDatasetFiles([]); }}>clear</button>
             </div>
+            {recordedCount > 0 && (
+              <div className="mono" style={{ fontSize: 10.5, color:'var(--text-3)' }}>
+                poses.json · {recordedCount} entries
+              </div>
+            )}
           </Section>
           <Section
             title="Tracker source"
@@ -411,7 +470,9 @@ export function HandEyeTab() {
               {value:'horaud',label:'Horaud'},{value:'daniilidis',label:'Dan.'},{value:'andreff',label:'Andreff'}
             ]}/>
           </Section>
-          <CaptureControls autoCapture={true} onAuto={()=>{}}
+          <CaptureControls
+            autoCapture={autoCapture} onAuto={setAutoCapture}
+            autoRate={autoCaptureRate} onAutoRate={setAutoCaptureRate}
             onSnap={onSnap}
             coverage={Math.min(100, datasetFiles.length * 3)}
             coverageCells={gridCells(40, [0,1,3,4,6,7,9,10,12,14,16,17,20,22,23,26,27,30,32,34,35,38,39])}/>
