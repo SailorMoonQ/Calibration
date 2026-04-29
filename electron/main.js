@@ -1,4 +1,4 @@
-const { app, BrowserWindow, dialog, ipcMain, shell } = require('electron');
+const { app, BrowserWindow, Menu, dialog, ipcMain, shell } = require('electron');
 const path = require('path');
 const { startSidecar, stopSidecar } = require('./sidecar');
 
@@ -9,6 +9,12 @@ let backend = null;
 async function createWindow() {
   backend = await startSidecar({ isDev });
 
+  // Drop the default File / Edit / View / Window / Help bar — the workbench
+  // has its own tabs and the boilerplate menu just adds vertical clutter.
+  // On Linux / Windows this removes the bar entirely; macOS keeps the OS
+  // top menu (unavoidable) but the in-window strip disappears.
+  Menu.setApplicationMenu(null);
+
   mainWindow = new BrowserWindow({
     width: 1600,
     height: 1000,
@@ -16,6 +22,7 @@ async function createWindow() {
     minHeight: 760,
     backgroundColor: '#f4f5f7',
     title: 'Calibration Workbench',
+    autoHideMenuBar: true,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
