@@ -8,6 +8,7 @@ import {
   CaptureControls, SolverButton, SolverPanel,
 } from '../components/panels.jsx';
 import { genFrames, genResiduals, gridCells } from '../lib/mock.js';
+import { DEFAULT_CHESS_BOARD } from '../lib/board.js';
 import { api, pickFolder, pickSaveFile, pickOpenFile } from '../api/client.js';
 
 const basename = (p) => (p || '').split('/').pop();
@@ -27,7 +28,7 @@ function rpyDeg(R) {
 }
 
 export function ExtrinsicsTab() {
-  const [board, setBoard] = useState({ type: 'chess', cols: 9, rows: 6, sq: 0.025 });
+  const [board, setBoard] = useState(DEFAULT_CHESS_BOARD);
   const [live, setLive] = useState(true);
   const [showResid, setShowResid] = useState(true);
   const [showBoard, setShowBoard] = useState(true);
