@@ -26,6 +26,11 @@ export const api = {
   listRos2Topics: () => request('/stream/ros2_topics'),
   streamInfo: (device) => request(`/stream/info?device=${encodeURIComponent(device)}`),
   snap: (device, dir) => request('/stream/snap', { method: 'POST', body: JSON.stringify({ device, dir }) }),
+  appendHandeyePose: ({ poses_path, basename, T, ts, meta }) =>
+    request('/handeye/append_pose', {
+      method: 'POST',
+      body: JSON.stringify({ poses_path, basename, T, ts, meta }),
+    }),
   snapPair: (device0, device1, dir0, dir1) => request('/stream/snap_pair', {
     method: 'POST',
     body: JSON.stringify({ device0, device1, dir0, dir1 }),
