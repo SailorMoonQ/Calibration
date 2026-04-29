@@ -19,12 +19,73 @@ async function request(path, opts = {}) {
   return res.json();
 }
 
+// Per-device cache for /stream/info. The corner-readout in <LivePreview/> and
+// the side panel in IntrinsicsTab/FisheyeTab both poll this endpoint, and the
+// two pollers tend to align in phase since they spin up when the same tab
+// mounts — that landed two HTTP calls within milliseconds of each other every
+// 2 s, each going through source_manager.get/release with a wait_frame inside.
+// Cache hits within TTL just return the previous value; concurrent callers
+// share the in-flight promise. TTL is below the 2 s poll cadence so each
+// polling cycle still triggers exactly one fresh fetch — tabs that don't run
+// their own poll (Extrinsics, HandEye) keep working unchanged.
+const _streamInfoCache = new Map();
+const STREAM_INFO_TTL_MS = 1500;
+
+function streamInfoCached(device) {
+  const now = Date.now();
+  const entry = _streamInfoCache.get(device);
+  if (entry) {
+    if (entry.value && (now - entry.ts) < STREAM_INFO_TTL_MS) {
+      return Promise.resolve(entry.value);
+    }
+    if (entry.inflight) return entry.inflight;
+  }
+  const inflight = request(`/stream/info?device=${encodeURIComponent(device)}`)
+    .then(value => {
+      _streamInfoCache.set(device, { ts: Date.now(), value, inflight: null });
+      return value;
+    })
+    .catch(err => {
+      // Don't poison the cache with a stale failure — next caller retries.
+      _streamInfoCache.set(device, { ts: 0, value: null, inflight: null });
+      throw err;
+    });
+  _streamInfoCache.set(device, {
+    ts: entry?.ts ?? 0,
+    value: entry?.value ?? null,
+    inflight,
+  });
+  return inflight;
+}
+
+// State-changing endpoints invalidate the cache so the next /stream/info hits
+// the backend instead of returning the pre-change snapshot.
+function invalidateStreamInfo(device) {
+  _streamInfoCache.delete(device);
+}
+
 export const api = {
   health: () => request('/health'),
   listSources: () => request('/sources'),
   listStreamDevices: () => request('/stream/devices'),
   listRos2Topics: () => request('/stream/ros2_topics'),
-  streamInfo: (device) => request(`/stream/info?device=${encodeURIComponent(device)}`),
+  streamInfo: streamInfoCached,
+  setStreamResolution: (device, width, height) => {
+    invalidateStreamInfo(device);
+    return request('/stream/resolution', {
+      method: 'POST',
+      body: JSON.stringify({ device, width, height }),
+    });
+  },
+  listStreamResolutions: (device) =>
+    request(`/stream/resolutions?device=${encodeURIComponent(device)}`),
+  setStreamClip: (device, width, height) => {
+    invalidateStreamInfo(device);
+    return request('/stream/clip', {
+      method: 'POST',
+      body: JSON.stringify({ device, width, height }),
+    });
+  },
   snap: (device, dir) => request('/stream/snap', { method: 'POST', body: JSON.stringify({ device, dir }) }),
   appendHandeyePose: ({ poses_path, basename, T, ts, meta }) =>
     request('/handeye/append_pose', {

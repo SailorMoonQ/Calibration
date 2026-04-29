@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { rectifiedMjpegUrl } from '../api/client.js';
 
 // Live MJPEG stream undistorted on the backend. <img> handles the multipart frames;
@@ -13,6 +13,7 @@ export function RectifiedLivePreview({
 }) {
   const [url, setUrl] = useState(null);
   const [err, setErr] = useState(null);
+  const imgRef = useRef(null);
 
   // Stable deps — K/D arrays change identity each render even when values are the same.
   const kKey = K ? JSON.stringify(K) : '';
@@ -30,7 +31,14 @@ export function RectifiedLivePreview({
     })
       .then(u => { if (!cancelled) setUrl(u); })
       .catch(e => { if (!cancelled) setErr(e.message); });
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+      // See LivePreview.jsx for the rationale: multipart/x-mixed-replace
+      // connections leak past component unmount and exhaust the per-origin
+      // connection cap after a few tab switches, so we explicitly abort the
+      // in-flight fetch by clearing the img's src before the element detaches.
+      if (imgRef.current) imgRef.current.src = '';
+    };
   }, [device, kKey, dKey, model, balance, fovScale, alpha, method, fps, quality]);
 
   const placeholder = (text, color = 'var(--view-text-2)') => (
@@ -45,6 +53,6 @@ export function RectifiedLivePreview({
   if (!device) return placeholder('pick a camera to rectify');
   if (!K || !D || !D.length) return placeholder('run calibration to see the rectified view');
   if (!url) return placeholder('starting…');
-  return <img src={url} alt={`rectified ${device}`}
+  return <img ref={imgRef} src={url} alt={`rectified ${device}`}
               style={{ width:'100%', height:'100%', objectFit:'contain', display:'block' }}/>;
 }

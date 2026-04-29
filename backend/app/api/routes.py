@@ -13,6 +13,7 @@ from fastapi.responses import FileResponse, Response, StreamingResponse
 import numpy as np
 
 from app.sources import manager as source_manager
+from app.sources import opencv as opencv_source
 from app.sources import ros2_context
 
 from app import __version__
@@ -69,6 +70,72 @@ async def stream_info(device: str) -> dict:
     except RuntimeError as e:
         raise HTTPException(status_code=503, detail=str(e))
     try:
+        src.wait_frame(timeout=2.0)
+        return src.info()
+    finally:
+        source_manager.release(device)
+
+
+@router.get("/stream/resolutions")
+async def stream_resolutions(device: str) -> dict:
+    """Driver-advertised modes for a USB camera, surfaced as a list the renderer
+    can hand to a <datalist>. ros2 sources have no static mode list (the publisher
+    decides), so we return [] rather than 400 — keeps the call site uniform."""
+    if device.startswith(source_manager.ROS2_PREFIX):
+        return {"resolutions": []}
+    sizes = opencv_source.list_resolutions(device)
+    return {"resolutions": [list(wh) for wh in sizes]}
+
+
+@router.post("/stream/resolution")
+async def stream_set_resolution(body: dict) -> dict:
+    """Bounce a USB camera at a new width×height. ros2:<topic> sources have no
+    knob — the publisher dictates the size — so we 400 those rather than silently
+    no-op. Bumping refs around the call keeps the underlying source alive past the
+    restart so in-flight MJPEG consumers see the new frames flow back without
+    needing to reconnect."""
+    device = body.get("device")
+    width = body.get("width")
+    height = body.get("height")
+    if not device or not isinstance(width, int) or not isinstance(height, int):
+        raise HTTPException(status_code=400, detail="need device + integer width/height")
+    if device.startswith(source_manager.ROS2_PREFIX):
+        raise HTTPException(status_code=400, detail="ros2 sources cannot be resized client-side")
+    try:
+        src = source_manager.get(device)
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    try:
+        try:
+            src.set_resolution(width, height)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        src.wait_frame(timeout=2.0)
+        return src.info()
+    finally:
+        source_manager.release(device)
+
+
+@router.post("/stream/clip")
+async def stream_set_clip(body: dict) -> dict:
+    """Update the post-grab clip target for a USB source. width/height of 0 (or
+    omitted) disables clipping. ros2 sources don't run through the same clip path
+    so we 400 those — there's no useful action to take."""
+    device = body.get("device")
+    width = body.get("width") or 0
+    height = body.get("height") or 0
+    if not device:
+        raise HTTPException(status_code=400, detail="need device")
+    if not isinstance(width, int) or not isinstance(height, int):
+        raise HTTPException(status_code=400, detail="width/height must be integers")
+    if device.startswith(source_manager.ROS2_PREFIX):
+        raise HTTPException(status_code=400, detail="ros2 sources have no clip stage")
+    try:
+        src = source_manager.get(device)
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    try:
+        src.set_clip(width, height)
         src.wait_frame(timeout=2.0)
         return src.info()
     finally:
