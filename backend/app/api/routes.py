@@ -765,22 +765,7 @@ async def stream(ws: WebSocket) -> None:
 # between them — acceptable for slow rigid-body calibration.
 
 from app.sources.poses import PoseSource
-from app.sources.poses.mock import MockPoseSource
-
-
-def _build_pose_source(source: str, ip_address: str | None) -> PoseSource:
-    s = (source or "mock").lower()
-    if s == "mock":
-        return MockPoseSource()
-    if s == "oculus":
-        # Import lazily — pulls in the vendored submodule + adb client only
-        # when this source is actually requested.
-        from app.sources.poses.oculus import OculusPoseSource
-        return OculusPoseSource(ip_address=ip_address)
-    if s == "steamvr":
-        from app.sources.poses.steamvr import SteamVRPoseSource
-        return SteamVRPoseSource()
-    raise ValueError(f"unknown pose source: {source!r}")
+from app.sources.poses import manager as pose_manager
 
 
 def _parse_sources(sources: str) -> list[str]:
@@ -808,9 +793,13 @@ async def poses_stream(
     try:
         for name in names:
             try:
-                built.append((name, _build_pose_source(name, ip)))
+                built.append((name, pose_manager.get(name, ip=ip)))
             except Exception as e:
                 log.warning("pose source %r failed to init: %s", name, e)
+                # Release anything we already acquired before bailing out.
+                for prior_name, _src in built:
+                    pose_manager.release(prior_name)
+                built.clear()
                 await ws.send_text(json.dumps({
                     "type": "error",
                     "source": name,
@@ -865,9 +854,8 @@ async def poses_stream(
     except Exception:
         log.exception("poses/stream failed")
     finally:
-        for _name, src in built:
-            try: src.close()
-            except Exception: log.exception("source close failed")
+        for name, _src in built:
+            pose_manager.release(name)
 
 
 @router.websocket("/stream/ws")
