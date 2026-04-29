@@ -196,6 +196,13 @@ export async function pickOpenFile(opts) {
   return null;
 }
 
+export async function openPath(p) {
+  if (typeof window !== 'undefined' && window.calib && window.calib.openPath) {
+    return window.calib.openPath(p);
+  }
+  return 'no IPC bridge';
+}
+
 export async function openStream(onMessage) {
   const { port } = await info();
   const ws = new WebSocket(`ws://127.0.0.1:${port}/stream`);
