@@ -28,10 +28,14 @@ def test_first_call_creates_poses_and_meta(tmp_path):
               basename="f1.png", T=_eye4(), ts=1.0,
               meta={"tracker_source": "mock", "device": "d0", "kind": "hmd"})
     assert r.status_code == 200, r.text
-    data = json.loads(Path(poses_path).read_text())
+    raw = Path(poses_path).read_text()
+    data = json.loads(raw)
     assert "f1.png" in data
     assert data["f1.png"]["T"] == _eye4()
     assert data["f1.png"]["ts"] == 1.0
+    assert data["f1.png"]["image_name"] == "f1.png"
+    # File is human-formatted (indented), not a single line.
+    assert "\n  " in raw
     meta = json.loads(Path(tmp_path / "poses.meta.json").read_text())
     assert meta["tracker_source"] == "mock"
     assert meta["device"] == "d0"
