@@ -5,5 +5,6 @@ contextBridge.exposeInMainWorld('calib', {
   pickFolder: (defaultPath) => ipcRenderer.invoke('dialog:pickFolder', defaultPath),
   pickSaveFile: (opts) => ipcRenderer.invoke('dialog:pickSaveFile', opts),
   pickOpenFile: (opts) => ipcRenderer.invoke('dialog:pickOpenFile', opts),
+  openPath: (p) => ipcRenderer.invoke('shell:openPath', p),
   platform: process.platform,
 });

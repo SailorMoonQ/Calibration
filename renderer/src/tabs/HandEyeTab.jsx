@@ -14,7 +14,7 @@ import {
 } from '../components/panels.jsx';
 import { makeT, applyT, composeT } from '../lib/math3d.js';
 import { genFrames, gridCells } from '../lib/mock.js';
-import { api, pickFolder, pickSaveFile, pickOpenFile, posesWsUrl } from '../api/client.js';
+import { api, pickFolder, pickSaveFile, pickOpenFile, openPath, posesWsUrl } from '../api/client.js';
 
 const basename = (p) => (p || '').split('/').pop();
 
@@ -263,7 +263,8 @@ export function HandEyeTab() {
       const ls = await api.listDataset(datasetPath);
       setDatasetFiles(ls.files);
       setSelected(ls.files.length);
-      setViewMode('frame');
+      // Stay in live view so the user keeps seeing the camera feed while
+      // recording — switching to 'frame' interrupts the workflow.
     }
   };
   onSnapRef.current = onSnap;
@@ -374,8 +375,10 @@ export function HandEyeTab() {
               <input className="input" value={datasetPath} placeholder="/path/to/frames/"
                 onChange={e => setDatasetPath(e.target.value)}/>
             </Field>
-            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:6 }}>
+            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:6 }}>
               <button className="btn" onClick={onPickDataset}>📁 pick</button>
+              <button className="btn" disabled={!datasetPath}
+                onClick={() => datasetPath && openPath(datasetPath)}>↗ open</button>
               <button className="btn ghost" onClick={() => { setDatasetPath(''); setDatasetFiles([]); }}>clear</button>
             </div>
             {recordedCount > 0 && (

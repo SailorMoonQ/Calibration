@@ -67,6 +67,11 @@ ipcMain.handle('dialog:pickSaveFile', async (_evt, { defaultPath, filters } = {}
   return res.filePath;
 });
 
+ipcMain.handle('shell:openPath', async (_evt, p) => {
+  if (!p) return 'no path';
+  return shell.openPath(p);  // returns '' on success, error string otherwise
+});
+
 ipcMain.handle('dialog:pickOpenFile', async (_evt, { defaultPath, filters } = {}) => {
   const res = await dialog.showOpenDialog(mainWindow, {
     title: 'Load calibration',
