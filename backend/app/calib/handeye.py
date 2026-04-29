@@ -50,13 +50,31 @@ def _to_T(R: np.ndarray, t: np.ndarray) -> np.ndarray:
 
 
 def _load_poses_json(path: str) -> dict[str, np.ndarray]:
+    """Read poses keyed by image basename. Accepts two per-entry shapes:
+
+    - legacy:  basename -> 4x4 (or 3x4) nested list
+    - new:     basename -> {"T": 4x4 nested list, "ts": float}  (ts optional)
+
+    Returns a dict basename -> 4x4 numpy array. Timestamps are dropped here
+    because the existing solver doesn't consume them; they live in the file
+    for debug/resync tooling and round-trip cleanly via append_pose.
+    """
     with open(path, "r") as f:
         raw = json.load(f)
     if not isinstance(raw, dict):
         raise ValueError("poses JSON must be a dict keyed by image basename")
     out: dict[str, np.ndarray] = {}
     for k, v in raw.items():
-        M = np.array(v, dtype=np.float64)
+        if isinstance(v, dict):
+            if "T" not in v:
+                raise ValueError(f"pose entry {k!r} missing 'T'")
+            arr = v["T"]
+        else:
+            arr = v
+        try:
+            M = np.array(arr, dtype=np.float64)
+        except (TypeError, ValueError) as e:
+            raise ValueError(f"pose for {k!r} could not be parsed as a matrix: {e}")
         if M.shape == (4, 4):
             out[os.path.basename(k)] = M
         elif M.shape == (3, 4):
