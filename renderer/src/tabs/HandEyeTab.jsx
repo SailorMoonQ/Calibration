@@ -1,49 +1,135 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { Section, Seg, Chk, Field, Matrix, KV } from '../components/primitives.jsx';
 import { CameraView, ChessboardOverlay } from '../components/viewport.jsx';
 import { DetectedFrame } from '../components/DetectedFrame.jsx';
 import { LivePreview } from '../components/LivePreview.jsx';
+import { Ros2TopicPicker } from '../components/Ros2TopicPicker.jsx';
+import { useCameraSource, CameraSourcePanel } from '../components/CameraSource.jsx';
 import {
   Scene3D, Frustum3D, HMD3D, Controller3D, Traj3D, Chessboard3D, RigidLink3D,
 } from '../components/scene3d.jsx';
 import {
-  FrameStrip, ErrorPanel, SourcePanel, TargetPanel,
+  FrameStrip, ErrorPanel, TargetPanel,
   CaptureControls, SolverButton, SolverPanel,
 } from '../components/panels.jsx';
 import { makeT, applyT, composeT } from '../lib/math3d.js';
 import { genFrames, gridCells } from '../lib/mock.js';
-import { api, pickFolder, pickSaveFile, pickOpenFile } from '../api/client.js';
+import { api, pickFolder, pickSaveFile, pickOpenFile, posesWsUrl } from '../api/client.js';
 
 const basename = (p) => (p || '').split('/').pop();
 
-export function HandEyeTab({ kind = 'hmd' }) {
+const TRACKER_SOURCES = [
+  { value: 'oculus',  label: 'Oculus Reader' },
+  { value: 'ros2',    label: 'ROS2 topic' },
+  { value: 'steamvr', label: 'SteamVR' },
+  { value: 'file',    label: 'JSON file' },
+];
+
+export function HandEyeTab() {
+  const [kind, setKind] = useState('hmd');
   const isHMD = kind === 'hmd';
   const trackerLabel = isHMD ? 'HMD' : 'controller';
   const xmatLabel = isHMD ? 'T_hmd_cam' : 'T_ctrl_cam';
   const TrackerGlyph = isHMD ? HMD3D : Controller3D;
   const trackerColor = isHMD ? '#6fbcff' : '#b78cff';
-  const defaultMethod = isHMD ? 'park' : 'daniilidis';
 
   const [board, setBoard] = useState({ type: 'charuco', cols: 9, rows: 6, sq: 0.025, marker: 0.018 });
-  const [live, setLive] = useState(true);
-  const [bagPath, setBagPath] = useState(isHMD ? '~/datasets/handeye_hmd.mcap' : '~/datasets/handeye_ctrl.mcap');
-  const [device, setDevice] = useState('/camera/image_raw · Basler acA1920');
-  const [method, setMethod] = useState(defaultMethod);
+  const [method, setMethod] = useState('park');
   const [showTraj, setShowTraj] = useState(true);
   const [showBoard, setShowBoard] = useState(true);
+
+  const [trackerSource, setTrackerSource] = useState('file');
+  const [oculusDevice, setOculusDevice] = useState('');
+  const [trackerRos2Topic, setTrackerRos2Topic] = useState('');
+  const [steamvrSerial, setSteamvrSerial] = useState('');
 
   const [datasetPath, setDatasetPath] = useState('');
   const [datasetFiles, setDatasetFiles] = useState([]);
   const [posesPath, setPosesPath] = useState('');
   const [camInt, setCamInt] = useState(null); // { K, D, path }
 
-  const [devices, setDevices] = useState([]);
-  const [liveDevice, setLiveDevice] = useState('');
   const [viewMode, setViewMode] = useState('live');
 
   const [result, setResult] = useState(null);
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState('');
+
+  // Live tracker stream (used to attach pose to each captured image).
+  const [connected, setConnected] = useState(false);
+  const [poseHz, setPoseHz] = useState(0);
+  const [poseStaleMs, setPoseStaleMs] = useState(null);
+  const wsRef = useRef(null);
+  const latestPoseRef = useRef(null);  // {ts, T, device}
+  const poseTickWindowRef = useRef([]); // last ~1s of wall_ts for fps calc
+
+  const trackerDeviceKey = () => {
+    if (trackerSource === 'oculus')  return oculusDevice || (kind === 'ctrl' ? 'controller_R' : 'hmd');
+    if (trackerSource === 'steamvr') return steamvrSerial || (kind === 'ctrl' ? 'controller_R' : 'tracker_0');
+    return null;
+  };
+
+  const onConnectTracker = useCallback(async () => {
+    if (wsRef.current) return;
+    if (trackerSource === 'file' || trackerSource === 'ros2') {
+      setStatus(`${trackerSource} not supported as a live recorder this iteration`);
+      return;
+    }
+    const device = trackerDeviceKey();
+    if (!device) { setStatus('pick a tracker device first'); return; }
+    setStatus('connecting tracker…');
+    try {
+      const url = await posesWsUrl({ fps: 30, sources: [trackerSource] });
+      const ws = new WebSocket(url);
+      wsRef.current = ws;
+      ws.onopen = () => { setConnected(true); setStatus(`tracker ws open · ${trackerSource}`); };
+      ws.onclose = () => {
+        setConnected(false);
+        wsRef.current = null;
+        latestPoseRef.current = null;
+        setPoseStaleMs(null);
+        setPoseHz(0);
+      };
+      ws.onerror = () => setStatus('tracker ws error');
+      ws.onmessage = (ev) => {
+        let m; try { m = JSON.parse(ev.data); } catch { return; }
+        if (m.type === 'error') { setStatus(`${m.source} error: ${m.message}`); return; }
+        if (m.type !== 'sample' || !m.poses) return;
+        const T = m.poses[device];
+        if (!T) return;
+        const ts = (typeof m.wall_ts === 'number') ? m.wall_ts : (Date.now() / 1000);
+        latestPoseRef.current = { ts, T, device };
+        const win = poseTickWindowRef.current;
+        win.push(ts);
+        const cutoff = ts - 1.0;
+        while (win.length && win[0] < cutoff) win.shift();
+      };
+    } catch (e) { setStatus(`connect failed: ${e.message}`); }
+  }, [trackerSource, oculusDevice, steamvrSerial, kind]);
+
+  const onDisconnectTracker = useCallback(() => {
+    const ws = wsRef.current;
+    if (!ws) return;
+    try { ws.close(); } catch {}
+    wsRef.current = null;
+    setConnected(false);
+    latestPoseRef.current = null;
+    setPoseStaleMs(null);
+    setPoseHz(0);
+  }, []);
+
+  // Refresh staleness/fps readout twice a second from the ref-held buffer.
+  useEffect(() => {
+    if (!connected) return;
+    const id = setInterval(() => {
+      const lp = latestPoseRef.current;
+      if (lp) setPoseStaleMs(Math.max(0, Math.round((Date.now() / 1000 - lp.ts) * 1000)));
+      setPoseHz(poseTickWindowRef.current.length);
+    }, 500);
+    return () => clearInterval(id);
+  }, [connected]);
+
+  // Always disconnect on unmount.
+  useEffect(() => () => onDisconnectTracker(), [onDisconnectTracker]);
 
   const mockFrames = useMemo(() => genFrames(30, 0.38), []);
   const mockPoses = useMemo(() => Array.from({ length: 56 }, (_, i) => {
@@ -72,16 +158,10 @@ export function HandEyeTab({ kind = 'hmd' }) {
   const frames = realFrames ?? mockFrames;
   const [selected, setSelected] = useState(1);
 
-  useEffect(() => {
-    let cancelled = false;
-    api.listStreamDevices().then(r => {
-      if (cancelled) return;
-      const list = r.cameras || [];
-      setDevices(list);
-      if (list.length && !liveDevice) setLiveDevice(list[0].device);
-    }).catch(() => {});
-    return () => { cancelled = true; };
-  }, []);
+  const cam = useCameraSource({
+    pollEnabled: viewMode === 'live' || datasetFiles.length === 0,
+  });
+  const { liveDevice } = cam;
 
   useEffect(() => {
     if (!datasetPath) { setDatasetFiles([]); return; }
@@ -144,6 +224,10 @@ export function HandEyeTab({ kind = 'hmd' }) {
 
   const onRun = async () => {
     if (!datasetPath) { setStatus('pick a dataset folder'); return; }
+    if (trackerSource !== 'file') {
+      setStatus(`${trackerSource} live source not yet wired — pick JSON file source`);
+      return;
+    }
     if (!posesPath) { setStatus('pick the tracker-poses JSON'); return; }
     if (!camInt) { setStatus('load camera intrinsics YAML'); return; }
     setBusy(true); setStatus('solving AX=XB…');
@@ -230,20 +314,7 @@ export function HandEyeTab({ kind = 'hmd' }) {
           <span className="mono" style={{color:'var(--text-4)'}}>AX=XB</span>
         </div>
         <div className="rail-scroll">
-          <SourcePanel live={live} onLive={setLive} device={device} onDevice={setDevice}
-            bagPath={bagPath} onBagPath={setBagPath}/>
-          <Section title="Live camera" hint={liveDevice || 'no device'}>
-            <Field label="device">
-              <select className="select" value={liveDevice} onChange={e => setLiveDevice(e.target.value)}>
-                <option value="">— none —</option>
-                {devices.map(d => <option key={d.device} value={d.device}>{d.label}</option>)}
-              </select>
-            </Field>
-            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:6 }}>
-              <button className="btn" onClick={() => setViewMode('live')}>👁 live</button>
-              <button className="btn ghost" onClick={() => api.listStreamDevices().then(r => setDevices(r.cameras || []))}>↻ rescan</button>
-            </div>
-          </Section>
+          <CameraSourcePanel source={cam} onLivePreview={() => setViewMode('live')}/>
           <Section title="Dataset" hint={datasetFiles.length ? `${datasetFiles.length} images` : 'not loaded'}>
             <Field label="folder">
               <input className="input" value={datasetPath} placeholder="/path/to/frames/"
@@ -254,12 +325,81 @@ export function HandEyeTab({ kind = 'hmd' }) {
               <button className="btn ghost" onClick={() => { setDatasetPath(''); setDatasetFiles([]); }}>clear</button>
             </div>
           </Section>
-          <Section title="Tracker poses JSON" hint={posesPath ? basename(posesPath) : 'required'}>
-            <Field label="file">
-              <input className="input" value={posesPath} placeholder="basename → 4x4 matrix"
-                onChange={e => setPosesPath(e.target.value)}/>
+          <Section
+            title="Tracker source"
+            hint={
+              trackerSource === 'file'    ? (posesPath ? basename(posesPath) : 'pick json') :
+              trackerSource === 'oculus'  ? (oculusDevice || 'pick device') :
+              trackerSource === 'ros2'    ? (trackerRos2Topic || 'pick topic') :
+                                            (steamvrSerial || 'pick tracker')
+            }
+            right={connected ? null : <Seg value={trackerSource} onChange={setTrackerSource} options={
+              TRACKER_SOURCES.map(s => ({ value: s.value, label: s.label.split(' ')[0].toLowerCase() }))
+            }/>}
+          >
+            <Field label="body">
+              <select className="select" value={kind} disabled={connected}
+                onChange={e => setKind(e.target.value)}>
+                <option value="hmd">HMD</option>
+                <option value="ctrl">controller</option>
+              </select>
             </Field>
-            <button className="btn" onClick={onPickPoses}>📁 pick json</button>
+            {trackerSource === 'oculus' && (
+              <>
+                <Field label="device">
+                  <select className="select" value={oculusDevice} disabled={connected}
+                    onChange={e => setOculusDevice(e.target.value)}>
+                    <option value="">— none —</option>
+                    <option value="quest3">Quest 3</option>
+                    <option value="quest2">Quest 2</option>
+                    <option value="questpro">Quest Pro</option>
+                  </select>
+                </Field>
+                <div className="mono" style={{ fontSize: 10.5, color: 'var(--text-3)' }}>
+                  via Oculus Reader · adb pose stream
+                </div>
+              </>
+            )}
+            {trackerSource === 'ros2' && (
+              <Ros2TopicPicker
+                topic={trackerRos2Topic}
+                onTopic={setTrackerRos2Topic}/>
+            )}
+            {trackerSource === 'steamvr' && (
+              <>
+                <Field label="serial">
+                  <input className="input" value={steamvrSerial} placeholder="LHR-XXXXXXXX" disabled={connected}
+                    onChange={e => setSteamvrSerial(e.target.value)}/>
+                </Field>
+                <div className="mono" style={{ fontSize: 10.5, color: 'var(--text-3)' }}>
+                  via SteamVR pose publisher
+                </div>
+              </>
+            )}
+            {trackerSource === 'file' && (
+              <>
+                <Field label="file">
+                  <input className="input" value={posesPath} placeholder="basename → 4x4 matrix"
+                    onChange={e => setPosesPath(e.target.value)}/>
+                </Field>
+                <button className="btn" onClick={onPickPoses}>📁 pick json</button>
+              </>
+            )}
+            {(trackerSource === 'oculus' || trackerSource === 'steamvr') && (
+              <>
+                <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:6 }}>
+                  {!connected
+                    ? <button className="btn primary" onClick={onConnectTracker}>⚡ connect</button>
+                    : <button className="btn ghost" onClick={onDisconnectTracker}>⨯ disconnect</button>}
+                </div>
+                {connected && (
+                  <div className="mono" style={{ fontSize: 10.5,
+                    color: (poseStaleMs ?? 999) < 200 ? 'var(--ok)' : 'var(--warn)' }}>
+                    ● {trackerDeviceKey()} · {poseHz} Hz · {poseStaleMs == null ? '—' : `${poseStaleMs} ms`}
+                  </div>
+                )}
+              </>
+            )}
           </Section>
           <Section title="Camera intrinsics" hint={camInt ? basename(camInt.path) : 'required'}>
             <button className="btn" onClick={onLoadIntrinsics}>↓ load yaml {camInt ? '✓' : ''}</button>
@@ -271,7 +411,7 @@ export function HandEyeTab({ kind = 'hmd' }) {
               {value:'horaud',label:'Horaud'},{value:'daniilidis',label:'Dan.'},{value:'andreff',label:'Andreff'}
             ]}/>
           </Section>
-          <CaptureControls live={live} onLive={setLive} autoCapture={true} onAuto={()=>{}}
+          <CaptureControls autoCapture={true} onAuto={()=>{}}
             onSnap={onSnap}
             coverage={Math.min(100, datasetFiles.length * 3)}
             coverageCells={gridCells(40, [0,1,3,4,6,7,9,10,12,14,16,17,20,22,23,26,27,30,32,34,35,38,39])}/>
