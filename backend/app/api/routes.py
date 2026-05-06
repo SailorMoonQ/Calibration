@@ -932,9 +932,13 @@ async def recording_import_file(body: dict) -> dict:
                 data = json.load(f)
         else:
             from ruamel.yaml import YAML
+            from ruamel.yaml.error import YAMLError
             _y = YAML(typ="safe", pure=True)
-            with open(src_path) as f:
-                data = _y.load(f) or {}
+            try:
+                with open(src_path) as f:
+                    data = _y.load(f) or {}
+            except YAMLError as e:
+                raise HTTPException(status_code=400, detail=f"read failed: {e}") from e
     except (OSError, ValueError) as e:
         raise HTTPException(status_code=400, detail=f"read failed: {e}") from e
 
