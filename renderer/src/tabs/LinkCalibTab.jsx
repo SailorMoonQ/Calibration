@@ -223,6 +223,7 @@ export function LinkCalibTab() {
 
   const solveGate = (() => {
     if (!syncDiag) return 'run sync first';
+    if (syncDiag.n_pairs < 50) return `only ${syncDiag.n_pairs} pairs (need ≥ 50)`;
     if (syncDiag.a_rot_deg < 30) return `A rotation diversity too low: ${syncDiag.a_rot_deg.toFixed(1)}°`;
     if (syncDiag.b_rot_deg < 30) return `B rotation diversity too low: ${syncDiag.b_rot_deg.toFixed(1)}°`;
     return null;
@@ -231,7 +232,7 @@ export function LinkCalibTab() {
   // Viewport data ------------------------------------------------------------
   const vizA = useMemo(() => {
     if (slotA.mode === 'live') return downsample(slotsBufA.viz, TRAJ_DECIMATE_AT);
-    return [];  // imported visualization is loaded lazily in Task 7
+    return [];  // import-mode trajectory rendering is a known follow-up — see open issues
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [slotA.mode, tickCount]);
   const vizB = useMemo(() => {
