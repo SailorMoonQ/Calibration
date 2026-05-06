@@ -802,29 +802,33 @@ async def recording_import_mcap(body: dict) -> dict:
 
 @router.post("/recording/sync")
 async def recording_sync(body: dict) -> dict:
-    """Sync a Vive recording + UMI import into a paired-sample JSON."""
+    """Sync two pose recordings into a paired-sample JSON.
+
+    Body accepts new keys (a_path, b_path) or legacy keys (vive_path, umi_path).
+    Response carries both naming conventions for back-compat.
+    """
     from app.calib.sync import sync_streams
 
-    vive_path = body.get("vive_path")
-    umi_path = body.get("umi_path")
+    a_path = body.get("a_path") or body.get("vive_path")
+    b_path = body.get("b_path") or body.get("umi_path")
     out_path = body.get("out_path")
-    if not (vive_path and os.path.isfile(vive_path)):
-        raise HTTPException(status_code=404, detail="vive_path not found")
-    if not (umi_path and os.path.isfile(umi_path)):
-        raise HTTPException(status_code=404, detail="umi_path not found")
+    if not (a_path and os.path.isfile(a_path)):
+        raise HTTPException(status_code=404, detail="a_path not found")
+    if not (b_path and os.path.isfile(b_path)):
+        raise HTTPException(status_code=404, detail="b_path not found")
     if not out_path:
         raise HTTPException(status_code=400, detail="out_path required")
 
     max_skew_s = float(body.get("max_skew_s", 5.0))
     max_pair_gap_s = float(body.get("max_pair_gap_s", 0.05))
 
-    with open(vive_path) as f:
-        vive_data = json.load(f)
-    with open(umi_path) as f:
-        umi_data = json.load(f)
+    with open(a_path) as f:
+        a_data = json.load(f)
+    with open(b_path) as f:
+        b_data = json.load(f)
 
     res = sync_streams(
-        vive_data["samples"], umi_data["samples"],
+        a_data["samples"], b_data["samples"],
         max_skew_s=max_skew_s, max_pair_gap_s=max_pair_gap_s,
     )
     if not res["ok"]:
@@ -837,8 +841,8 @@ async def recording_sync(body: dict) -> dict:
             "kind": "synced",
             "n": res["n_pairs"],
             "delta_t": res["delta_t"],
-            "vive_rot_deg": res["vive_rot_deg"],
-            "umi_rot_deg": res["umi_rot_deg"],
+            "a_rot_deg": res["vive_rot_deg"],
+            "b_rot_deg": res["umi_rot_deg"],
         },
         "samples": res["pairs"],
     }
@@ -856,6 +860,8 @@ async def recording_sync(body: dict) -> dict:
         "snr": res.get("snr"),
         "vive_rot_deg": res["vive_rot_deg"],
         "umi_rot_deg": res["umi_rot_deg"],
+        "a_rot_deg": res["vive_rot_deg"],
+        "b_rot_deg": res["umi_rot_deg"],
         "path": out_path,
     }
 
