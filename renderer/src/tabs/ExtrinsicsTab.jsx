@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { Section, Seg, Chk, Field, Matrix, KV } from '../components/primitives.jsx';
 import { CameraView, ChessboardOverlay, ResidualVectors } from '../components/viewport.jsx';
 import { DetectedFrame } from '../components/DetectedFrame.jsx';

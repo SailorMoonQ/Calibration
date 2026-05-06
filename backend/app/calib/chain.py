@@ -18,16 +18,15 @@ import json
 import logging
 import os
 
-import cv2
 import numpy as np
 
-from app.models import ChainRequest, LinkRequest, CalibrationResult
+from app.models import CalibrationResult, ChainRequest, LinkRequest
 
 log = logging.getLogger("calib.chain")
 
 
 def _load_poses_json(path: str) -> dict[str, np.ndarray]:
-    with open(path, "r") as f:
+    with open(path) as f:
         raw = json.load(f)
     if not isinstance(raw, dict):
         raise ValueError(f"poses JSON {path!r} must be a dict keyed by basename")
@@ -37,7 +36,9 @@ def _load_poses_json(path: str) -> dict[str, np.ndarray]:
         if M.shape == (4, 4):
             out[os.path.basename(k)] = M
         elif M.shape == (3, 4):
-            T = np.eye(4); T[:3] = M; out[os.path.basename(k)] = T
+            T = np.eye(4)
+            T[:3] = M
+            out[os.path.basename(k)] = T
         else:
             raise ValueError(f"pose for {k!r} must be 4x4 or 3x4, got {M.shape}")
     return out
@@ -63,7 +64,9 @@ def _as_pose_dict(raw: dict[str, list[list[float]]]) -> dict[str, np.ndarray]:
         if M.shape == (4, 4):
             out[str(k)] = M
         elif M.shape == (3, 4):
-            T = np.eye(4); T[:3] = M; out[str(k)] = T
+            T = np.eye(4)
+            T[:3] = M
+            out[str(k)] = T
         else:
             raise ValueError(f"pose for {k!r} must be 4x4 or 3x4, got {M.shape}")
     return out

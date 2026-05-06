@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react';
+import { useMemo } from 'react';
 import { mulberry32 } from '../lib/random.js';
 
 function ScenePlate({ w = 800, h = 520, seed = 7 }) {

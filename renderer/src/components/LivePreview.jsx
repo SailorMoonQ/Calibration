@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { api, streamWsUrl } from '../api/client.js';
 import { useReportCamera } from '../lib/telemetry.jsx';
 
@@ -85,7 +85,7 @@ export function LivePreview({ device, fps = 30, quality = 70 }) {
       if (rafId != null) cancelAnimationFrame(rafId);
       if (pending) { pending.close(); pending = null; }
       if (wsRef.current) {
-        try { wsRef.current.close(); } catch (_) {}
+        try { wsRef.current.close(); } catch { /* swallow */ }
         wsRef.current = null;
       }
       setHasFrame(false);

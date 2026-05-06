@@ -70,6 +70,7 @@ def test_poses_stream_uses_pose_manager(monkeypatch):
     """The /poses/stream handler must acquire/release through pose_manager so
     a second concurrent client doesn't double-open the underlying source."""
     from fastapi.testclient import TestClient
+
     from app.main import app
     from app.sources.poses import manager as pose_manager
 

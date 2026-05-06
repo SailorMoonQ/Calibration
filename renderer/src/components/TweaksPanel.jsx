@@ -1,4 +1,3 @@
-import React from 'react';
 import { Field, Seg } from './primitives.jsx';
 
 export const TWEAKS_DEFAULTS = {

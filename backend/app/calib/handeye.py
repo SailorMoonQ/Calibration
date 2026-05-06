@@ -22,8 +22,8 @@ import os
 import cv2
 import numpy as np
 
-from app.models import HandEyeRequest, CalibrationResult
 from app.calib import _io
+from app.models import CalibrationResult, HandEyeRequest
 
 log = logging.getLogger("calib.handeye")
 
@@ -59,7 +59,7 @@ def _load_poses_json(path: str) -> dict[str, np.ndarray]:
     because the existing solver doesn't consume them; they live in the file
     for debug/resync tooling and round-trip cleanly via append_pose.
     """
-    with open(path, "r") as f:
+    with open(path) as f:
         raw = json.load(f)
     if not isinstance(raw, dict):
         raise ValueError("poses JSON must be a dict keyed by image basename")
@@ -74,11 +74,13 @@ def _load_poses_json(path: str) -> dict[str, np.ndarray]:
         try:
             M = np.array(arr, dtype=np.float64)
         except (TypeError, ValueError) as e:
-            raise ValueError(f"pose for {k!r} could not be parsed as a matrix: {e}")
+            raise ValueError(f"pose for {k!r} could not be parsed as a matrix: {e}") from e
         if M.shape == (4, 4):
             out[os.path.basename(k)] = M
         elif M.shape == (3, 4):
-            T = np.eye(4); T[:3] = M; out[os.path.basename(k)] = T
+            T = np.eye(4)
+            T[:3] = M
+            out[os.path.basename(k)] = T
         else:
             raise ValueError(f"pose for {k!r} must be 4x4 or 3x4, got {M.shape}")
     return out
@@ -126,7 +128,7 @@ def _match_AB(req: HandEyeRequest) -> tuple[list[np.ndarray], list[np.ndarray], 
         A: list[np.ndarray] = []
         B: list[np.ndarray] = []
         matched: list[str] = []
-        for T_a, name in zip(A_all, names):
+        for T_a, name in zip(A_all, names, strict=False):
             if name in pose_map:
                 A.append(T_a)
                 B.append(pose_map[name])
@@ -143,7 +145,7 @@ def _consistency(X: np.ndarray, A: list[np.ndarray], B: list[np.ndarray]) -> tup
     Returns (rot_rms_deg, trans_rms_mm) across frames vs the median pose."""
     if len(A) < 2:
         return 0.0, 0.0
-    worlds = [B_i @ X @ A_i for A_i, B_i in zip(A, B)]
+    worlds = [B_i @ X @ A_i for A_i, B_i in zip(A, B, strict=False)]
     ref = worlds[len(worlds) // 2]
     rot_errs: list[float] = []
     trans_errs: list[float] = []
@@ -187,7 +189,7 @@ def calibrate(req: HandEyeRequest) -> CalibrationResult:
     # per-frame "error" surfaced via per_frame_err = |W_i - ref| in mm for a quick histogram.
     per_frame_err: list[float] = []
     if len(A) >= 2:
-        worlds = [B_i @ X @ A_i for A_i, B_i in zip(A, B)]
+        worlds = [B_i @ X @ A_i for A_i, B_i in zip(A, B, strict=False)]
         ref = worlds[len(worlds) // 2]
         for W in worlds:
             per_frame_err.append(float(np.linalg.norm(ref[:3, 3] - W[:3, 3]) * 1000.0))

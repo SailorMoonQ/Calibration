@@ -11,8 +11,8 @@ from __future__ import annotations
 import base64
 import glob
 import os
+from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Iterable
 
 import cv2
 import numpy as np
@@ -141,7 +141,7 @@ def per_frame_errors(
     D: np.ndarray,
 ) -> list[float]:
     errs: list[float] = []
-    for d, rvec, tvec in zip(detections, rvecs, tvecs):
+    for d, rvec, tvec in zip(detections, rvecs, tvecs, strict=False):
         reproj, _ = cv2.projectPoints(d.object_points, rvec, tvec, K, D)
         reproj = reproj.reshape(-1, 2)
         err = float(np.linalg.norm(d.corners - reproj, axis=1).mean())
@@ -158,7 +158,7 @@ def per_frame_residuals(
 ) -> list[list[tuple[float, float, float, float]]]:
     """Returns per-frame list of [(x, y, ex, ey), ...] where (ex, ey) = detected - reprojected."""
     out: list[list[tuple[float, float, float, float]]] = []
-    for d, rvec, tvec in zip(detections, rvecs, tvecs):
+    for d, rvec, tvec in zip(detections, rvecs, tvecs, strict=False):
         reproj, _ = cv2.projectPoints(d.object_points, rvec, tvec, K, D)
         reproj = reproj.reshape(-1, 2)
         diff = d.corners - reproj

@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { streamWsUrl } from '../api/client.js';
 import { useReportCamera } from '../lib/telemetry.jsx';
 
@@ -172,7 +172,7 @@ export function LiveDetectedFrame({
 
         setMeta(parsed.meta);
         if (onMetaRef.current) {
-          try { onMetaRef.current(parsed.meta); } catch (_) {}
+          try { onMetaRef.current(parsed.meta); } catch { /* swallow */ }
         }
 
         // rolling client-side fps (arrival rate)
@@ -200,7 +200,7 @@ export function LiveDetectedFrame({
       if (rafId != null) cancelAnimationFrame(rafId);
       if (pending) { pending.bitmap.close(); pending = null; }
       if (wsRef.current) {
-        try { wsRef.current.close(); } catch (_) {}
+        try { wsRef.current.close(); } catch { /* swallow */ }
         wsRef.current = null;
       }
       setMeta(null);

@@ -4,7 +4,6 @@ from __future__ import annotations
 import math
 
 import numpy as np
-import pytest
 
 from app.calib.sync import sync_streams
 

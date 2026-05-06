@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { rectifiedMjpegUrl } from '../api/client.js';
 
 // Live MJPEG stream undistorted on the backend. <img> handles the multipart frames;

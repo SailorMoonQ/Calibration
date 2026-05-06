@@ -17,8 +17,8 @@ from collections import Counter
 import cv2
 import numpy as np
 
-from app.models import FisheyeRequest, CalibrationResult
 from app.calib import _io
+from app.models import CalibrationResult, FisheyeRequest
 
 log = logging.getLogger("calib.fisheye")
 
@@ -163,7 +163,7 @@ def calibrate(req: FisheyeRequest) -> CalibrationResult:
 
     per_frame_err: list[float] = []
     residuals: list[list[tuple[float, float, float, float]]] = []
-    for d, rvec, tvec in zip(uniform, rvecs, tvecs):
+    for d, rvec, tvec in zip(uniform, rvecs, tvecs, strict=False):
         reproj, _ = cv2.fisheye.projectPoints(
             d.object_points.reshape(-1, 1, 3).astype(np.float64), rvec, tvec, K, D,
         )

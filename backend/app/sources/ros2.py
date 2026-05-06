@@ -10,7 +10,6 @@ import logging
 import threading
 import time
 from collections import deque
-from typing import Optional
 
 import numpy as np
 
@@ -22,7 +21,7 @@ log = logging.getLogger("calib.source.ros2")
 class Ros2ImageSource:
     def __init__(self, topic: str) -> None:
         self.topic = topic
-        self._latest: Optional[np.ndarray] = None
+        self._latest: np.ndarray | None = None
         self._latest_ts: float = 0.0
         self._latest_seq: int = 0
         self._lock = threading.Lock()
@@ -93,7 +92,7 @@ class Ros2ImageSource:
             self._latest = None
             log.info("ros2 unsubscribed · %s", self.topic)
 
-    def read(self) -> Optional[np.ndarray]:
+    def read(self) -> np.ndarray | None:
         with self._lock:
             return None if self._latest is None else self._latest.copy()
 

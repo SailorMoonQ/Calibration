@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { api, frameUrl } from '../api/client.js';
 
 // Cache detection results per (path|board-key) so switching frames is instant on revisit.

@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import logging
 import threading
-from typing import Callable
+from collections.abc import Callable
 
 from app.sources.poses import PoseSource
 from app.sources.poses.mock import MockPoseSource
@@ -78,5 +78,7 @@ def shutdown_all() -> None:
         _sources.clear()
         _refs.clear()
     for key, src in items:
-        try: src.close()
-        except Exception: log.exception("pose source close failed: %s", key)
+        try:
+            src.close()
+        except Exception:
+            log.exception("pose source close failed: %s", key)

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { Section, Seg, Field } from './primitives.jsx';
 import { Ros2TopicPicker } from './Ros2TopicPicker.jsx';
 import { SizeInput } from './SizeInput.jsx';

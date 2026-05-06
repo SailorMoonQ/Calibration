@@ -1,4 +1,4 @@
-import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
+import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 
 // Update throttle for writer hooks. Each hook coalesces incoming reports
 // to at most one state update every THROTTLE_MS so the topbar doesn't

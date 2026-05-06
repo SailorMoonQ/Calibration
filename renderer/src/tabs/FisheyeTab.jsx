@@ -345,9 +345,6 @@ export function FisheyeTab() {
   const selectedPath = datasetFiles[selected - 1];
   const calibrated = !!(result?.ok && Kraw && D.length);
   const canRectifyFrame = !!(calibrated && selectedPath);
-  // canRectify is the legacy gate for the dataset-frame rectifier; the live rectifier
-  // only needs `calibrated` (it pulls from the live MJPEG).
-  const canRectify = canRectifyFrame;
 
   const emptyCell = (text) => (
     <div style={{

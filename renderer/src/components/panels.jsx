@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react';
+import { useEffect, useRef } from 'react';
 import { Section, Seg, Field, Chk, KV, NumInput, Spark, Histogram } from './primitives.jsx';
 
 function FrameThumb({ f }) {

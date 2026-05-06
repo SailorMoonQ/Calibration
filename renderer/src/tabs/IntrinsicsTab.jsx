@@ -76,7 +76,7 @@ export function IntrinsicsTab() {
   const cam = useCameraSource({
     pollEnabled: viewMode === 'live' || datasetFiles.length === 0,
   });
-  const { liveDevice, streamInfo } = cam;
+  const { liveDevice } = cam;
 
   const calibrated = !!(result?.ok && result?.K && D.length);
   const selectedPath = datasetFiles[selectedFrame - 1];

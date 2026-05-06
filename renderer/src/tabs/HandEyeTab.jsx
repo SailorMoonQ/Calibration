@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
+import { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { Section, Seg, Chk, Field, Matrix, KV } from '../components/primitives.jsx';
 import { DetectedFrame } from '../components/DetectedFrame.jsx';
 import { LivePreview } from '../components/LivePreview.jsx';
@@ -32,7 +32,6 @@ export function HandEyeTab() {
   const trackerLabel = isHMD ? 'HMD' : 'controller';
   const xmatLabel = isHMD ? 'T_hmd_cam' : 'T_ctrl_cam';
   const TrackerGlyph = isHMD ? HMD3D : Controller3D;
-  const trackerColor = isHMD ? '#6fbcff' : '#b78cff';
 
   const [board, setBoard] = useState(DEFAULT_BOARD);
   const [method, setMethod] = useState('park');
@@ -111,7 +110,7 @@ export function HandEyeTab() {
   const onDisconnectTracker = useCallback(() => {
     const ws = wsRef.current;
     if (!ws) return;
-    try { ws.close(); } catch {}
+    try { ws.close(); } catch { /* swallow */ }
     wsRef.current = null;
     setConnected(false);
     latestPoseRef.current = null;

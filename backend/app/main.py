@@ -1,11 +1,12 @@
 """Entrypoint used in dev (`python -m app.main`) and wrapped by bootstrap.py for PyInstaller."""
 from __future__ import annotations
 
-import os
 import logging
+import os
+
+import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-import uvicorn
 
 from app.api.routes import router as api_router
 

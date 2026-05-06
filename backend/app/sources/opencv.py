@@ -12,7 +12,6 @@ import subprocess
 import threading
 import time
 from collections import deque
-from typing import Optional
 
 import cv2
 import numpy as np
@@ -258,7 +257,7 @@ class CameraSource:
         self._latest = None
         log.info("closed camera %s", self.device)
 
-    def read(self) -> Optional[np.ndarray]:
+    def read(self) -> np.ndarray | None:
         frm = self._latest
         return None if frm is None else frm.copy()
 

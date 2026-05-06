@@ -25,14 +25,14 @@ log = logging.getLogger("calib.ros2")
 _GRAPH_WARMUP_S = 1.5
 
 _lock = threading.Lock()
-_node: "Node | None" = None
+_node: Node | None = None
 _executor = None
 _thread: threading.Thread | None = None
 _started = False
 _started_at: float = 0.0
 
 
-def ensure_started() -> "Node":
+def ensure_started() -> Node:
     """Lazy-init rclpy. Idempotent. Raises RuntimeError if rclpy is unavailable."""
     global _node, _executor, _thread, _started, _started_at
     with _lock:
@@ -61,7 +61,7 @@ def ensure_started() -> "Node":
         return _node
 
 
-def get_node() -> "Node | None":
+def get_node() -> Node | None:
     """Return the running node, or None if ensure_started has not been called."""
     return _node
 

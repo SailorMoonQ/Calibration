@@ -1,4 +1,4 @@
-import React, { useRef, useState } from 'react';
+import { useRef, useState } from 'react';
 import { project, applyT } from '../lib/math3d.js';
 
 export function Axes3D({ T = null, cam, len = 0.08, label, thick = 2 }) {

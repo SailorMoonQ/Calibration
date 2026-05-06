@@ -80,8 +80,8 @@ async function startSidecar({ isDev }) {
 
 function stopSidecar() {
   if (!proc) return;
-  try { proc.kill('SIGTERM'); } catch (_) {}
-  setTimeout(() => { if (proc) try { proc.kill('SIGKILL'); } catch (_) {} }, 2000);
+  try { proc.kill('SIGTERM'); } catch { /* swallow */ }
+  setTimeout(() => { if (proc) try { proc.kill('SIGKILL'); } catch { /* swallow */ } }, 2000);
 }
 
 module.exports = { startSidecar, stopSidecar };

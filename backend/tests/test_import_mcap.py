@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import json
-import os
 
 import numpy as np
 import pytest
@@ -19,8 +18,8 @@ def client():
 def _build_fixture_mcap(path: str, n: int = 5):
     """Build a tiny MCAP with N foxglove.PoseInFrame messages on /robot0/vio/eef_pose,
     timestamps starting at epoch ts0 spaced 0.1s apart, identity rotation, position x=i."""
-    from mcap_protobuf.writer import Writer
     from foxglove_schemas_protobuf.PoseInFrame_pb2 import PoseInFrame
+    from mcap_protobuf.writer import Writer
 
     ts0 = 1_775_381_900_000_000_000  # ns
     with open(path, "wb") as f, Writer(f) as writer:

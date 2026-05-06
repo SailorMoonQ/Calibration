@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { fetchRectifiedBlob } from '../api/client.js';
 
 export function RectifiedFrame({

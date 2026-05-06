@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { TelemetryProvider } from './lib/telemetry.jsx';
 import { Topbar } from './components/Topbar.jsx';
 import { Tabs } from './components/Tabs.jsx';

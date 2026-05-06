@@ -7,7 +7,6 @@ import numpy as np
 
 from app.sources.poses import PoseSource
 
-
 DEVICES = ["tracker_0", "controller_R"]
 
 
@@ -41,7 +40,9 @@ def _tracker_pose(t: float) -> np.ndarray:
         0.08 + 0.12 * math.cos(t * 0.4),
         0.25 + 0.15 * math.sin(t * 0.9),
     ])
-    T = np.eye(4); T[:3, :3] = R; T[:3, 3] = p
+    T = np.eye(4)
+    T[:3, :3] = R
+    T[:3, 3] = p
     return T
 
 

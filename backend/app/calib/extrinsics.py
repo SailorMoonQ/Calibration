@@ -14,8 +14,8 @@ from dataclasses import dataclass
 import cv2
 import numpy as np
 
-from app.models import ExtrinsicsRequest, CalibrationResult, Board
 from app.calib import _io
+from app.models import Board, CalibrationResult, ExtrinsicsRequest
 
 log = logging.getLogger("calib.extrinsics")
 
@@ -168,7 +168,9 @@ def calibrate(req: ExtrinsicsRequest) -> CalibrationResult:
             residuals.append([])
             continue
         R0, _ = cv2.Rodrigues(rv)
-        T0 = np.eye(4); T0[:3, :3] = R0; T0[:3, 3] = tv.ravel()
+        T0 = np.eye(4)
+        T0[:3, :3] = R0
+        T0[:3, 3] = tv.ravel()
         T1 = Tmat @ T0
         rv1, _ = cv2.Rodrigues(T1[:3, :3])
         tv1 = T1[:3, 3]

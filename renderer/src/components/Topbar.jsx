@@ -1,4 +1,3 @@
-import React from 'react';
 import { Pill } from './primitives.jsx';
 import { useTelemetry } from '../lib/telemetry.jsx';
 

@@ -2,11 +2,11 @@
 from __future__ import annotations
 
 import logging
-import cv2
-import numpy as np
 
-from app.models import Board, DetectResponse, IntrinsicsRequest, CalibrationResult
+import cv2
+
 from app.calib import _io
+from app.models import Board, CalibrationResult, DetectResponse, IntrinsicsRequest
 
 log = logging.getLogger("calib.intrinsics")
 

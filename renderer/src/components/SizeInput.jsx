@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 
 // Editable "WxH" field shared by the resolution and clip rows on the live source
 // panel. While the user is typing we hold off on syncing from the 1Hz info poll
@@ -25,7 +25,7 @@ export function SizeInput({ value, onCommit, options, allowOff, title, listId })
       if (value === null) { setEditing(false); return; }
       setPending(true);
       try { await onCommit(0, 0); }
-      catch (_) {}
+      catch { /* swallow */ }
       finally { setPending(false); setEditing(false); }
       return;
     }
@@ -38,7 +38,7 @@ export function SizeInput({ value, onCommit, options, allowOff, title, listId })
     setPending(true);
     try {
       await onCommit(w, h);
-    } catch (_) {
+    } catch {
       // Drop back to what the source actually reports — the next poll will sync.
     } finally {
       setPending(false);
