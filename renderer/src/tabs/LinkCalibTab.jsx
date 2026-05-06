@@ -155,7 +155,7 @@ export function LinkCalibTab() {
 
   // Mode flip wipes mode-specific state but preserves slot identity ----------
   const flipMode = (setSlot, setWant, mode) => {
-    if (mode === 'live') setWant(false);
+    setWant(false);   // always reset connect-intent on mode change
     setSlot(s => ({
       ...initialSlot(),
       mode,
