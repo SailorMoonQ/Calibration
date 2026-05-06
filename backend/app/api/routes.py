@@ -868,22 +868,25 @@ async def recording_sync(body: dict) -> dict:
 
 @router.post("/calibrate/handeye_pose")
 async def calibrate_handeye_pose(body: dict) -> CalibrationResult:
-    """Solve T_vive_umi from a synced JSON file (Task 5 output).
-    Body: { synced_path, method = "daniilidis" }.
+    """Solve the rigid link X between two synced pose streams.
+    Body: { synced_path, method = "daniilidis", pattern = "eye_in_hand" }.
     """
     from app.calib.handeye_pose import solve_handeye_pose
 
     synced_path = body.get("synced_path")
     method = (body.get("method") or "daniilidis").lower()
+    pattern = (body.get("pattern") or "eye_in_hand").lower()
     if not (synced_path and os.path.isfile(synced_path)):
         raise HTTPException(status_code=404, detail="synced_path not found")
     if method not in ("tsai", "park", "horaud", "andreff", "daniilidis"):
         raise HTTPException(status_code=400, detail=f"unknown method: {method}")
+    if pattern not in ("eye_in_hand", "eye_to_hand"):
+        raise HTTPException(status_code=400, detail=f"unknown pattern: {pattern}")
 
     with open(synced_path) as f:
         data = json.load(f)
     pairs = data.get("samples") or []
-    return solve_handeye_pose(pairs, method=method)
+    return solve_handeye_pose(pairs, method=method, pattern=pattern)
 
 
 @router.get("/recording/list_topics")

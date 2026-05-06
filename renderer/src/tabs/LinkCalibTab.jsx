@@ -41,6 +41,7 @@ export function LinkCalibTab() {
   const [syncPath, setSyncPath] = useState('');
   const [syncDiag, setSyncDiag] = useState(null);
   const [solveMethod, setSolveMethod] = useState('daniilidis');
+  const [solvePattern, setSolvePattern] = useState('eye_in_hand');  // 'eye_in_hand' | 'eye_to_hand'
   const [tickCount, setTickCount] = useState(0);
   const [poseStats] = useState(null);
   useReportPoses(poseStats);
@@ -187,12 +188,14 @@ export function LinkCalibTab() {
     if (!syncPath) { setStatus('sync first'); return; }
     setBusy(true); setStatus('solving handeye…');
     try {
-      const r = await recording.calibrateHandeyePose({ synced_path: syncPath, method: solveMethod });
+      const r = await recording.calibrateHandeyePose({
+        synced_path: syncPath, method: solveMethod, pattern: solvePattern,
+      });
       setResult(r);
       setStatus(r.ok ? `T_${linkLabel} · rms ${r.rms.toFixed(3)}° · ${r.message}` : `failed: ${r.message}`);
     } catch (e) { setStatus(`solve failed: ${e.message}`); }
     finally { setBusy(false); }
-  }, [syncPath, solveMethod, linkLabel]);
+  }, [syncPath, solveMethod, solvePattern, linkLabel]);
 
   const onSaveYaml = useCallback(async () => {
     if (!result?.ok) { setStatus('nothing to save — run solve first'); return; }
@@ -322,6 +325,12 @@ export function LinkCalibTab() {
           </Section>
 
           <Section title="Solve" hint={solveGate ? 'gated' : 'ready'}>
+            <Field label="pattern">
+              <Seg value={solvePattern} onChange={setSolvePattern} full options={[
+                {value:'eye_in_hand', label:'eye-in-hand'},
+                {value:'eye_to_hand', label:'eye-to-hand'},
+              ]}/>
+            </Field>
             <Field label="method">
               <select className="select" value={solveMethod}
                       onChange={e => setSolveMethod(e.target.value)}>
