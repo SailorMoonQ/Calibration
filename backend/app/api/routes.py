@@ -7,23 +7,33 @@ import os
 import platform
 import struct
 import time
+
 import cv2
+import numpy as np
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, Response, StreamingResponse
-import numpy as np
 
+from app import __version__
+from app.calib import _io, chain, extrinsics, fisheye, handeye, intrinsics
+from app.models import (
+    Board,
+    CalibrationLoadResponse,
+    CalibrationResult,
+    CalibrationSavePayload,
+    ChainRequest,
+    DatasetListResponse,
+    DetectFileRequest,
+    DetectRequest,
+    DetectResponse,
+    ExtrinsicsRequest,
+    FisheyeRequest,
+    HandEyeRequest,
+    IntrinsicsRequest,
+    LinkRequest,
+)
 from app.sources import manager as source_manager
 from app.sources import opencv as opencv_source
 from app.sources import ros2_context
-
-from app import __version__
-from app.models import (
-    Board, DetectRequest, DetectFileRequest, DetectResponse,
-    IntrinsicsRequest, FisheyeRequest, ExtrinsicsRequest,
-    HandEyeRequest, ChainRequest, LinkRequest, CalibrationResult, DatasetListResponse,
-    CalibrationSavePayload, CalibrationLoadResponse,
-)
-from app.calib import intrinsics, fisheye, extrinsics, handeye, chain, _io
 from app.utils import yaml_io
 
 log = logging.getLogger("calib.api")
@@ -56,7 +66,7 @@ async def stream_ros2_topics() -> dict:
     try:
         topics = ros2_context.list_compressed_image_topics()
     except RuntimeError as e:
-        raise HTTPException(status_code=503, detail=str(e))
+        raise HTTPException(status_code=503, detail=str(e)) from e
     return {"topics": topics}
 
 
@@ -68,7 +78,7 @@ async def stream_info(device: str) -> dict:
     try:
         src = source_manager.get(device)
     except RuntimeError as e:
-        raise HTTPException(status_code=503, detail=str(e))
+        raise HTTPException(status_code=503, detail=str(e)) from e
     try:
         src.wait_frame(timeout=2.0)
         return src.info()
@@ -104,12 +114,12 @@ async def stream_set_resolution(body: dict) -> dict:
     try:
         src = source_manager.get(device)
     except RuntimeError as e:
-        raise HTTPException(status_code=503, detail=str(e))
+        raise HTTPException(status_code=503, detail=str(e)) from e
     try:
         try:
             src.set_resolution(width, height)
         except ValueError as e:
-            raise HTTPException(status_code=400, detail=str(e))
+            raise HTTPException(status_code=400, detail=str(e)) from e
         src.wait_frame(timeout=2.0)
         return src.info()
     finally:
@@ -133,7 +143,7 @@ async def stream_set_clip(body: dict) -> dict:
     try:
         src = source_manager.get(device)
     except RuntimeError as e:
-        raise HTTPException(status_code=503, detail=str(e))
+        raise HTTPException(status_code=503, detail=str(e)) from e
     try:
         src.set_clip(width, height)
         src.wait_frame(timeout=2.0)
@@ -244,7 +254,7 @@ async def stream_mjpeg_rect(
                 )
     except cv2.error as e:
         source_manager.release(device)
-        raise HTTPException(status_code=400, detail=f"rectify init failed: {e}")
+        raise HTTPException(status_code=400, detail=f"rectify init failed: {e}") from e
 
     boundary = b"--frame"
     min_interval = 1.0 / max(1, fps)
@@ -433,7 +443,7 @@ async def dataset_delete(body: dict):
             dest = os.path.join(trash_dir, f"{stem}_{int(time.time() * 1000)}{suf}")
         os.rename(path, dest)
     except OSError as e:
-        raise HTTPException(status_code=500, detail=f"delete failed: {e}")
+        raise HTTPException(status_code=500, detail=f"delete failed: {e}") from e
     return {"ok": True, "path": path, "trash_path": dest}
 
 
@@ -456,7 +466,7 @@ async def dataset_restore(body: dict):
         os.makedirs(os.path.dirname(original), exist_ok=True)
         os.rename(trash_path, original)
     except OSError as e:
-        raise HTTPException(status_code=500, detail=f"restore failed: {e}")
+        raise HTTPException(status_code=500, detail=f"restore failed: {e}") from e
     return {"ok": True, "path": original}
 
 
@@ -479,7 +489,7 @@ async def dataset_rectified(body: dict):
         K = np.array(body["K"], dtype=np.float64)
         D = np.array(body["D"], dtype=np.float64).reshape(-1, 1)
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"bad K/D: {e}")
+        raise HTTPException(status_code=400, detail=f"bad K/D: {e}") from e
     model = (body.get("model") or "fisheye").lower()
     if model not in ("fisheye", "pinhole"):
         raise HTTPException(status_code=400, detail=f"unknown model: {model}")
@@ -515,7 +525,7 @@ async def dataset_rectified(body: dict):
                 )
             rect = cv2.remap(img, map1, map2, interpolation=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT)
     except cv2.error as e:
-        raise HTTPException(status_code=500, detail=f"rectify failed: {e}")
+        raise HTTPException(status_code=500, detail=f"rectify failed: {e}") from e
 
     ok, buf = cv2.imencode(".jpg", rect, [cv2.IMWRITE_JPEG_QUALITY, 85])
     if not ok:
@@ -611,7 +621,7 @@ async def recording_save(body: dict) -> dict:
         with open(path, "w") as f:
             json.dump(out, f)
     except OSError as e:
-        raise HTTPException(status_code=500, detail=f"write failed: {e}")
+        raise HTTPException(status_code=500, detail=f"write failed: {e}") from e
     return {"ok": True, "path": path, "n": len(samples)}
 
 
@@ -632,7 +642,7 @@ async def handeye_append_pose(body: dict) -> dict:
     try:
         arr = np.array(T, dtype=np.float64)
     except Exception:
-        raise HTTPException(status_code=400, detail="T must be a numeric 4x4 array")
+        raise HTTPException(status_code=400, detail="T must be a numeric 4x4 array") from None
     if arr.shape != (4, 4):
         raise HTTPException(status_code=400, detail=f"T must be 4x4, got {arr.shape}")
 
@@ -641,12 +651,12 @@ async def handeye_append_pose(body: dict) -> dict:
 
     if os.path.exists(poses_path):
         try:
-            with open(poses_path, "r") as f:
+            with open(poses_path) as f:
                 poses_doc = json.load(f)
             if not isinstance(poses_doc, dict):
                 raise ValueError("poses.json root must be a dict")
         except (OSError, ValueError, json.JSONDecodeError) as e:
-            raise HTTPException(status_code=500, detail=f"read failed: {e}")
+            raise HTTPException(status_code=500, detail=f"read failed: {e}") from e
     else:
         poses_doc = {}
 
@@ -658,7 +668,7 @@ async def handeye_append_pose(body: dict) -> dict:
         try:
             entry["ts"] = float(ts)
         except (TypeError, ValueError):
-            raise HTTPException(status_code=400, detail="ts must be numeric")
+            raise HTTPException(status_code=400, detail="ts must be numeric") from None
     poses_doc[basename] = entry
 
     tmp = poses_path + ".tmp"
@@ -667,15 +677,17 @@ async def handeye_append_pose(body: dict) -> dict:
             json.dump(poses_doc, f, indent=2)
         os.replace(tmp, poses_path)
     except OSError as e:
-        try: os.remove(tmp)
-        except OSError: pass
-        raise HTTPException(status_code=500, detail=f"poses.json write failed: {e}")
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        raise HTTPException(status_code=500, detail=f"poses.json write failed: {e}") from e
 
     # poses.meta.json — first-write captures source/device/kind, n updated each call.
     meta_path = os.path.join(out_dir, "poses.meta.json")
     if os.path.exists(meta_path):
         try:
-            with open(meta_path, "r") as f:
+            with open(meta_path) as f:
                 meta_doc = json.load(f)
         except (OSError, json.JSONDecodeError):
             meta_doc = {}
@@ -694,9 +706,11 @@ async def handeye_append_pose(body: dict) -> dict:
             json.dump(meta_doc, f, indent=2)
         os.replace(meta_tmp, meta_path)
     except OSError as e:
-        try: os.remove(meta_tmp)
-        except OSError: pass
-        raise HTTPException(status_code=500, detail=f"poses.meta.json write failed: {e}")
+        try:
+            os.remove(meta_tmp)
+        except OSError:
+            pass
+        raise HTTPException(status_code=500, detail=f"poses.meta.json write failed: {e}") from e
 
     return {"ok": True, "n": len(poses_doc), "poses_path": poses_path, "meta_path": meta_path}
 
@@ -751,7 +765,7 @@ async def recording_import_mcap(body: dict) -> dict:
                 T[:3, 3] = [pb.pose.position.x, pb.pose.position.y, pb.pose.position.z]
                 samples.append({"ts": ts, "T": T.tolist()})
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"mcap read failed: {e}")
+        raise HTTPException(status_code=400, detail=f"mcap read failed: {e}") from e
 
     if n_seen == 0:
         raise HTTPException(status_code=400, detail=f"no messages found on topic {topic!r}")
@@ -775,7 +789,7 @@ async def recording_import_mcap(body: dict) -> dict:
         with open(out_path, "w") as f:
             json.dump(out, f)
     except OSError as e:
-        raise HTTPException(status_code=500, detail=f"write failed: {e}")
+        raise HTTPException(status_code=500, detail=f"write failed: {e}") from e
 
     return {
         "ok": True,
@@ -833,7 +847,7 @@ async def recording_sync(body: dict) -> dict:
         with open(out_path, "w") as f:
             json.dump(out, f)
     except OSError as e:
-        raise HTTPException(status_code=500, detail=f"write failed: {e}")
+        raise HTTPException(status_code=500, detail=f"write failed: {e}") from e
 
     return {
         "ok": True,
@@ -894,8 +908,82 @@ async def recording_list_topics(mcap_path: str) -> dict:
             ]
             topics.sort(key=lambda t: -t["n"])
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"mcap read failed: {e}")
+        raise HTTPException(status_code=400, detail=f"mcap read failed: {e}") from e
     return {"topics": topics}
+
+
+@router.post("/recording/import_file")
+async def recording_import_file(body: dict) -> dict:
+    """Normalize a json or yaml pose recording into the canonical on-disk shape.
+
+    Body: { path, format = "json" | "yaml" }.
+    Returns { ok, path, count, t_first, t_last, device? }.
+    """
+    src_path = body.get("path")
+    fmt = (body.get("format") or "").lower()
+    if not src_path or not os.path.isfile(src_path):
+        raise HTTPException(status_code=404, detail="path not found")
+    if fmt not in ("json", "yaml"):
+        raise HTTPException(status_code=400, detail=f"unknown format: {fmt!r}")
+
+    try:
+        if fmt == "json":
+            with open(src_path) as f:
+                data = json.load(f)
+        else:
+            from ruamel.yaml import YAML
+            _y = YAML(typ="safe", pure=True)
+            with open(src_path) as f:
+                data = _y.load(f) or {}
+    except (OSError, ValueError) as e:
+        raise HTTPException(status_code=400, detail=f"read failed: {e}") from e
+
+    if not isinstance(data, dict) or "samples" not in data:
+        raise HTTPException(status_code=400, detail="invalid recording: missing 'samples'")
+    samples = data["samples"]
+    if not isinstance(samples, list) or not samples:
+        raise HTTPException(status_code=400, detail="invalid recording: 'samples' must be non-empty list")
+    for i, s in enumerate(samples):
+        if not isinstance(s, dict) or "ts" not in s or "T" not in s:
+            raise HTTPException(status_code=400, detail=f"sample[{i}] missing 'ts' or 'T'")
+        if not isinstance(s["ts"], (int, float)):
+            raise HTTPException(status_code=400, detail=f"sample[{i}].ts is not numeric")
+        T = s["T"]
+        if (not isinstance(T, list) or len(T) != 4
+                or any(not isinstance(row, list) or len(row) != 4 for row in T)):
+            raise HTTPException(status_code=400, detail=f"sample[{i}].T is not 4x4")
+
+    meta = data.get("meta") or {}
+    device = meta.get("device") if isinstance(meta, dict) else None
+    t_first = float(samples[0]["ts"])
+    t_last = float(samples[-1]["ts"])
+
+    if fmt == "json":
+        out_path = src_path
+    else:
+        # YAML inputs are normalized to a sibling .json so the rest of the pipeline
+        # (sync, solve) reads JSON only — same approach the mcap importer uses.
+        base, _ = os.path.splitext(src_path)
+        out_path = base + ".normalized.json"
+        out_doc = {
+            "meta": {**meta, "kind": meta.get("kind") or "imported", "n": len(samples),
+                     "t_first": t_first, "t_last": t_last},
+            "samples": samples,
+        }
+        try:
+            with open(out_path, "w") as f:
+                json.dump(out_doc, f)
+        except OSError as e:
+            raise HTTPException(status_code=500, detail=f"write failed: {e}") from e
+
+    return {
+        "ok": True,
+        "path": out_path,
+        "count": len(samples),
+        "t_first": t_first,
+        "t_last": t_last,
+        "device": device,
+    }
 
 
 @router.websocket("/stream")
@@ -917,8 +1005,8 @@ async def stream(ws: WebSocket) -> None:
 # sample independently, so the merged tick conflates up to ~one period of skew
 # between them — acceptable for slow rigid-body calibration.
 
-from app.sources.poses import PoseSource
-from app.sources.poses import manager as pose_manager
+from app.sources.poses import PoseSource  # noqa: E402
+from app.sources.poses import manager as pose_manager  # noqa: E402
 
 
 def _parse_sources(sources: str) -> list[str]:
