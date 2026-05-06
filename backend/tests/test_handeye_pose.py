@@ -4,7 +4,6 @@ from __future__ import annotations
 import math
 
 import numpy as np
-import pytest
 
 from app.calib.handeye_pose import solve_handeye_pose
 
@@ -60,3 +59,57 @@ def test_solve_handeye_pose_too_few_pairs():
     pairs = _build_synced_from_truth(np.eye(4), n=2)
     res = solve_handeye_pose(pairs, method="daniilidis")
     assert res.ok is False
+
+
+def _build_synced_eth_from_truth(X_true: np.ndarray, n: int = 60, seed: int = 11) -> list[dict]:
+    """eye-to-hand truth model in this codebase's convention.
+    T_vive = T_g2b (varying), T_umi = T_cam_to_target = inv(T_target_to_cam) (varying).
+    X_true = T_cam_to_base. Y = T_target_to_gripper (constant).
+    Physical chain: target_in_base = T_g2b · Y = X · T_target_to_cam = X · inv(T_umi),
+    so T_umi = inv(Y) · inv(T_vive) · X.
+    """
+    rng = np.random.default_rng(seed)
+    Y = _T(_rotmat([0.4, -0.6, 0.7], 0.5), [0.05, 0.1, -0.03])
+    Yinv = np.linalg.inv(Y)
+    pairs = []
+    for i in range(n):
+        ax = rng.normal(size=3)
+        ang = rng.uniform(-2.5, 2.5)
+        t = rng.uniform(-1.0, 1.0, size=3)
+        T_vive = _T(_rotmat(ax, ang), t)
+        T_umi = Yinv @ np.linalg.inv(T_vive) @ X_true
+        pairs.append({"ts": float(i), "T_vive": T_vive.tolist(), "T_umi": T_umi.tolist()})
+    return pairs
+
+
+def test_solve_handeye_pose_eye_to_hand_recovers_truth():
+    X_true = _T(_rotmat([0.6, 0.4, -0.5], 0.3), [0.20, -0.05, 0.08])
+    pairs = _build_synced_eth_from_truth(X_true, n=60)
+    res = solve_handeye_pose(pairs, method="daniilidis", pattern="eye_to_hand")
+    assert res.ok is True
+    X = np.array(res.T)
+    R_err = X[:3, :3].T @ X_true[:3, :3]
+    cos_ang = float(np.clip((np.trace(R_err) - 1) / 2, -1, 1))
+    ang_deg = math.degrees(math.acos(cos_ang))
+    t_err_mm = 1000.0 * np.linalg.norm(X[:3, 3] - X_true[:3, 3])
+    assert ang_deg < 0.5, f"rotation error {ang_deg:.3f}° too large"
+    assert t_err_mm < 1.0, f"translation error {t_err_mm:.3f} mm too large"
+
+
+def test_solve_handeye_pose_default_is_eye_in_hand():
+    """Default pattern must remain eye-in-hand for backward compatibility."""
+    X_true = _T(_rotmat([1.0, 0.5, -0.3], 0.4), [0.07, -0.03, 0.12])
+    pairs = _build_synced_from_truth(X_true, n=60)
+    res = solve_handeye_pose(pairs, method="daniilidis")  # no pattern arg
+    assert res.ok is True
+    X = np.array(res.T)
+    R_err = X[:3, :3].T @ X_true[:3, :3]
+    ang_deg = math.degrees(math.acos(float(np.clip((np.trace(R_err) - 1) / 2, -1, 1))))
+    assert ang_deg < 0.5
+
+
+def test_solve_handeye_pose_unknown_pattern_returns_failure():
+    pairs = _build_synced_from_truth(np.eye(4), n=10)
+    res = solve_handeye_pose(pairs, method="daniilidis", pattern="bogus")
+    assert res.ok is False
+    assert "pattern" in res.message.lower()

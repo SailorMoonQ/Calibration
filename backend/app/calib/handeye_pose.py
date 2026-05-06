@@ -33,11 +33,23 @@ def _split_inv(Ts: list[np.ndarray]) -> tuple[list[np.ndarray], list[np.ndarray]
     return R, t
 
 
+_PATTERNS = ("eye_in_hand", "eye_to_hand")
+
+
 def _per_pair_residuals(
-    T_vive_list: list[np.ndarray], T_umi_list: list[np.ndarray], X: np.ndarray,
+    T_vive_list: list[np.ndarray], T_umi_list: list[np.ndarray], X: np.ndarray, pattern: str,
 ) -> tuple[list[float], list[float]]:
-    Xinv = np.linalg.inv(X)
-    Ws = [T_u @ Xinv @ np.linalg.inv(T_v) for T_v, T_u in zip(T_vive_list, T_umi_list)]
+    # eye-in-hand model: T_umi = W · T_vive · X  → invariant W = T_umi · X⁻¹ · T_vive⁻¹
+    # eye-to-hand model (T_vive_list already inverted to b2g at solver entry):
+    #   original T_umi = inv(Y) · inv(T_vive_orig) · X, with T_v = T_vive_orig⁻¹ here
+    #   ⇒ Y = T_v · X · T_umi⁻¹ (invariant per pair)
+    if pattern == "eye_in_hand":
+        Xinv = np.linalg.inv(X)
+        Ws = [T_u @ Xinv @ np.linalg.inv(T_v)
+              for T_v, T_u in zip(T_vive_list, T_umi_list, strict=False)]
+    else:
+        Ws = [T_v @ X @ np.linalg.inv(T_u)
+              for T_v, T_u in zip(T_vive_list, T_umi_list, strict=False)]
     Rs = np.array([W[:3, :3] for W in Ws])
     ts = np.array([W[:3, 3] for W in Ws])
     R_med = Rs.mean(axis=0)
@@ -56,7 +68,14 @@ def _per_pair_residuals(
     return angs, pos_mm
 
 
-def solve_handeye_pose(pairs: list[dict], method: str = "daniilidis") -> CalibrationResult:
+def solve_handeye_pose(
+    pairs: list[dict], method: str = "daniilidis", pattern: str = "eye_in_hand",
+) -> CalibrationResult:
+    if pattern not in _PATTERNS:
+        return CalibrationResult(
+            ok=False, rms=0.0,
+            message=f"unknown pattern {pattern!r} (expected one of {_PATTERNS})",
+        )
     flag = _METHOD_FLAGS.get(method, cv2.CALIB_HAND_EYE_DANIILIDIS)
     if len(pairs) < 5:
         return CalibrationResult(
@@ -65,11 +84,12 @@ def solve_handeye_pose(pairs: list[dict], method: str = "daniilidis") -> Calibra
         )
     T_vive = [np.asarray(p["T_vive"], dtype=np.float64) for p in pairs]
     T_umi = [np.asarray(p["T_umi"], dtype=np.float64) for p in pairs]
-    # cv2.calibrateHandEye(R_gripper2base, t_gripper2base, R_target2cam, t_target2cam)
-    # solves AX = XB and returns X = T_cam2gripper.
-    # Our data satisfies: T_umi = W @ T_vive @ X_true.
-    # Mapping: vive → gripper2base, inv(T_umi) → target2cam.
-    # Under this mapping cv2 returns X_true directly.
+    # eye-in-hand:  cv2 expects (R_g2b, R_t2c) → returns X = T_cam_to_gripper.
+    # eye-to-hand:  cv2 expects (R_b2g, R_t2c) → returns X = T_cam_to_base.
+    # We invert T_vive at entry for eye-to-hand; downstream code (cv2 call,
+    # residuals) then operates on the inverted stream uniformly.
+    if pattern == "eye_to_hand":
+        T_vive = [np.linalg.inv(T) for T in T_vive]
     R_v, t_v = _split(T_vive)
     R_u_inv, t_u_inv = _split_inv(T_umi)
     try:
@@ -80,11 +100,11 @@ def solve_handeye_pose(pairs: list[dict], method: str = "daniilidis") -> Calibra
     X[:3, :3] = R_X
     X[:3, 3] = t_X.ravel()
 
-    angs, pos_mm = _per_pair_residuals(T_vive, T_umi, X)
+    angs, pos_mm = _per_pair_residuals(T_vive, T_umi, X, pattern)
     rms_deg = float(np.sqrt(np.mean(np.square(angs))))
     log.info(
-        "handeye_pose: %d pairs · rms %.3f° · pos rms %.2f mm (%s)",
-        len(pairs), rms_deg, float(np.sqrt(np.mean(np.square(pos_mm)))), method,
+        "handeye_pose: %d pairs · rms %.3f° · pos rms %.2f mm (%s/%s)",
+        len(pairs), rms_deg, float(np.sqrt(np.mean(np.square(pos_mm)))), method, pattern,
     )
     return CalibrationResult(
         ok=True,
@@ -93,5 +113,5 @@ def solve_handeye_pose(pairs: list[dict], method: str = "daniilidis") -> Calibra
         per_frame_err=angs,
         iterations=0,
         final_cost=rms_deg ** 2 * len(pairs),
-        message=f"{method}: {len(pairs)} pairs · pos rms {float(np.sqrt(np.mean(np.square(pos_mm)))):.2f} mm",
+        message=f"{method}/{pattern}: {len(pairs)} pairs · pos rms {float(np.sqrt(np.mean(np.square(pos_mm)))):.2f} mm",
     )
