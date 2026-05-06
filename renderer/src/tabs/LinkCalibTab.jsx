@@ -7,7 +7,7 @@ import { ErrorPanel, SolverPanel } from '../components/panels.jsx';
 import { applyT, invT } from '../lib/math3d.js';
 import { api, pickSaveFile, pickOpenFile, recording } from '../api/client.js';
 import { useReportPoses } from '../lib/telemetry.jsx';
-import { initialSlot, slotReady, useSlotWs } from './_linkSlot.js';
+import { initialSlot, slotReady, slotPath, useSlotWs } from './_linkSlot.js';
 
 
 const TRAJ_DECIMATE_AT = 600;
@@ -163,20 +163,71 @@ export function LinkCalibTab() {
     }));
   };
 
-  // Solve gating + Sync/Solve handlers wired in Task 7. Stubs for now:
   const onSync = useCallback(async () => {
-    setStatus('TODO: sync — implemented in Task 7');
-  }, []);
+    const a = slotPath(slotA);
+    const b = slotPath(slotB);
+    if (!a || !b) { setStatus('both slots must be ready'); return; }
+    const out_path = await pickSaveFile({ defaultPath: `synced_${linkLabel}.json` });
+    if (!out_path) return;
+    setStatus('syncing…');
+    try {
+      const r = await recording.sync({ a_path: a, b_path: b, out_path });
+      setSyncPath(r.path);
+      setSyncDiag({
+        delta_t: r.delta_t,
+        n_pairs: r.n_pairs,
+        a_rot_deg: r.a_rot_deg ?? r.vive_rot_deg,
+        b_rot_deg: r.b_rot_deg ?? r.umi_rot_deg,
+      });
+      setStatus(`synced · Δt ${r.delta_t.toFixed(3)}s · ${r.n_pairs} pairs`);
+    } catch (e) { setStatus(`sync failed: ${e.message}`); }
+  }, [slotA, slotB, linkLabel]);
+
   const onSolve = useCallback(async () => {
-    setStatus('TODO: solve — implemented in Task 7');
-  }, []);
+    if (!syncPath) { setStatus('sync first'); return; }
+    setBusy(true); setStatus('solving handeye…');
+    try {
+      const r = await recording.calibrateHandeyePose({ synced_path: syncPath, method: solveMethod });
+      setResult(r);
+      setStatus(r.ok ? `T_${linkLabel} · rms ${r.rms.toFixed(3)}° · ${r.message}` : `failed: ${r.message}`);
+    } catch (e) { setStatus(`solve failed: ${e.message}`); }
+    finally { setBusy(false); }
+  }, [syncPath, solveMethod, linkLabel]);
+
   const onSaveYaml = useCallback(async () => {
-    setStatus('TODO: save yaml — implemented in Task 7');
-  }, []);
+    if (!result?.ok) { setStatus('nothing to save — run solve first'); return; }
+    const p = await pickSaveFile({ defaultPath: `link_${linkLabel}.yaml` });
+    if (!p) return;
+    try {
+      await api.saveCalibration({ path: p, kind: 'chain', result });
+      setStatus(`saved → ${p}`);
+    } catch (e) { setStatus(`save failed: ${e.message}`); }
+  }, [result, linkLabel]);
+
   const onLoadYaml = useCallback(async () => {
-    setStatus('TODO: load yaml — implemented in Task 7');
+    const p = await pickOpenFile({});
+    if (!p) return;
+    try {
+      const resp = await api.loadCalibration(p);
+      const d = resp.data || {};
+      setResult({
+        ok: true, rms: d.rms ?? 0,
+        T: d.T || null,
+        per_frame_err: d.frames?.per_frame_err || [],
+        per_frame_residuals: [], detected_paths: [],
+        iterations: 0, final_cost: 0, message: `loaded from ${p}`,
+      });
+      setStatus(`loaded ← ${p}`);
+    } catch (e) { setStatus(`load failed: ${e.message}`); }
   }, []);
-  const solveGate = !syncDiag ? 'run sync first' : null;
+
+  const solveGate = (() => {
+    if (!syncDiag) return 'run sync first';
+    if (syncDiag.n_pairs < 50) return `only ${syncDiag.n_pairs} pairs (need ≥ 50)`;
+    if (syncDiag.a_rot_deg < 30) return `A rotation diversity too low: ${syncDiag.a_rot_deg.toFixed(1)}°`;
+    if (syncDiag.b_rot_deg < 30) return `B rotation diversity too low: ${syncDiag.b_rot_deg.toFixed(1)}°`;
+    return null;
+  })();
 
   // Viewport data ------------------------------------------------------------
   const vizA = useMemo(() => {
