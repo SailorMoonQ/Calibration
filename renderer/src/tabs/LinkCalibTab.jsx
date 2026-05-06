@@ -223,7 +223,6 @@ export function LinkCalibTab() {
 
   const solveGate = (() => {
     if (!syncDiag) return 'run sync first';
-    if (syncDiag.n_pairs < 50) return `only ${syncDiag.n_pairs} pairs (need ≥ 50)`;
     if (syncDiag.a_rot_deg < 30) return `A rotation diversity too low: ${syncDiag.a_rot_deg.toFixed(1)}°`;
     if (syncDiag.b_rot_deg < 30) return `B rotation diversity too low: ${syncDiag.b_rot_deg.toFixed(1)}°`;
     return null;
@@ -282,7 +281,7 @@ export function LinkCalibTab() {
         <div className="rail-scroll">
           <SlotCard
             label="A" slot={slotA} setSlot={setSlotA}
-            wantConnected={wantA} setWantConnected={setWantA}
+            setWantConnected={setWantA}
             buf={slotsBufA}
             onStartRec={() => startRec(slotA, setSlotA, slotsBufA)}
             onStopRec={() => stopAndSaveRec(slotA, setSlotA, slotsBufA, 'A')}
@@ -292,7 +291,7 @@ export function LinkCalibTab() {
           />
           <SlotCard
             label="B" slot={slotB} setSlot={setSlotB}
-            wantConnected={wantB} setWantConnected={setWantB}
+            setWantConnected={setWantB}
             buf={slotsBufB}
             onStartRec={() => startRec(slotB, setSlotB, slotsBufB)}
             onStopRec={() => stopAndSaveRec(slotB, setSlotB, slotsBufB, 'B')}
@@ -434,7 +433,7 @@ export function LinkCalibTab() {
 // SlotCard — one card per source slot.
 
 function SlotCard({
-  label, slot, setSlot, wantConnected, setWantConnected, buf,
+  label, slot, setSlot, setWantConnected, buf,
   onStartRec, onStopRec, onImportFile, onImportMcapTopic, onFlipMode,
 }) {
   const ready = slotReady(slot);
