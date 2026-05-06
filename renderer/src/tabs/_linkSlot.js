@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from 'react';
+import { useEffect, useRef } from 'react';
 import { posesWsUrl } from '../api/client.js';
 
 export const initialSlot = (overrides = {}) => ({
@@ -47,20 +47,27 @@ export function slotPath(s) {
  */
 export function useSlotWs({ slot, setSlot, wantConnected, onHello, onSample, onError }) {
   const wsRef = useRef(null);
-  const ticksRef = useRef({});       // { device: [{ts, present}] }
+  const ticksRef = useRef({});       // { device: [{ts, present}] } — reset on every `hello` to match the new device list
   const recordingActiveRef = useRef(false);
 
-  const close = useCallback(() => {
-    if (wsRef.current) { try { wsRef.current.close(); } catch { /* swallow */ } }
-    wsRef.current = null;
-  }, []);
+  // Latest-ref pattern: keep callback refs current so the long-lived WS handlers
+  // never see stale closures when the parent re-renders with new function identities.
+  const onHelloRef = useRef(onHello);
+  const onSampleRef = useRef(onSample);
+  const onErrorRef = useRef(onError);
+  useEffect(() => {
+    onHelloRef.current = onHello;
+    onSampleRef.current = onSample;
+    onErrorRef.current = onError;
+  });
 
   useEffect(() => {
     if (slot.mode !== 'live' || !wantConnected) {
-      close();
+      if (wsRef.current) { try { wsRef.current.close(); } catch { /* swallow */ } wsRef.current = null; }
       return;
     }
     let cancelled = false;
+    let localWs = null;
     (async () => {
       try {
         const url = await posesWsUrl({
@@ -70,14 +77,16 @@ export function useSlotWs({ slot, setSlot, wantConnected, onHello, onSample, onE
         });
         if (cancelled) return;
         const ws = new WebSocket(url);
+        localWs = ws;
         wsRef.current = ws;
-        ws.onopen = () => setSlot(s => ({ ...s, connected: true }));
+        ws.onopen = () => { if (!cancelled) setSlot(s => ({ ...s, connected: true })); };
         ws.onclose = () => {
+          if (cancelled) return;  // cleanup already fired; ignore the deferred close
           setSlot(s => ({ ...s, connected: false, recording: false }));
           recordingActiveRef.current = false;
           wsRef.current = null;
         };
-        ws.onerror = () => onError?.('ws error');
+        ws.onerror = () => onErrorRef.current?.('ws error');
         ws.onmessage = (ev) => {
           let m; try { m = JSON.parse(ev.data); } catch { return; }
           if (m.type === 'hello') {
@@ -88,19 +97,24 @@ export function useSlotWs({ slot, setSlot, wantConnected, onHello, onSample, onE
               device: s.device && devices.includes(s.device) ? s.device : (devices[0] ?? null),
             }));
             ticksRef.current = Object.fromEntries(devices.map(d => [d, []]));
-            onHello?.(m);
+            onHelloRef.current?.(m);
             return;
           }
-          if (m.type === 'error') { onError?.(`${m.source}: ${m.message}`); return; }
+          if (m.type === 'error') { onErrorRef.current?.(`${m.source}: ${m.message}`); return; }
           if (m.type !== 'sample') return;
-          onSample?.(m);
+          onSampleRef.current?.(m);
         };
       } catch (e) {
-        onError?.(`connect failed: ${e.message}`);
+        if (!cancelled) onErrorRef.current?.(`connect failed: ${e.message}`);
       }
     })();
-    return () => { cancelled = true; close(); };
-    // We deliberately depend on the connect-relevant slot fields only.
+    return () => {
+      cancelled = true;
+      if (localWs) { try { localWs.close(); } catch { /* swallow */ } }
+      if (wsRef.current === localWs) wsRef.current = null;
+    };
+    // Connect-relevant slot fields only — callbacks are accessed via refs above
+    // so they don't need to retrigger reconnects.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [slot.mode, slot.backend, slot.adbIp, slot.fps, wantConnected]);
 
