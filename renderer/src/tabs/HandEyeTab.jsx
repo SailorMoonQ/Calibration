@@ -1,0 +1,636 @@
+import { useState, useMemo, useEffect, useRef, useCallback } from 'react';
+import { Section, Seg, Chk, Field, Matrix, KV } from '../components/primitives.jsx';
+import { DetectedFrame } from '../components/DetectedFrame.jsx';
+import { LivePreview } from '../components/LivePreview.jsx';
+import { LiveDetectedFrame } from '../components/LiveDetectedFrame.jsx';
+import { Ros2TopicPicker } from '../components/Ros2TopicPicker.jsx';
+import { useCameraSource, CameraSourcePanel } from '../components/CameraSource.jsx';
+import {
+  Scene3D, Frustum3D, HMD3D, Controller3D, Chessboard3D, RigidLink3D,
+} from '../components/scene3d.jsx';
+import {
+  FrameStrip, ErrorPanel, TargetPanel,
+  CaptureControls, SolverButton, SolverPanel,
+} from '../components/panels.jsx';
+import { makeT, applyT, composeT } from '../lib/math3d.js';
+import { DEFAULT_BOARD } from '../lib/board.js';
+import { computeCoverage, cellIndexFor } from '../lib/coverage.js';
+import { api, pickFolder, pickSaveFile, pickOpenFile, openPath, posesWsUrl } from '../api/client.js';
+
+const basename = (p) => (p || '').split('/').pop();
+
+const TRACKER_SOURCES = [
+  { value: 'oculus',  label: 'Oculus Reader' },
+  { value: 'ros2',    label: 'ROS2 topic' },
+  { value: 'steamvr', label: 'SteamVR' },
+  { value: 'file',    label: 'JSON file' },
+];
+
+export function HandEyeTab({ solvePattern, setSolvePattern }) {
+  const [kind, setKind] = useState('hmd');
+  const isHMD = kind === 'hmd';
+  const trackerLabel = isHMD ? 'HMD' : 'controller';
+  const xmatLabel = isHMD ? 'T_hmd_cam' : 'T_ctrl_cam';
+  const TrackerGlyph = isHMD ? HMD3D : Controller3D;
+
+  const [board, setBoard] = useState(DEFAULT_BOARD);
+  const [method, setMethod] = useState('park');
+  const [showBoard, setShowBoard] = useState(true);
+
+  const [trackerSource, setTrackerSource] = useState('file');
+  const [oculusDevice, setOculusDevice] = useState('');
+  const [trackerRos2Topic, setTrackerRos2Topic] = useState('');
+  const [steamvrSerial, setSteamvrSerial] = useState('');
+
+  const [datasetPath, setDatasetPath] = useState('');
+  const [datasetFiles, setDatasetFiles] = useState([]);
+  const [posesPath, setPosesPath] = useState('');
+  const [camInt, setCamInt] = useState(null); // { K, D, path }
+
+  const [viewMode, setViewMode] = useState('live');
+
+  const [result, setResult] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [status, setStatus] = useState('');
+
+  // Live tracker stream (used to attach pose to each captured image).
+  const [connected, setConnected] = useState(false);
+  const [poseHz, setPoseHz] = useState(0);
+  const [poseStaleMs, setPoseStaleMs] = useState(null);
+  const [livePoseT, setLivePoseT] = useState(null);  // 4x4 reflected for the 3D scene
+  const wsRef = useRef(null);
+  const latestPoseRef = useRef(null);  // {ts, T, device}
+  const poseTickWindowRef = useRef([]); // last ~1s of wall_ts for fps calc
+
+  const trackerDeviceKey = () => {
+    if (trackerSource === 'oculus')  return oculusDevice || (kind === 'ctrl' ? 'controller_R' : 'hmd');
+    if (trackerSource === 'steamvr') return steamvrSerial || (kind === 'ctrl' ? 'controller_R' : 'tracker_0');
+    return null;
+  };
+
+  const onConnectTracker = useCallback(async () => {
+    if (wsRef.current) return;
+    if (trackerSource === 'file' || trackerSource === 'ros2') {
+      setStatus(`${trackerSource} not supported as a live recorder this iteration`);
+      return;
+    }
+    const device = trackerDeviceKey();
+    if (!device) { setStatus('pick a tracker device first'); return; }
+    setStatus('connecting tracker…');
+    try {
+      const url = await posesWsUrl({ fps: 30, sources: [trackerSource] });
+      const ws = new WebSocket(url);
+      wsRef.current = ws;
+      ws.onopen = () => { setConnected(true); setStatus(`tracker ws open · ${trackerSource}`); };
+      ws.onclose = () => {
+        setConnected(false);
+        wsRef.current = null;
+        latestPoseRef.current = null;
+        setPoseStaleMs(null);
+        setPoseHz(0);
+        setLivePoseT(null);
+      };
+      ws.onerror = () => setStatus('tracker ws error');
+      ws.onmessage = (ev) => {
+        let m; try { m = JSON.parse(ev.data); } catch { return; }
+        if (m.type === 'error') { setStatus(`${m.source} error: ${m.message}`); return; }
+        if (m.type !== 'sample' || !m.poses) return;
+        const T = m.poses[device];
+        if (!T) return;
+        const ts = (typeof m.wall_ts === 'number') ? m.wall_ts : (Date.now() / 1000);
+        latestPoseRef.current = { ts, T, device };
+        const win = poseTickWindowRef.current;
+        win.push(ts);
+        const cutoff = ts - 1.0;
+        while (win.length && win[0] < cutoff) win.shift();
+      };
+    } catch (e) { setStatus(`connect failed: ${e.message}`); }
+  }, [trackerSource, oculusDevice, steamvrSerial, kind]);
+
+  const onDisconnectTracker = useCallback(() => {
+    const ws = wsRef.current;
+    if (!ws) return;
+    try { ws.close(); } catch { /* swallow */ }
+    wsRef.current = null;
+    setConnected(false);
+    latestPoseRef.current = null;
+    setPoseStaleMs(null);
+    setPoseHz(0);
+    setLivePoseT(null);
+  }, []);
+
+  // Refresh staleness/fps readout twice a second from the ref-held buffer,
+  // and reflect the latest pose into React state at 10 Hz so the 3D scene
+  // animates smoothly without re-rendering on every WS tick.
+  useEffect(() => {
+    if (!connected) return;
+    const slow = setInterval(() => {
+      const lp = latestPoseRef.current;
+      if (lp) setPoseStaleMs(Math.max(0, Math.round((Date.now() / 1000 - lp.ts) * 1000)));
+      setPoseHz(poseTickWindowRef.current.length);
+    }, 500);
+    const fast = setInterval(() => {
+      const lp = latestPoseRef.current;
+      setLivePoseT(lp ? lp.T : null);
+    }, 100);
+    return () => { clearInterval(slow); clearInterval(fast); };
+  }, [connected]);
+
+  // Always disconnect on unmount.
+  useEffect(() => () => onDisconnectTracker(), [onDisconnectTracker]);
+
+  const [autoCapture, setAutoCapture] = useState(false);
+  const [autoCaptureRate, setAutoCaptureRate] = useState(0.5);  // seconds between snaps
+  const [recordedCount, setRecordedCount] = useState(0);
+
+  // Hold the latest onSnap in a ref so the auto-capture timer always calls
+  // through to the up-to-date closure without resubscribing on every state tick.
+  const onSnapRef = useRef(null);
+
+  // Coverage tracking. snappedCellsRef holds the grid cells that already
+  // contributed a frame this session — auto-capture skips frames whose
+  // board centre lands in a claimed cell so the user spreads the rig
+  // around the FOV instead of dwelling on one spot. Reset whenever the
+  // dataset folder changes (each session starts fresh).
+  const snappedCellsRef = useRef(new Set());
+  const lastAutoSnapRef = useRef(0);
+  const autoSnapInFlightRef = useRef(false);
+  useEffect(() => { snappedCellsRef.current = new Set(); }, [datasetPath]);
+
+  const errByPath = useMemo(() => {
+    if (!result?.ok) return null;
+    const m = new Map();
+    (result.detected_paths || []).forEach((name, i) => m.set(name, result.per_frame_err?.[i] ?? 0));
+    return m;
+  }, [result]);
+
+  const frames = useMemo(() => datasetFiles.map((p, i) => ({
+    id: i + 1, err: errByPath?.get(basename(p)) ?? 0, tx: 0, ty: 0, rot: 0,
+  })), [datasetFiles, errByPath]);
+  const [selected, setSelected] = useState(1);
+
+  const cam = useCameraSource({
+    pollEnabled: viewMode === 'live' || datasetFiles.length === 0,
+  });
+  const { liveDevice } = cam;
+
+  useEffect(() => {
+    if (!datasetPath) { setDatasetFiles([]); return; }
+    let cancelled = false;
+    api.listDataset(datasetPath).then(r => {
+      if (cancelled) return;
+      setDatasetFiles(r.files);
+      setSelected(1);
+      setStatus(`${r.count} images`);
+    }).catch(e => !cancelled && setStatus(`listing failed: ${e.message}`));
+    return () => { cancelled = true; };
+  }, [datasetPath]);
+
+  const boardPayload = () => ({
+    type: board.type, cols: board.cols, rows: board.rows,
+    square: board.sq, marker: board.marker ?? null, dictionary: 'DICT_5X5_100',
+  });
+
+  const onPickDataset = async () => {
+    const p = await pickFolder(datasetPath || undefined);
+    if (p) setDatasetPath(p);
+  };
+
+  const onPickPoses = async () => {
+    const p = await pickOpenFile({ filters: [{ name: 'JSON', extensions: ['json'] }] });
+    if (p) { setPosesPath(p); setStatus(`poses ← ${basename(p)}`); }
+  };
+
+  const onLoadIntrinsics = async () => {
+    const p = await pickOpenFile({});
+    if (!p) return;
+    try {
+      const resp = await api.loadCalibration(p);
+      const d = resp.data || {};
+      if (!d.K || !d.D) { setStatus(`${basename(p)}: no K/D in yaml`); return; }
+      setCamInt({ K: d.K, D: d.D, path: p });
+      setStatus(`intrinsics ← ${basename(p)}`);
+    } catch (e) { setStatus(`intrinsics load failed: ${e.message}`); }
+  };
+
+  const onSnap = async () => {
+    let dir = datasetPath;
+    if (!dir) {
+      const picked = await pickFolder();
+      if (!picked) { setStatus('pick a session folder before snapping'); return; }
+      setDatasetPath(picked); dir = picked;
+    }
+    if (!liveDevice) { setStatus('pick a camera first'); return; }
+
+    // Read pose snapshot BEFORE the snap so time skew is bounded by image-write
+    // latency, not the snap RPC round trip. lp may be null (image-only snap).
+    const lp = connected ? latestPoseRef.current : null;
+    if (connected) {
+      if (!lp) { setStatus('no pose yet — wait for tracker stream'); return; }
+      const ageMs = Math.round((Date.now() / 1000 - lp.ts) * 1000);
+      if (ageMs > 200) { setStatus(`pose stale (Δt = ${ageMs} ms) — check tracker`); return; }
+    }
+
+    let imagePath;
+    try {
+      const r = await api.snap(liveDevice, dir);
+      imagePath = r.path;
+    } catch (e) { setStatus(`snap failed: ${e.message}`); return; }
+
+    const fname = basename(imagePath);
+
+    if (lp) {
+      const posesPathLocal = `${dir}/poses.json`;
+      const meta = { tracker_source: trackerSource, device: lp.device, kind };
+      let appended = false;
+      for (let attempt = 0; attempt < 2 && !appended; attempt++) {
+        try {
+          const r = await api.appendHandeyePose({
+            poses_path: posesPathLocal, basename: fname, T: lp.T, ts: lp.ts, meta,
+          });
+          appended = true;
+          setRecordedCount(r.n);
+          if (posesPath !== posesPathLocal) setPosesPath(posesPathLocal);
+        } catch (e) {
+          if (attempt === 1) {
+            setStatus(`image saved, pose append failed: ${e.message}`);
+          }
+        }
+      }
+      if (appended) setStatus(`snapped+pose → ${fname}`);
+    } else {
+      setStatus(`snap (image only — connect tracker for pose) → ${fname}`);
+    }
+
+    if (dir === datasetPath) {
+      const ls = await api.listDataset(datasetPath);
+      setDatasetFiles(ls.files);
+      setSelected(ls.files.length);
+      // Stay in live view so the user keeps seeing the camera feed while
+      // recording — switching to 'frame' interrupts the workflow.
+    }
+  };
+  onSnapRef.current = onSnap;
+
+  // Auto-capture, cell-aware. LiveDetectedFrame fires onMeta on every
+  // detected tick; we snap only if (a) auto-capture is on, (b) we're
+  // outside the rate-limit window, (c) no snap is already in flight,
+  // (d) a tracker pose is fresh (handled inside onSnap), and (e) the
+  // board's centroid lands in a coverage cell we haven't claimed yet.
+  // This drives the user to fan out across the FOV — same UX the
+  // Intrinsics tab already uses.
+  const onAutoMeta = useCallback((meta) => {
+    if (!autoCapture || !liveDevice || !datasetPath) return;
+    const corners = meta?.corners;
+    const size = meta?.image_size;
+    if (!corners || corners.length < 4 || !size) return;
+    const now = performance.now();
+    if (now - lastAutoSnapRef.current < autoCaptureRate * 1000) return;
+    if (autoSnapInFlightRef.current) return;
+    let sx = 0, sy = 0;
+    for (const c of corners) { sx += c[0]; sy += c[1]; }
+    const cx = sx / corners.length, cy = sy / corners.length;
+    const idx = cellIndexFor(cx, cy, size);
+    if (idx == null) return;
+    if (snappedCellsRef.current.has(idx)) return;
+    autoSnapInFlightRef.current = true;
+    lastAutoSnapRef.current = now;
+    snappedCellsRef.current.add(idx);
+    (async () => {
+      try { await onSnapRef.current?.(); }
+      catch { snappedCellsRef.current.delete(idx); }
+      finally { autoSnapInFlightRef.current = false; }
+    })();
+  }, [autoCapture, autoCaptureRate, liveDevice, datasetPath]);
+
+  const onRun = async () => {
+    if (!datasetPath) { setStatus('pick a dataset folder'); return; }
+    if (trackerSource !== 'file') {
+      setStatus(`${trackerSource} live source not yet wired — pick JSON file source`);
+      return;
+    }
+    if (!posesPath) { setStatus('pick the tracker-poses JSON'); return; }
+    if (!camInt) { setStatus('load camera intrinsics YAML'); return; }
+    setBusy(true); setStatus('solving AX=XB…');
+    try {
+      const res = await api.calibrate('handeye', {
+        method, kind, pattern: solvePattern,
+        board: boardPayload(),
+        dataset_path: datasetPath,
+        poses_path: posesPath,
+        K: camInt.K, D: camInt.D,
+      });
+      setResult(res);
+      setStatus(res.ok
+        ? `rot ${res.rms.toFixed(3)}° · trans ${res.final_cost.toFixed(2)} mm · ${res.message}`
+        : `failed: ${res.message}`);
+    } catch (e) { setStatus(`error: ${e.message}`); } finally { setBusy(false); }
+  };
+
+  const onSaveYaml = async () => {
+    if (!result?.ok) { setStatus('nothing to save — run calibration first'); return; }
+    const p = await pickSaveFile({ defaultPath: `handeye_${kind}.yaml` });
+    if (!p) return;
+    try {
+      await api.saveCalibration({
+        path: p, kind: 'handeye',
+        result, board: boardPayload(), dataset_path: datasetPath || null,
+      });
+      setStatus(`saved → ${p}`);
+    } catch (e) { setStatus(`save failed: ${e.message}`); }
+  };
+
+  const onLoadYaml = async () => {
+    const p = await pickOpenFile({});
+    if (!p) return;
+    try {
+      const resp = await api.loadCalibration(p);
+      const d = resp.data || {};
+      setResult({
+        ok: true, rms: d.rms ?? 0,
+        K: d.K || null, D: d.D || [], T: d.T || null,
+        per_frame_err: d.frames?.per_frame_err || [],
+        per_frame_residuals: [], detected_paths: [],
+        iterations: 0, final_cost: 0, message: `loaded from ${p}`,
+      });
+      setStatus(`loaded ← ${p}`);
+    } catch (e) { setStatus(`load failed: ${e.message}`); }
+  };
+
+  const Tmat = result?.T ?? [
+    [1, 0, 0, 0],
+    [0, 1, 0, 0],
+    [0, 0, 1, 0],
+    [0, 0, 0, 1],
+  ];
+  const tVec = [Tmat[0][3], Tmat[1][3], Tmat[2][3]];
+  const tMm = tVec.map(v => v * 1000);
+  const tNorm = Math.hypot(...tMm);
+
+  const rpyDeg = (() => {
+    const R = [[Tmat[0][0], Tmat[0][1], Tmat[0][2]],
+               [Tmat[1][0], Tmat[1][1], Tmat[1][2]],
+               [Tmat[2][0], Tmat[2][1], Tmat[2][2]]];
+    const r = (v) => (v * 180) / Math.PI;
+    const sy = Math.hypot(R[0][0], R[1][0]);
+    if (sy < 1e-6) return [r(Math.atan2(-R[1][2], R[1][1])), r(Math.atan2(-R[2][0], sy)), 0];
+    return [r(Math.atan2(R[2][1], R[2][2])), r(Math.atan2(-R[2][0], sy)), r(Math.atan2(R[1][0], R[0][0]))];
+  })();
+
+  const histData = useMemo(() => result?.per_frame_err ?? [], [result]);
+
+  const rotRms = result?.ok ? result.rms : 0;
+  const transRms = result?.ok ? result.final_cost : 0;
+  const vpW = 900, vpH = 620;
+
+  // Coverage. Two sources, in order of preference:
+  //   1. After solve — derive from per_frame_residuals + image_size, the
+  //      authoritative "where on the sensor did detected boards actually
+  //      land" view. Same path Intrinsics uses.
+  //   2. During recording — fall back to the cells the live auto-capture
+  //      callback has already claimed, so the user sees the grid fill
+  //      out as they wave the rig around even before solving.
+  // `tickCount` bumps once per auto-snap so the no-solve fallback re-renders.
+  const [coverageTick, setCoverageTick] = useState(0);
+  useEffect(() => { setCoverageTick(t => t + 1); }, [recordedCount]);
+  const coverage = useMemo(() => {
+    const fromSolve = computeCoverage(result?.per_frame_residuals, result?.image_size);
+    if (fromSolve.filled > 0) return fromSolve;
+    // Fallback: synthesize from snappedCellsRef so the grid lights up live.
+    const total = fromSolve.total;
+    const cells = new Array(total).fill(false);
+    for (const idx of snappedCellsRef.current) {
+      if (idx >= 0 && idx < total) cells[idx] = true;
+    }
+    const filled = cells.reduce((n, on) => n + (on ? 1 : 0), 0);
+    return { cells, filled, total, percent: Math.round((filled / total) * 100) };
+  }, [result, coverageTick]);
+
+  const selectedPath = datasetFiles[selected - 1];
+
+  return (
+    <div className="workspace">
+      <div className="rail">
+        <div className="rail-header">
+          <span>Hand-Eye · cam ↔ {trackerLabel}</span>
+          <span className="mono" style={{color:'var(--text-4)'}}>AX=XB</span>
+        </div>
+        <div className="rail-scroll">
+          <CameraSourcePanel source={cam} onLivePreview={() => setViewMode('live')}/>
+          <Section
+            title="Tracker source"
+            hint={
+              trackerSource === 'file'    ? (posesPath ? basename(posesPath) : 'pick json') :
+              trackerSource === 'oculus'  ? (oculusDevice || 'pick device') :
+              trackerSource === 'ros2'    ? (trackerRos2Topic || 'pick topic') :
+                                            (steamvrSerial || 'pick tracker')
+            }
+            right={connected ? null : <Seg value={trackerSource} onChange={setTrackerSource} options={
+              TRACKER_SOURCES.map(s => ({ value: s.value, label: s.label.split(' ')[0].toLowerCase() }))
+            }/>}
+          >
+            <Field label="body">
+              <select className="select" value={kind} disabled={connected}
+                onChange={e => setKind(e.target.value)}>
+                <option value="hmd">HMD</option>
+                <option value="ctrl">controller</option>
+              </select>
+            </Field>
+            {trackerSource === 'oculus' && (
+              <>
+                <Field label="device">
+                  <select className="select" value={oculusDevice} disabled={connected}
+                    onChange={e => setOculusDevice(e.target.value)}>
+                    <option value="">— none —</option>
+                    <option value="quest3">Quest 3</option>
+                    <option value="quest2">Quest 2</option>
+                    <option value="questpro">Quest Pro</option>
+                  </select>
+                </Field>
+                <div className="mono" style={{ fontSize: 10.5, color: 'var(--text-3)' }}>
+                  via Oculus Reader · adb pose stream
+                </div>
+              </>
+            )}
+            {trackerSource === 'ros2' && (
+              <Ros2TopicPicker
+                topic={trackerRos2Topic}
+                onTopic={setTrackerRos2Topic}/>
+            )}
+            {trackerSource === 'steamvr' && (
+              <>
+                <Field label="serial">
+                  <input className="input" value={steamvrSerial} placeholder="LHR-XXXXXXXX" disabled={connected}
+                    onChange={e => setSteamvrSerial(e.target.value)}/>
+                </Field>
+                <div className="mono" style={{ fontSize: 10.5, color: 'var(--text-3)' }}>
+                  via SteamVR pose publisher
+                </div>
+              </>
+            )}
+            {trackerSource === 'file' && (
+              <>
+                <Field label="file">
+                  <input className="input" value={posesPath} placeholder="basename → 4x4 matrix"
+                    onChange={e => setPosesPath(e.target.value)}/>
+                </Field>
+                <button className="btn" onClick={onPickPoses}>📁 pick json</button>
+              </>
+            )}
+            {(trackerSource === 'oculus' || trackerSource === 'steamvr') && (
+              <>
+                <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:6 }}>
+                  {!connected
+                    ? <button className="btn primary" onClick={onConnectTracker}>⚡ connect</button>
+                    : <button className="btn ghost" onClick={onDisconnectTracker}>⨯ disconnect</button>}
+                </div>
+                {connected && (
+                  <div className="mono" style={{ fontSize: 10.5,
+                    color: (poseStaleMs ?? 999) < 200 ? 'var(--ok)' : 'var(--warn)' }}>
+                    ● {trackerDeviceKey()} · {poseHz} Hz · {poseStaleMs == null ? '—' : `${poseStaleMs} ms`}
+                  </div>
+                )}
+              </>
+            )}
+          </Section>
+          <Section title="Dataset" hint={datasetFiles.length ? `${datasetFiles.length} images` : 'not loaded'}>
+            <Field label="folder">
+              <input className="input" value={datasetPath} placeholder="/path/to/frames/"
+                onChange={e => setDatasetPath(e.target.value)}/>
+            </Field>
+            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:6 }}>
+              <button className="btn" onClick={onPickDataset}>📁 pick</button>
+              <button className="btn" disabled={!datasetPath}
+                onClick={() => datasetPath && openPath(datasetPath)}>↗ open</button>
+              <button className="btn ghost" onClick={() => { setDatasetPath(''); setDatasetFiles([]); }}>clear</button>
+            </div>
+            {recordedCount > 0 && (
+              <div className="mono" style={{ fontSize: 10.5, color:'var(--text-3)' }}>
+                poses.json · {recordedCount} entries
+              </div>
+            )}
+          </Section>
+          <Section title="Camera intrinsics" hint={camInt ? basename(camInt.path) : 'required'}>
+            <button className="btn" onClick={onLoadIntrinsics}>↓ load yaml {camInt ? '✓' : ''}</button>
+          </Section>
+          <TargetPanel board={board} onBoard={setBoard}/>
+          <Section title="Hand-Eye method" hint={`${solvePattern.replace('_', '-')} · ${method}`}>
+            <Field label="pattern">
+              <Seg value={solvePattern} onChange={setSolvePattern} full options={[
+                {value:'eye_in_hand', label:'eye-in-hand'},
+                {value:'eye_to_hand', label:'eye-to-hand'},
+              ]}/>
+            </Field>
+            <Field label="method">
+              <Seg value={method} onChange={setMethod} full options={[
+                {value:'tsai',label:'Tsai'},{value:'park',label:'Park'},
+                {value:'horaud',label:'Horaud'},{value:'daniilidis',label:'Dan.'},{value:'andreff',label:'Andreff'}
+              ]}/>
+            </Field>
+          </Section>
+          <CaptureControls
+            autoCapture={autoCapture} onAuto={setAutoCapture}
+            autoRate={autoCaptureRate} onAutoRate={setAutoCaptureRate}
+            onSnap={onSnap}
+            coverage={coverage.percent} coverageCells={coverage.cells}/>
+          {status && <div className="mono" style={{ fontSize: 10.5, color: 'var(--text-3)', padding: '0 2px' }}>{status}</div>}
+        </div>
+        <SolverButton onSolve={onRun} busy={busy} label="Solve AX=XB"/>
+      </div>
+
+      <div className="viewport">
+        <div className="vp-toolbar">
+          <Seg value={viewMode} onChange={setViewMode} options={[
+            {value:'live',label:'live'},{value:'frame',label:'frame'},{value:'scene',label:'3D scene'}
+          ]}/>
+          <Chk checked={showBoard} onChange={setShowBoard}>board</Chk>
+          <div className="spacer"/>
+          <div className="read">
+            {result?.ok
+              ? <>pairs <b>{result.iterations}</b> · rot <b>{rotRms.toFixed(3)}°</b> · trans <b>{transRms.toFixed(2)} mm</b></>
+              : <>awaiting solve</>}
+          </div>
+        </div>
+        <FrameStrip frames={frames} selected={selected}
+          onSelect={(id) => { setSelected(id); setViewMode('frame'); }}
+          coverage={coverage.percent}/>
+        <div className="vp-body" style={{ gridTemplateColumns: '1fr 0.7fr', gap: 1, background: 'var(--view-border)' }}>
+          <div className="vp-cell">
+            <span className="vp-label">scene · world = tracker-base</span>
+            <Scene3D w={vpW*0.6} h={vpH}>
+              {(cam) => {
+                const Tboard = makeT(-Math.PI/2, 0, 0, 0, 0, -0.15);
+                const T_tracker_cam = makeT(
+                  rpyDeg[0] * Math.PI / 180, rpyDeg[1] * Math.PI / 180, rpyDeg[2] * Math.PI / 180,
+                  tVec[0], tVec[1], tVec[2],
+                );
+                const Tcam = livePoseT ? composeT(livePoseT, T_tracker_cam) : null;
+                return (
+                  <g>
+                    {showBoard && <Chessboard3D T={Tboard} cam={cam} cols={board.cols} rows={board.rows} sq={board.sq}/>}
+                    {livePoseT && <TrackerGlyph T={livePoseT} cam={cam}/>}
+                    {Tcam && <Frustum3D T={Tcam} cam={cam} fov={0.7} aspect={1.6} label="cam"/>}
+                    {livePoseT && Tcam && (
+                      <RigidLink3D a={applyT(livePoseT,[0,0,0])} b={applyT(Tcam,[0,0,0])} cam={cam} color="#e3bd56"/>
+                    )}
+                  </g>
+                );
+              }}
+            </Scene3D>
+          </div>
+          <div className="vp-cell" style={{ background: 'var(--view-bg)', overflow:'hidden' }}>
+            <span className="vp-label">cam image{selectedPath ? ` · ${basename(selectedPath)}` : ''}</span>
+            {viewMode === 'live' && liveDevice ? (
+              autoCapture
+                ? <LiveDetectedFrame device={liveDevice} board={board}
+                    showCorners={showBoard} showOrigin={true}
+                    onMeta={onAutoMeta}/>
+                : <LivePreview device={liveDevice}/>
+            ) : selectedPath ? (
+              <DetectedFrame path={selectedPath} board={board}
+                showCorners={showBoard} showOrigin={true} overlay="none"/>
+            ) : (
+              <div className="mono" style={{
+                display:'flex', alignItems:'center', justifyContent:'center',
+                width:'100%', height:'100%', color:'var(--text-4)',
+              }}>no frame · pick a camera or load a dataset</div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      <div className="rail">
+        <div className="rail-header">
+          <span>Results · {xmatLabel}</span>
+          <span className="mono" style={{color: result?.ok ? 'var(--ok)' : 'var(--text-4)'}}>
+            {result?.ok ? `● ${rotRms.toFixed(2)}° / ${transRms.toFixed(1)} mm` : busy ? '● solving' : '○ idle'}
+          </span>
+        </div>
+        <div className="rail-scroll">
+          <Section title="Hand-Eye transform">
+            <Matrix m={Tmat}/>
+            <KV items={[
+              ['t  (mm)', `[ ${tMm[0].toFixed(1)}, ${tMm[1].toFixed(1)}, ${tMm[2].toFixed(1)} ]`, ''],
+              ['rpy (°)', `[ ${rpyDeg[0].toFixed(3)}, ${rpyDeg[1].toFixed(3)}, ${rpyDeg[2].toFixed(3)} ]`, ''],
+              ['||t||',   `${tNorm.toFixed(2)} mm`, 'pos'],
+            ]}/>
+          </Section>
+          <ErrorPanel rms={rotRms} frames={frames.map(f => f.err)} histData={histData}/>
+          <Section title="Consistency" hint="world-board scatter">
+            <KV items={[
+              ['rot rms',   `${rotRms.toFixed(3)}°`,  rotRms < 1 ? 'pos' : 'warn'],
+              ['trans rms', `${transRms.toFixed(2)} mm`, transRms < 5 ? 'pos' : 'warn'],
+              ['N pairs',   `${result?.iterations ?? 0}`, ''],
+            ]}/>
+          </Section>
+          <SolverPanel iters={result?.iterations || 0} cost={transRms} cond={0}
+            algo={`cv2.calibrateHandEye · ${method}`}/>
+        </div>
+        <div style={{ padding: 10, borderTop: '1px solid var(--border-soft)', background: 'var(--surface-2)', display: 'flex', gap: 6 }}>
+          <button className="btn" style={{flex:1}} onClick={onLoadYaml}>↓ load</button>
+          <button className="btn primary" style={{flex:1}} onClick={onSaveYaml} disabled={!result?.ok}>↑ save yaml</button>
+        </div>
+      </div>
+    </div>
+  );
+}
