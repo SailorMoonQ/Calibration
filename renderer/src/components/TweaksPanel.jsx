@@ -3,7 +3,7 @@ import { Field, Seg } from './primitives.jsx';
 export const TWEAKS_DEFAULTS = {
   theme: 'light',
   density: 'comfortable',
-  accentHue: 250,
+  accentHue: 218,
 };
 
 export function TweaksPanel({ visible, tweaks, setTweaks, onClose }) {

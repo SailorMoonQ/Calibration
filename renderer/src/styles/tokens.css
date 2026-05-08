@@ -21,10 +21,10 @@
   --view-text: #c9cfd8;
   --view-text-2: #7a8594;
 
-  --accent: oklch(0.62 0.14 250);
-  --accent-2: oklch(0.72 0.11 250);
-  --accent-soft: oklch(0.95 0.03 250);
-  --accent-line: oklch(0.55 0.16 250);
+  --accent: oklch(0.62 0.14 218);
+  --accent-2: oklch(0.72 0.11 218);
+  --accent-soft: oklch(0.95 0.03 218);
+  --accent-line: oklch(0.55 0.16 218);
 
   --ok: oklch(0.68 0.14 150);
   --warn: oklch(0.76 0.15 80);
@@ -63,7 +63,7 @@
   --text-2: #a8b0bc;
   --text-3: #7a8594;
   --text-4: #596372;
-  --accent-soft: oklch(0.28 0.06 250);
+  --accent-soft: oklch(0.28 0.06 218);
 }
 [data-theme="dark"] .brand-mark::before,
 [data-theme="dark"] .brand-mark::after { border-color: var(--text); }
