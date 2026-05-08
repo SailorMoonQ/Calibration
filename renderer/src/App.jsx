@@ -7,7 +7,6 @@ import { LogStrip } from './components/panels.jsx';
 import { IntrinsicsTab } from './tabs/IntrinsicsTab.jsx';
 import { FisheyeTab } from './tabs/FisheyeTab.jsx';
 import { HandEyeTab } from './tabs/HandEyeTab.jsx';
-import { ChainTab } from './tabs/ChainTab.jsx';
 import { LinkCalibTab } from './tabs/LinkCalibTab.jsx';
 
 const TAB_DEFS = [
@@ -15,7 +14,6 @@ const TAB_DEFS = [
   { id: 'fisheye',    num: '02', label: 'Fish-eye',   sub: 'intrinsics',         badge: 'warn', Comp: FisheyeTab },
   { id: 'handeye',    num: '03', label: 'Hand-Eye',   sub: 'cam ↔ tracker',      badge: 'ok',   Comp: HandEyeTab },
   { id: 'link',       num: '04', label: 'Link',       sub: 'tracker ↔ ctrl',     badge: 'ok',   Comp: LinkCalibTab },
-  { id: 'chain',      num: '05', label: 'Chain',      sub: 'ctrl → gripper',     badge: 'ok',   Comp: ChainTab },
 ];
 
 export function App() {
