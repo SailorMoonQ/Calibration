@@ -66,6 +66,9 @@ class ExtrinsicsRequest(BaseModel):
 class HandEyeRequest(BaseModel):
     method: Literal["tsai", "park", "horaud", "daniilidis", "andreff"] = "park"
     kind: Literal["hmd", "ctrl"] = "hmd"
+    # Camera-mounting topology. eye-in-hand: camera rides the tracker; eye-to-hand:
+    # tracker rides the gripper while the camera is fixed in the base/world frame.
+    pattern: Literal["eye_in_hand", "eye_to_hand"] = "eye_in_hand"
     board: Board | None = None
     # Dataset-driven path: images + tracker poses JSON (basename→4x4) + camera intrinsics.
     dataset_path: str | None = None

@@ -26,7 +26,7 @@ const TRACKER_SOURCES = [
   { value: 'file',    label: 'JSON file' },
 ];
 
-export function HandEyeTab() {
+export function HandEyeTab({ solvePattern, setSolvePattern }) {
   const [kind, setKind] = useState('hmd');
   const isHMD = kind === 'hmd';
   const trackerLabel = isHMD ? 'HMD' : 'controller';
@@ -314,7 +314,7 @@ export function HandEyeTab() {
     setBusy(true); setStatus('solving AX=XB…');
     try {
       const res = await api.calibrate('handeye', {
-        method, kind,
+        method, kind, pattern: solvePattern,
         board: boardPayload(),
         dataset_path: datasetPath,
         poses_path: posesPath,
@@ -514,11 +514,19 @@ export function HandEyeTab() {
             <button className="btn" onClick={onLoadIntrinsics}>↓ load yaml {camInt ? '✓' : ''}</button>
           </Section>
           <TargetPanel board={board} onBoard={setBoard}/>
-          <Section title="Hand-Eye method" hint={method}>
-            <Seg value={method} onChange={setMethod} full options={[
-              {value:'tsai',label:'Tsai'},{value:'park',label:'Park'},
-              {value:'horaud',label:'Horaud'},{value:'daniilidis',label:'Dan.'},{value:'andreff',label:'Andreff'}
-            ]}/>
+          <Section title="Hand-Eye method" hint={`${solvePattern.replace('_', '-')} · ${method}`}>
+            <Field label="pattern">
+              <Seg value={solvePattern} onChange={setSolvePattern} full options={[
+                {value:'eye_in_hand', label:'eye-in-hand'},
+                {value:'eye_to_hand', label:'eye-to-hand'},
+              ]}/>
+            </Field>
+            <Field label="method">
+              <Seg value={method} onChange={setMethod} full options={[
+                {value:'tsai',label:'Tsai'},{value:'park',label:'Park'},
+                {value:'horaud',label:'Horaud'},{value:'daniilidis',label:'Dan.'},{value:'andreff',label:'Andreff'}
+              ]}/>
+            </Field>
           </Section>
           <CaptureControls
             autoCapture={autoCapture} onAuto={setAutoCapture}

@@ -22,8 +22,14 @@ export function App() {
   const [active, setActive] = useState(() => localStorage.getItem('calib_tab') || 'intrinsics');
   const [tweaks, setTweaks] = useState({ ...TWEAKS_DEFAULTS });
   const [tweaksVisible, setTweaksVisible] = useState(false);
+  // Eye-in-hand vs eye-to-hand is a property of the physical rig, not a per-tab
+  // setting — Hand-Eye owns the toggle, Link reads it for its own solver.
+  const [solvePattern, setSolvePattern] = useState(
+    () => localStorage.getItem('calib_handeye_pattern') || 'eye_in_hand',
+  );
 
   useEffect(() => { localStorage.setItem('calib_tab', active); }, [active]);
+  useEffect(() => { localStorage.setItem('calib_handeye_pattern', solvePattern); }, [solvePattern]);
 
   useEffect(() => {
     const root = document.documentElement;
@@ -54,7 +60,7 @@ export function App() {
       <div className="app">
         <Topbar/>
         <Tabs tabs={TAB_DEFS} value={active} onChange={setActive}/>
-        <ActiveComp/>
+        <ActiveComp solvePattern={solvePattern} setSolvePattern={setSolvePattern}/>
         <LogStrip lines={[
           active === 'intrinsics' ? 'solver: LM converged in 24 iters · Δcost 7.2e-7' : 'joint bundle adjustment · 132 constraints active',
           active === 'fisheye' ? 'fisheye/equidistant · k₁…k₄ estimated · ω 195.3°' : 'T_ctrl_cam saved to session_0419.toml [calib.hand_eye]'

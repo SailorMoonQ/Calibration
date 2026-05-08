@@ -174,6 +174,13 @@ def calibrate(req: HandEyeRequest) -> CalibrationResult:
             message=f"need ≥ 3 matched A/B pairs, got A={len(A)}, B={len(B)}.",
         )
 
+    # eye-in-hand: cv2 expects (R_g2b, R_t2c) → returns X = T_cam_to_gripper.
+    # eye-to-hand: cv2 expects (R_b2g, R_t2c) → returns X = T_cam_to_base.
+    # Same trick as handeye_pose.py: invert the tracker stream at entry for eye-to-hand
+    # and the cv2 call (and the consistency invariant B·X·A = const) stays uniform.
+    if req.pattern == "eye_to_hand":
+        B = [np.linalg.inv(T) for T in B]
+
     R_A, t_A = _split_poses(A)
     R_B, t_B = _split_poses(B)
 
@@ -194,8 +201,8 @@ def calibrate(req: HandEyeRequest) -> CalibrationResult:
         for W in worlds:
             per_frame_err.append(float(np.linalg.norm(ref[:3, 3] - W[:3, 3]) * 1000.0))
 
-    log.info("handeye(%s/%s) pairs=%d · rot_rms=%.3f° trans_rms=%.2fmm",
-             req.kind, req.method, len(A), rot_rms, trans_rms)
+    log.info("handeye(%s/%s/%s) pairs=%d · rot_rms=%.3f° trans_rms=%.2fmm",
+             req.kind, req.method, req.pattern, len(A), rot_rms, trans_rms)
 
     return CalibrationResult(
         ok=True,
@@ -206,5 +213,5 @@ def calibrate(req: HandEyeRequest) -> CalibrationResult:
         detected_paths=names,
         iterations=len(A),
         final_cost=float(trans_rms),  # overloaded: translational RMS in mm
-        message=f"handeye/{req.method} · {len(A)} pairs · rot {rot_rms:.3f}° · trans {trans_rms:.2f} mm",
+        message=f"handeye/{req.method}/{req.pattern} · {len(A)} pairs · rot {rot_rms:.3f}° · trans {trans_rms:.2f} mm",
     )

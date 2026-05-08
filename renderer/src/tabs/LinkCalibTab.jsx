@@ -27,7 +27,7 @@ function rpyDeg(R) {
   return [r(Math.atan2(R[2][1], R[2][2])), r(Math.atan2(-R[2][0], sy)), r(Math.atan2(R[1][0], R[0][0]))];
 }
 
-export function LinkCalibTab() {
+export function LinkCalibTab({ solvePattern }) {
   const [slotA, setSlotA] = useState(() => initialSlot({ backend: 'steamvr' }));
   const [slotB, setSlotB] = useState(() => initialSlot({ backend: 'mock', format: 'mcap' }));
   const [linkLabel, setLinkLabel] = useState('a_to_b');
@@ -41,7 +41,6 @@ export function LinkCalibTab() {
   const [syncPath, setSyncPath] = useState('');
   const [syncDiag, setSyncDiag] = useState(null);
   const [solveMethod, setSolveMethod] = useState('daniilidis');
-  const [solvePattern, setSolvePattern] = useState('eye_in_hand');  // 'eye_in_hand' | 'eye_to_hand'
   const [tickCount, setTickCount] = useState(0);
   const [poseStats] = useState(null);
   useReportPoses(poseStats);
@@ -324,13 +323,7 @@ export function LinkCalibTab() {
             )}
           </Section>
 
-          <Section title="Solve" hint={solveGate ? 'gated' : 'ready'}>
-            <Field label="pattern">
-              <Seg value={solvePattern} onChange={setSolvePattern} full options={[
-                {value:'eye_in_hand', label:'eye-in-hand'},
-                {value:'eye_to_hand', label:'eye-to-hand'},
-              ]}/>
-            </Field>
+          <Section title="Solve" hint={solveGate ? 'gated' : `${solvePattern.replace('_', '-')} · ready`}>
             <Field label="method">
               <select className="select" value={solveMethod}
                       onChange={e => setSolveMethod(e.target.value)}>
