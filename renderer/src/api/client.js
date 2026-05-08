@@ -117,8 +117,10 @@ export const recording = {
     request('/recording/import_mcap', { method: 'POST', body: JSON.stringify({ mcap_path, topic, out_path }) }),
   importFile: ({ path, format }) =>
     request('/recording/import_file', { method: 'POST', body: JSON.stringify({ path, format }) }),
-  sync: ({ a_path, b_path, out_path, max_skew_s, max_pair_gap_s }) =>
-    request('/recording/sync', { method: 'POST', body: JSON.stringify({ a_path, b_path, out_path, max_skew_s, max_pair_gap_s }) }),
+  estimateSync: ({ a_path, b_path, max_skew_s }) =>
+    request('/recording/sync/estimate', { method: 'POST', body: JSON.stringify({ a_path, b_path, max_skew_s }) }),
+  sync: ({ a_path, b_path, out_path, max_skew_s, max_pair_gap_s, delta_t_override }) =>
+    request('/recording/sync', { method: 'POST', body: JSON.stringify({ a_path, b_path, out_path, max_skew_s, max_pair_gap_s, delta_t_override }) }),
   calibrateHandeyePose: ({ synced_path, method, pattern }) =>
     request('/calibrate/handeye_pose', { method: 'POST', body: JSON.stringify({ synced_path, method, pattern }) }),
 };

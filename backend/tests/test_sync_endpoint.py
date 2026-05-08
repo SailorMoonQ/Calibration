@@ -76,3 +76,46 @@ def test_sync_legacy_vive_umi_keys_still_work(client, tmp_path):
     body = resp.json()
     assert body["ok"] is True
     assert "a_rot_deg" in body
+
+
+def test_estimate_endpoint_returns_delta_t_without_writing(client, tmp_path):
+    """/recording/sync/estimate returns Δt + SNR + diversity, no out_path needed."""
+    a = tmp_path / "a.json"
+    b = tmp_path / "b.json"
+    _write_recording(str(a), t_start=3000.0)
+    _write_recording(str(b), t_start=3000.3)
+
+    resp = client.post("/recording/sync/estimate", json={
+        "a_path": str(a),
+        "b_path": str(b),
+    })
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["ok"] is True
+    assert abs(body["delta_t"] + 0.3) < 0.04
+    assert body["snr"] > 2.0
+    assert body["a_rot_deg"] > 30 and body["b_rot_deg"] > 30
+    # No file should have been created (only a.json and b.json exist).
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["a.json", "b.json"]
+
+
+def test_sync_endpoint_honours_delta_t_override(client, tmp_path):
+    """Passing delta_t_override skips cross-corr; pairing happens at that offset."""
+    a = tmp_path / "a.json"
+    b = tmp_path / "b.json"
+    out = tmp_path / "synced.json"
+    _write_recording(str(a), t_start=4000.0)
+    _write_recording(str(b), t_start=4000.3)
+
+    resp = client.post("/recording/sync", json={
+        "a_path": str(a),
+        "b_path": str(b),
+        "out_path": str(out),
+        "delta_t_override": -0.3,
+    })
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["ok"] is True
+    assert body["delta_t"] == -0.3
+    assert body["n_pairs"] >= 200
+    assert out.exists()

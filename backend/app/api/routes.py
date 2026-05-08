@@ -800,36 +800,71 @@ async def recording_import_mcap(body: dict) -> dict:
     }
 
 
+def _load_two_streams(body: dict) -> tuple[str, str, dict, dict]:
+    a_path = body.get("a_path") or body.get("vive_path")
+    b_path = body.get("b_path") or body.get("umi_path")
+    if not (a_path and os.path.isfile(a_path)):
+        raise HTTPException(status_code=404, detail="a_path not found")
+    if not (b_path and os.path.isfile(b_path)):
+        raise HTTPException(status_code=404, detail="b_path not found")
+    with open(a_path) as f:
+        a_data = json.load(f)
+    with open(b_path) as f:
+        b_data = json.load(f)
+    return a_path, b_path, a_data, b_data
+
+
+@router.post("/recording/sync/estimate")
+async def recording_sync_estimate(body: dict) -> dict:
+    """Cross-correlate speed signals to estimate Δt. No pairing, no file write.
+
+    Returned Δt is what the user fine-tunes in the UI before calling /recording/sync.
+    """
+    from app.calib.sync import estimate_delta_t
+
+    _, _, a_data, b_data = _load_two_streams(body)
+    max_skew_s = float(body.get("max_skew_s", 5.0))
+
+    res = estimate_delta_t(a_data["samples"], b_data["samples"], max_skew_s=max_skew_s)
+    if not res["ok"]:
+        raise HTTPException(status_code=400, detail=res.get("reason") or "estimate failed")
+
+    return {
+        "ok": True,
+        "delta_t": res["delta_t"],
+        "snr": res["snr"],
+        "vive_rot_deg": res["vive_rot_deg"],
+        "umi_rot_deg": res["umi_rot_deg"],
+        "a_rot_deg": res["vive_rot_deg"],
+        "b_rot_deg": res["umi_rot_deg"],
+    }
+
+
 @router.post("/recording/sync")
 async def recording_sync(body: dict) -> dict:
     """Sync two pose recordings into a paired-sample JSON.
 
     Body accepts new keys (a_path, b_path) or legacy keys (vive_path, umi_path).
+    Pass delta_t_override to skip the cross-correlation and pair at a user-tuned
+    offset (e.g. nudged from the estimate returned by /recording/sync/estimate).
     Response carries both naming conventions for back-compat.
     """
     from app.calib.sync import sync_streams
 
-    a_path = body.get("a_path") or body.get("vive_path")
-    b_path = body.get("b_path") or body.get("umi_path")
+    _, _, a_data, b_data = _load_two_streams(body)
     out_path = body.get("out_path")
-    if not (a_path and os.path.isfile(a_path)):
-        raise HTTPException(status_code=404, detail="a_path not found")
-    if not (b_path and os.path.isfile(b_path)):
-        raise HTTPException(status_code=404, detail="b_path not found")
     if not out_path:
         raise HTTPException(status_code=400, detail="out_path required")
 
     max_skew_s = float(body.get("max_skew_s", 5.0))
     max_pair_gap_s = float(body.get("max_pair_gap_s", 0.05))
-
-    with open(a_path) as f:
-        a_data = json.load(f)
-    with open(b_path) as f:
-        b_data = json.load(f)
+    raw_override = body.get("delta_t_override")
+    delta_t_override = float(raw_override) if raw_override is not None else None
 
     res = sync_streams(
         a_data["samples"], b_data["samples"],
         max_skew_s=max_skew_s, max_pair_gap_s=max_pair_gap_s,
+        delta_t_override=delta_t_override,
     )
     if not res["ok"]:
         raise HTTPException(status_code=400, detail=res.get("reason") or "sync failed")

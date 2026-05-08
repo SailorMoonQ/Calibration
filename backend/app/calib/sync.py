@@ -1,4 +1,12 @@
-"""Sync two pose streams by cross-correlating their speed signals."""
+"""Sync two pose streams by cross-correlating their speed signals.
+
+The two-stage flow:
+  1. estimate_delta_t — coarse offset from speed-signal cross-correlation
+     (quantized to 1/_RESAMPLE_HZ s; no pairing, no file write).
+  2. pair_at_offset — nearest-neighbour pairing at a given delta_t (sub-grid
+     fine-tuning is the caller's responsibility).
+sync_streams composes the two and stays as the back-compat one-shot entry.
+"""
 from __future__ import annotations
 
 import logging
@@ -67,23 +75,28 @@ def _xcorr_peak(a: np.ndarray, b: np.ndarray, max_lag: int) -> tuple[int, float]
     return int(lags[peak_idx]), peak / mean
 
 
-def sync_streams(
+def estimate_delta_t(
     vive: list[dict],
     umi: list[dict],
     max_skew_s: float = 5.0,
-    max_pair_gap_s: float = 0.05,
 ) -> dict:
+    """Coarse Δt from speed-signal cross-correlation. No pairing, no file I/O.
+
+    Always reports rotation diversity (the caller's gate); flips ok=False with
+    a reason when the stream is unusable for offset estimation.
+    """
     if len(vive) < 10 or len(umi) < 10:
         return {
             "ok": False,
             "reason": f"streams too short (vive={len(vive)} umi={len(umi)})",
-            "delta_t": 0.0, "n_pairs": 0,
+            "delta_t": 0.0, "snr": 0.0,
             "vive_rot_deg": 0.0, "umi_rot_deg": 0.0,
-            "pairs": [],
         }
 
     ts_v, pos_v, R_v = _samples_to_arrays(vive)
     ts_u, pos_u, R_u = _samples_to_arrays(umi)
+    rot_v = float(_rotation_diversity_deg(R_v))
+    rot_u = float(_rotation_diversity_deg(R_u))
 
     t_lo = max(ts_v[0], ts_u[0]) - max_skew_s
     t_hi = min(ts_v[-1], ts_u[-1]) + max_skew_s
@@ -91,9 +104,8 @@ def sync_streams(
         return {
             "ok": False,
             "reason": f"streams don't overlap within {max_skew_s}s",
-            "delta_t": 0.0, "n_pairs": 0,
-            "vive_rot_deg": 0.0, "umi_rot_deg": 0.0,
-            "pairs": [],
+            "delta_t": 0.0, "snr": 0.0,
+            "vive_rot_deg": rot_v, "umi_rot_deg": rot_u,
         }
     t_grid = np.arange(t_lo, t_hi, 1.0 / _RESAMPLE_HZ)
 
@@ -108,13 +120,33 @@ def sync_streams(
         return {
             "ok": False,
             "reason": f"low cross-correlation SNR ({snr:.2f} < 2.0); user probably didn't move enough",
-            "delta_t": float(delta_t), "n_pairs": 0,
-            "vive_rot_deg": float(_rotation_diversity_deg(R_v)),
-            "umi_rot_deg": float(_rotation_diversity_deg(R_u)),
-            "pairs": [],
+            "delta_t": float(delta_t), "snr": float(snr),
+            "vive_rot_deg": rot_v, "umi_rot_deg": rot_u,
         }
 
-    ts_u_aligned = ts_u + delta_t
+    return {
+        "ok": True,
+        "delta_t": float(delta_t),
+        "snr": float(snr),
+        "vive_rot_deg": rot_v,
+        "umi_rot_deg": rot_u,
+    }
+
+
+def pair_at_offset(
+    vive: list[dict],
+    umi: list[dict],
+    delta_t: float,
+    max_pair_gap_s: float = 0.05,
+) -> list[dict]:
+    """Nearest-neighbour pair vive[i] with umi[j] after shifting umi.ts += delta_t.
+
+    Sub-grid fine-tuning works here because pairing is on raw timestamps, not
+    the 50 Hz resample grid used by the cross-correlation.
+    """
+    ts_v, _, _ = _samples_to_arrays(vive)
+    ts_u, _, _ = _samples_to_arrays(umi)
+    ts_u_aligned = ts_u + float(delta_t)
     j = 0
     pairs = []
     for i, tv in enumerate(ts_v):
@@ -127,13 +159,41 @@ def sync_streams(
                 "T_vive": vive[i]["T"],
                 "T_umi": umi[j]["T"],
             })
+    return pairs
+
+
+def sync_streams(
+    vive: list[dict],
+    umi: list[dict],
+    max_skew_s: float = 5.0,
+    max_pair_gap_s: float = 0.05,
+    delta_t_override: float | None = None,
+) -> dict:
+    """One-shot estimate + pair. Pass delta_t_override to skip estimation."""
+    if delta_t_override is None:
+        est = estimate_delta_t(vive, umi, max_skew_s=max_skew_s)
+        if not est["ok"]:
+            return {**est, "n_pairs": 0, "pairs": []}
+        delta_t = est["delta_t"]
+        snr = est["snr"]
+        rot_v = est["vive_rot_deg"]
+        rot_u = est["umi_rot_deg"]
+    else:
+        delta_t = float(delta_t_override)
+        _, _, R_v = _samples_to_arrays(vive)
+        _, _, R_u = _samples_to_arrays(umi)
+        rot_v = float(_rotation_diversity_deg(R_v))
+        rot_u = float(_rotation_diversity_deg(R_u))
+        snr = float("nan")
+
+    pairs = pair_at_offset(vive, umi, delta_t, max_pair_gap_s=max_pair_gap_s)
 
     return {
         "ok": True,
         "delta_t": float(delta_t),
         "snr": float(snr),
         "n_pairs": len(pairs),
-        "vive_rot_deg": float(_rotation_diversity_deg(R_v)),
-        "umi_rot_deg": float(_rotation_diversity_deg(R_u)),
+        "vive_rot_deg": rot_v,
+        "umi_rot_deg": rot_u,
         "pairs": pairs,
     }

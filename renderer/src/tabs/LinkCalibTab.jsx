@@ -39,7 +39,9 @@ export function LinkCalibTab({ solvePattern }) {
   const [status, setStatus] = useState('');
   const [result, setResult] = useState(null);
   const [syncPath, setSyncPath] = useState('');
-  const [syncDiag, setSyncDiag] = useState(null);
+  const [syncEst, setSyncEst] = useState(null);   // estimator output: {delta_t, snr, a_rot_deg, b_rot_deg}
+  const [deltaT, setDeltaT] = useState(null);     // user-tunable Δt — initialised from the estimate
+  const [syncDiag, setSyncDiag] = useState(null); // post-apply: {delta_t, n_pairs, a_rot_deg, b_rot_deg}
   const [solveMethod, setSolveMethod] = useState('daniilidis');
   const [tickCount, setTickCount] = useState(0);
   const [poseStats] = useState(null);
@@ -163,15 +165,40 @@ export function LinkCalibTab({ solvePattern }) {
     }));
   };
 
-  const onSync = useCallback(async () => {
+  const onEstimate = useCallback(async () => {
     const a = slotPath(slotA);
     const b = slotPath(slotB);
     if (!a || !b) { setStatus('both slots must be ready'); return; }
+    setStatus('estimating Δt…');
+    try {
+      const r = await recording.estimateSync({ a_path: a, b_path: b });
+      const est = {
+        delta_t: r.delta_t,
+        snr: r.snr,
+        a_rot_deg: r.a_rot_deg ?? r.vive_rot_deg,
+        b_rot_deg: r.b_rot_deg ?? r.umi_rot_deg,
+      };
+      setSyncEst(est);
+      setDeltaT(est.delta_t);
+      // estimating again invalidates any previously-locked pairs
+      setSyncDiag(null);
+      setSyncPath('');
+      setStatus(`estimate · Δt ${est.delta_t.toFixed(3)}s · SNR ${est.snr.toFixed(2)}`);
+    } catch (e) { setStatus(`estimate failed: ${e.message}`); }
+  }, [slotA, slotB]);
+
+  const onApply = useCallback(async () => {
+    const a = slotPath(slotA);
+    const b = slotPath(slotB);
+    if (!a || !b) { setStatus('both slots must be ready'); return; }
+    if (!Number.isFinite(deltaT)) { setStatus('Δt must be a number'); return; }
     const out_path = await pickSaveFile({ defaultPath: `synced_${linkLabel}.json` });
     if (!out_path) return;
-    setStatus('syncing…');
+    setStatus('pairing…');
     try {
-      const r = await recording.sync({ a_path: a, b_path: b, out_path });
+      const r = await recording.sync({
+        a_path: a, b_path: b, out_path, delta_t_override: deltaT,
+      });
       setSyncPath(r.path);
       setSyncDiag({
         delta_t: r.delta_t,
@@ -179,9 +206,9 @@ export function LinkCalibTab({ solvePattern }) {
         a_rot_deg: r.a_rot_deg ?? r.vive_rot_deg,
         b_rot_deg: r.b_rot_deg ?? r.umi_rot_deg,
       });
-      setStatus(`synced · Δt ${r.delta_t.toFixed(3)}s · ${r.n_pairs} pairs`);
-    } catch (e) { setStatus(`sync failed: ${e.message}`); }
-  }, [slotA, slotB, linkLabel]);
+      setStatus(`paired · Δt ${r.delta_t.toFixed(3)}s · ${r.n_pairs} pairs`);
+    } catch (e) { setStatus(`apply failed: ${e.message}`); }
+  }, [slotA, slotB, deltaT, linkLabel]);
 
   const onSolve = useCallback(async () => {
     if (!syncPath) { setStatus('sync first'); return; }
@@ -310,15 +337,49 @@ export function LinkCalibTab({ solvePattern }) {
             </Field>
           </Section>
 
-          <Section title="Sync" hint={syncDiag ? `${syncDiag.n_pairs} pairs · Δt ${syncDiag.delta_t.toFixed(3)}s` : 'not synced'}>
-            <button className="btn" onClick={onSync} disabled={!(readyA && readyB)}>⚡ sync</button>
+          <Section title="Sync" hint={
+            syncDiag ? `${syncDiag.n_pairs} pairs · Δt ${syncDiag.delta_t.toFixed(3)}s`
+            : syncEst ? `est Δt ${syncEst.delta_t.toFixed(3)}s · tune & apply`
+            : 'not synced'}>
+            <button className="btn" onClick={onEstimate} disabled={!(readyA && readyB)}>
+              ⚡ estimate Δt
+            </button>
+            {syncEst && (
+              <>
+                <Field label="Δt (s)">
+                  <div style={{ display:'flex', gap: 4 }}>
+                    <input
+                      type="number" step="0.001"
+                      className="input"
+                      style={{ flex: 1 }}
+                      value={Number.isFinite(deltaT) ? deltaT : ''}
+                      onChange={(e) => {
+                        const v = parseFloat(e.target.value);
+                        setDeltaT(Number.isFinite(v) ? v : null);
+                      }}/>
+                    {Number.isFinite(deltaT) && deltaT !== syncEst.delta_t && (
+                      <button className="btn ghost" title="reset to estimate"
+                              onClick={() => setDeltaT(syncEst.delta_t)}>↺</button>
+                    )}
+                  </div>
+                </Field>
+                <div className="mono" style={{ fontSize: 10.5, color:'var(--text-3)',
+                    display:'grid', gridTemplateColumns:'auto 1fr', columnGap: 8, rowGap: 2 }}>
+                  <span>estimate</span><span>{syncEst.delta_t.toFixed(3)} s · SNR {syncEst.snr.toFixed(2)}</span>
+                  <span>A rot</span><span>{syncEst.a_rot_deg.toFixed(1)}°</span>
+                  <span>B rot</span><span>{syncEst.b_rot_deg.toFixed(1)}°</span>
+                </div>
+                <button className="btn primary" onClick={onApply}
+                        disabled={!Number.isFinite(deltaT)}>
+                  ✓ apply &amp; pair
+                </button>
+              </>
+            )}
             {syncDiag && (
               <div className="mono" style={{ fontSize: 10.5, color:'var(--text-3)',
                   display:'grid', gridTemplateColumns:'auto 1fr', columnGap: 8, rowGap: 2 }}>
-                <span>Δt</span><span>{syncDiag.delta_t.toFixed(3)} s</span>
+                <span>locked Δt</span><span>{syncDiag.delta_t.toFixed(3)} s</span>
                 <span>pairs</span><span>{syncDiag.n_pairs}</span>
-                <span>A rot</span><span>{syncDiag.a_rot_deg.toFixed(1)}°</span>
-                <span>B rot</span><span>{syncDiag.b_rot_deg.toFixed(1)}°</span>
               </div>
             )}
           </Section>
