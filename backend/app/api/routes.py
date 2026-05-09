@@ -1058,22 +1058,22 @@ from app.sources.poses import manager as pose_manager  # noqa: E402
 
 
 def _parse_sources(sources: str) -> list[str]:
-    names = [s.strip().lower() for s in (sources or "mock").split(",") if s.strip()]
-    return names or ["mock"]
+    names = [s.strip().lower() for s in (sources or "steamvr").split(",") if s.strip()]
+    return names or ["steamvr"]
 
 
 @router.websocket("/poses/stream")
 async def poses_stream(
     ws: WebSocket,
     fps: int = 30,
-    sources: str = "mock",
+    sources: str = "steamvr",
     ip: str | None = None,
 ) -> None:
     """Streams merged poses from one or more sources.
 
     Query params:
       - fps:     tick rate (clamped ≥ 1)
-      - sources: comma list, e.g. "mock" or "oculus,steamvr"
+      - sources: comma list, e.g. "steamvr" or "oculus,steamvr"
       - ip:      optional IP for network ADB (applies to the oculus source)
     """
     await ws.accept()
@@ -1098,7 +1098,8 @@ async def poses_stream(
                 return
 
         # Merge hello envelopes: union of device lists (ordered by source),
-        # first non-null gt_T_a_b wins (mock is the only source that sets it),
+        # first non-null gt_T_a_b wins (no real source sets it today, but the
+        # field is retained for future ground-truth-aware backends),
         # max bases wins (only steamvr sets non-zero).
         all_devices: list[str] = []
         seen: set[str] = set()

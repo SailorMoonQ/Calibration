@@ -171,15 +171,13 @@ export function SolverButton({ onSolve, busy, label = "Run calibration", status,
   );
 }
 
-export function SolverPanel({ iters = 28, cost = 0.184, cond = 142.3, algo = "Levenberg-Marquardt" }) {
+export function SolverPanel({ iters = 0, cost = 0, cond = 0, algo = '' }) {
   return (
     <Section title="Solver" hint={algo}>
       <KV items={[
         ['iterations', iters, ''],
         ['final cost', cost.toFixed(4), ''],
         ['condition κ', cond.toFixed(1), cond > 1000 ? 'warn' : ''],
-        ['converged', '✓ yes', 'pos'],
-        ['termination', 'Δcost < 1e-6', ''],
       ]}/>
     </Section>
   );

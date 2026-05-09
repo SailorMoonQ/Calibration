@@ -180,7 +180,7 @@ export async function posesWsUrl(opts = {}) {
   const { port } = await info();
   const list = Array.isArray(opts.sources) && opts.sources.length
     ? opts.sources
-    : [opts.source ?? 'mock'];
+    : [opts.source ?? 'steamvr'];
   const qs = new URLSearchParams({
     fps: String(opts.fps ?? 30),
     sources: list.join(','),

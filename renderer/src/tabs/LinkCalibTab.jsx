@@ -29,7 +29,7 @@ function rpyDeg(R) {
 
 export function LinkCalibTab({ solvePattern }) {
   const [slotA, setSlotA] = useState(() => initialSlot({ backend: 'steamvr' }));
-  const [slotB, setSlotB] = useState(() => initialSlot({ backend: 'mock', format: 'mcap' }));
+  const [slotB, setSlotB] = useState(() => initialSlot({ format: 'mcap' }));
   const [linkLabel, setLinkLabel] = useState('a_to_b');
   const [showTraj, setShowTraj] = useState(true);
   const [showGround, setShowGround] = useState(true);
@@ -273,7 +273,7 @@ export function LinkCalibTab({ solvePattern }) {
   const curB = slotB.mode === 'live' ? slotsBufB.curT : null;
 
   const Tmat = result?.T ?? [
-    [1, 0, 0, 0.05], [0, 1, 0, 0], [0, 0, 1, 0.05], [0, 0, 0, 1],
+    [1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1],
   ];
   const tVec = [Tmat[0][3], Tmat[1][3], Tmat[2][3]];
   const tMm = tVec.map(v => v * 1000);
@@ -518,7 +518,6 @@ function SlotCard({
           <Field label="backend">
             <select className="select" value={slot.backend} disabled={slot.connected}
                     onChange={e => setSlot(s => ({ ...s, backend: e.target.value }))}>
-              <option value="mock">mock (Lissajous)</option>
               <option value="oculus">oculus (Quest3s)</option>
               <option value="steamvr">steamvr (Vive tracker)</option>
             </select>

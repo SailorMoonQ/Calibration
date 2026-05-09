@@ -9,7 +9,6 @@ import threading
 from collections.abc import Callable
 
 from app.sources.poses import PoseSource
-from app.sources.poses.mock import MockPoseSource
 
 log = logging.getLogger("calib.pose.mgr")
 
@@ -30,7 +29,6 @@ def _build_steamvr(**kw) -> PoseSource:
 
 
 _BUILDERS: dict[str, Callable[..., PoseSource]] = {
-    "mock":    lambda **kw: MockPoseSource(),
     "oculus":  _build_oculus,
     "steamvr": _build_steamvr,
 }

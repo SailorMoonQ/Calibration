@@ -4,7 +4,7 @@ import { posesWsUrl } from '../api/client.js';
 export const initialSlot = (overrides = {}) => ({
   mode: 'live',                 // 'live' | 'import'
   // live mode
-  backend: 'mock',              // 'mock' | 'oculus' | 'steamvr'
+  backend: 'steamvr',           // 'oculus' | 'steamvr'
   adbIp: '',
   fps: 30,
   connected: false,
@@ -64,6 +64,9 @@ export function useSlotWs({ slot, setSlot, wantConnected, onHello, onSample, onE
   useEffect(() => {
     if (slot.mode !== 'live' || !wantConnected) {
       if (wsRef.current) { try { wsRef.current.close(); } catch { /* swallow */ } wsRef.current = null; }
+      // The previous run's onclose bails on `cancelled`, so reset connect state here.
+      setSlot(s => (s.connected || s.recording) ? { ...s, connected: false, recording: false } : s);
+      recordingActiveRef.current = false;
       return;
     }
     let cancelled = false;
