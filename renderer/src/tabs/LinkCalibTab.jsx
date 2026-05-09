@@ -273,7 +273,7 @@ export function LinkCalibTab({ solvePattern }) {
   const curB = slotB.mode === 'live' ? slotsBufB.curT : null;
 
   const Tmat = result?.T ?? [
-    [1, 0, 0, 0.05], [0, 1, 0, 0], [0, 0, 1, 0.05], [0, 0, 0, 1],
+    [1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1],
   ];
   const tVec = [Tmat[0][3], Tmat[1][3], Tmat[2][3]];
   const tMm = tVec.map(v => v * 1000);
