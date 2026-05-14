@@ -45,7 +45,7 @@ export function slotPath(s) {
  *
  * Returns { wsRef, ticksRef, recordingActiveRef }.
  */
-export function useSlotWs({ slot, setSlot, wantConnected, onHello, onSample, onError }) {
+export function useSlotWs({ slot, setSlot, wantConnected, setWantConnected, onHello, onSample, onError }) {
   const wsRef = useRef(null);
   const ticksRef = useRef({});       // { device: [{ts, present}] } — reset on every `hello` to match the new device list
   const recordingActiveRef = useRef(false);
@@ -88,6 +88,10 @@ export function useSlotWs({ slot, setSlot, wantConnected, onHello, onSample, onE
           setSlot(s => ({ ...s, connected: false, recording: false }));
           recordingActiveRef.current = false;
           wsRef.current = null;
+          // Reset connect-intent so the next click re-triggers the effect.
+          // Without this, wantConnected stays true after a server-side close
+          // (e.g. SteamVR init failure) and React bails out of setWantConnected(true).
+          setWantConnected?.(false);
         };
         ws.onerror = () => onErrorRef.current?.('ws error');
         ws.onmessage = (ev) => {

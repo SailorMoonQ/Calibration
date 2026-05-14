@@ -72,12 +72,12 @@ export function LinkCalibTab({ solvePattern }) {
   const handleSampleB = useCallback((m) => handleSample(m, slotB, slotsBufB), [slotB, slotsBufB]);
 
   useSlotWs({
-    slot: slotA, setSlot: setSlotA, wantConnected: wantA,
+    slot: slotA, setSlot: setSlotA, wantConnected: wantA, setWantConnected: setWantA,
     onSample: handleSampleA,
     onError: (msg) => setStatus(`A: ${msg}`),
   });
   useSlotWs({
-    slot: slotB, setSlot: setSlotB, wantConnected: wantB,
+    slot: slotB, setSlot: setSlotB, wantConnected: wantB, setWantConnected: setWantB,
     onSample: handleSampleB,
     onError: (msg) => setStatus(`B: ${msg}`),
   });
