@@ -31,11 +31,40 @@ DEVICES = ["quest_ctrl_l", "quest_ctrl_r"]
 _CHAR_TO_DEV = {"l": "quest_ctrl_l", "r": "quest_ctrl_r"}
 
 
+def _patch_process_data(reader_cls) -> None:
+    """Make OculusReader tolerate the Quest 3S teleop APK log format.
+
+    The teleop APK on Quest 3S emits eight '&'-separated fields per line
+    (transforms & buttons & timestamp_ns & five tracking-status pairs).
+    Upstream ``OculusReader.process_data`` hard-unpacks ``string.split('&')``
+    into exactly two values, so every line raises ValueError and is dropped —
+    ``poll()`` then never sees a transform (the "0 samples" symptom). We
+    collapse the payload back to the transforms+buttons pair the upstream
+    parser expects and delegate to it unchanged. Idempotent.
+    """
+    if getattr(reader_cls, "_calib_multifield_patch", False):
+        return
+    _orig = reader_cls.process_data
+
+    def _process_data_compat(string):
+        parts = string.split("&")
+        if len(parts) > 2:
+            string = parts[0] + "&" + parts[1]
+        return _orig(string)
+
+    reader_cls.process_data = staticmethod(_process_data_compat)
+    reader_cls._calib_multifield_patch = True
+
+
 class OculusPoseSource(PoseSource):
     def __init__(self, ip_address: str | None = None) -> None:
         # Imported lazily so missing deps (pure-python-adb, adb binary) only
         # fail when this source is actually selected.
         from oculus_reader.reader import OculusReader  # type: ignore
+
+        # The reader thread starts inside OculusReader.__init__ (run=True), so
+        # the log-line parser must be patched before the instance is built.
+        _patch_process_data(OculusReader)
 
         try:
             self._reader = OculusReader(ip_address=ip_address, run=True)

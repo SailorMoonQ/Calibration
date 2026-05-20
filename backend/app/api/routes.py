@@ -5,8 +5,10 @@ import json
 import logging
 import os
 import platform
+import re
 import struct
 import time
+from pathlib import Path
 
 import cv2
 import numpy as np
@@ -38,6 +40,17 @@ from app.utils import yaml_io
 
 log = logging.getLogger("calib.api")
 router = APIRouter()
+
+# <repo>/dataset — auto-save target for Link-tab captures (routes.py is at
+# <repo>/backend/app/api/routes.py, so the repo root is parents[3]).
+_DATASET_ROOT = Path(__file__).resolve().parents[3] / "dataset"
+_SAFE_NAME_RE = re.compile(r"[^A-Za-z0-9._-]+")
+
+
+def _safe_name(s: object) -> str:
+    """Collapse a user-supplied path segment to a traversal-safe basename."""
+    cleaned = _SAFE_NAME_RE.sub("_", str(s or "").strip())
+    return "" if cleaned in ("", ".", "..") else cleaned
 
 
 @router.get("/health")
@@ -593,7 +606,17 @@ async def calibration_load(body: dict) -> CalibrationLoadResponse:
 
 @router.post("/recording/save")
 async def recording_save(body: dict) -> dict:
-    """Write a canonical pose-list JSON to disk."""
+    """Write a canonical pose-list JSON to disk.
+
+    Two addressing modes:
+      - explicit `path`: write exactly there (file-dialog callers).
+      - `session` + `name`: auto-place at <repo>/dataset/<session>/<name>.json
+        — used by the Link tab's one-click capture, so no save dialog is
+        needed. With `unique` set, a pre-existing session folder is suffixed
+        (`_2`, `_3`, …) so a capture never overwrites an earlier one; the
+        resolved session is returned so the paired slot can target the
+        same folder by passing it back without `unique`.
+    """
     kind = body.get("kind")
     samples = body.get("samples")
     path = body.get("path")
@@ -601,11 +624,24 @@ async def recording_save(body: dict) -> dict:
         raise HTTPException(status_code=400, detail=f"unknown kind: {kind}")
     if not isinstance(samples, list) or not samples:
         raise HTTPException(status_code=400, detail="samples must be a non-empty list")
-    if not path:
-        raise HTTPException(status_code=400, detail="path is required")
     for i, s in enumerate(samples[:5]):
         if not isinstance(s, dict) or "ts" not in s or "T" not in s:
             raise HTTPException(status_code=400, detail=f"sample[{i}] must have ts and T")
+
+    session = _safe_name(body.get("session"))
+    if not path:
+        name = _safe_name(body.get("name"))
+        if not session or not name:
+            raise HTTPException(status_code=400, detail="provide `path`, or `session` + `name`")
+        out_dir = _DATASET_ROOT / session
+        if body.get("unique") and out_dir.exists():
+            n = 2
+            while (_DATASET_ROOT / f"{session}_{n}").exists():
+                n += 1
+            session = f"{session}_{n}"
+            out_dir = _DATASET_ROOT / session
+        path = str(out_dir / f"{name}.json")
+
     try:
         ts_list = [float(s["ts"]) for s in samples]
         out = {
@@ -622,7 +658,7 @@ async def recording_save(body: dict) -> dict:
             json.dump(out, f)
     except OSError as e:
         raise HTTPException(status_code=500, detail=f"write failed: {e}") from e
-    return {"ok": True, "path": path, "n": len(samples)}
+    return {"ok": True, "path": path, "n": len(samples), "session": session}
 
 
 @router.post("/handeye/append_pose")
@@ -922,6 +958,73 @@ async def calibrate_handeye_pose(body: dict) -> CalibrationResult:
         data = json.load(f)
     pairs = data.get("samples") or []
     return solve_handeye_pose(pairs, method=method, pattern=pattern)
+
+
+@router.post("/calibrate/handeye_pose_all")
+async def calibrate_handeye_pose_all(body: dict) -> dict:
+    """Solve the rigid link X with all five cv2.calibrateHandEye methods.
+
+    Body: { synced_path, pattern = "eye_in_hand" }. Each method's rotation and
+    position RMS is computed; methods are ranked by a normalized blend of the
+    two (each axis min-max scaled across the candidates, then averaged 50/50),
+    and the lowest-score method is returned as `best`.
+    """
+    from app.calib.handeye_pose import _per_pair_residuals, solve_handeye_pose
+
+    synced_path = body.get("synced_path")
+    pattern = (body.get("pattern") or "eye_in_hand").lower()
+    if not (synced_path and os.path.isfile(synced_path)):
+        raise HTTPException(status_code=404, detail="synced_path not found")
+    if pattern not in ("eye_in_hand", "eye_to_hand"):
+        raise HTTPException(status_code=400, detail=f"unknown pattern: {pattern}")
+
+    with open(synced_path) as f:
+        pairs = json.load(f).get("samples") or []
+
+    T_v = [np.asarray(p["T_vive"], float) for p in pairs]
+    T_u = [np.asarray(p["T_umi"], float) for p in pairs]
+    T_v_eff = [np.linalg.inv(T) for T in T_v] if pattern == "eye_to_hand" else T_v
+
+    results = []
+    for m in ("daniilidis", "tsai", "park", "horaud", "andreff"):
+        res = solve_handeye_pose(pairs, method=m, pattern=pattern)
+        entry = {
+            "method": m,
+            "ok": bool(res.ok),
+            "T": res.T,
+            "rms": float(res.rms),
+            "rot_rms": None,
+            "pos_rms": None,
+            "score": None,
+            "per_frame_err": list(res.per_frame_err or []),
+            "iterations": int(res.iterations or 0),
+            "final_cost": float(res.final_cost or 0.0),
+            "message": res.message or "",
+        }
+        if res.ok and res.T is not None:
+            rot, pos = _per_pair_residuals(T_v_eff, T_u, np.asarray(res.T, float), pattern)
+            if rot and pos:
+                entry["rot_rms"] = float(np.sqrt(np.mean(np.square(rot))))
+                entry["pos_rms"] = float(np.sqrt(np.mean(np.square(pos))))
+        results.append(entry)
+
+    rankable = [r for r in results if r["rot_rms"] is not None and r["pos_rms"] is not None]
+    best = None
+    if rankable:
+        pr = [r["pos_rms"] for r in rankable]
+        rr = [r["rot_rms"] for r in rankable]
+        p_lo, p_hi = min(pr), max(pr)
+        r_lo, r_hi = min(rr), max(rr)
+
+        def _norm(v: float, lo: float, hi: float) -> float:
+            return 0.0 if hi <= lo else (v - lo) / (hi - lo)
+
+        for r in rankable:
+            r["score"] = (0.5 * _norm(r["pos_rms"], p_lo, p_hi)
+                          + 0.5 * _norm(r["rot_rms"], r_lo, r_hi))
+        best = min(rankable, key=lambda r: r["score"])["method"]
+
+    return {"ok": best is not None, "best": best, "pattern": pattern, "results": results}
 
 
 @router.get("/recording/list_topics")

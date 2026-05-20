@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Section, Seg, Chk, Field, Matrix, KV } from '../components/primitives.jsx';
 import {
   Scene3D, Tracker3D, Controller3D, Traj3D, RigidLink3D, Ground3D,
@@ -27,6 +27,14 @@ function rpyDeg(R) {
   return [r(Math.atan2(R[2][1], R[2][2])), r(Math.atan2(-R[2][0], sy)), r(Math.atan2(R[1][0], R[0][0]))];
 }
 
+// Compact local-time stamp (YYYYMMDD_HHMMSS) for the default capture session.
+function nowStamp() {
+  const d = new Date();
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}`
+       + `_${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
+}
+
 export function LinkCalibTab({ solvePattern }) {
   const [slotA, setSlotA] = useState(() => initialSlot({ backend: 'steamvr' }));
   const [slotB, setSlotB] = useState(() => initialSlot({ format: 'mcap' }));
@@ -42,8 +50,12 @@ export function LinkCalibTab({ solvePattern }) {
   const [syncEst, setSyncEst] = useState(null);   // estimator output: {delta_t, snr, a_rot_deg, b_rot_deg}
   const [deltaT, setDeltaT] = useState(null);     // user-tunable Δt — initialised from the estimate
   const [syncDiag, setSyncDiag] = useState(null); // post-apply: {delta_t, n_pairs, a_rot_deg, b_rot_deg}
-  const [solveMethod, setSolveMethod] = useState('daniilidis');
+  const [solveResults, setSolveResults] = useState(null);  // [{method, ok, rot_rms, pos_rms, score, ...}] | null
+  const [bestMethod, setBestMethod] = useState(null);
+  const [viewMethod, setViewMethod] = useState(null);      // method whose result is shown
   const [tickCount, setTickCount] = useState(0);
+  const [session, setSession] = useState(() => `link_${nowStamp()}`);
+  const [captureState, setCaptureState] = useState('idle'); // 'idle' | 'arming' | 'recording'
   const [poseStats] = useState(null);
   useReportPoses(poseStats);
 
@@ -71,36 +83,98 @@ export function LinkCalibTab({ solvePattern }) {
   const handleSampleA = useCallback((m) => handleSample(m, slotA, slotsBufA), [slotA, slotsBufA]);
   const handleSampleB = useCallback((m) => handleSample(m, slotB, slotsBufB), [slotB, slotsBufB]);
 
+  // A source erroring (e.g. connect failure) aborts the unified capture.
+  const onSlotError = useCallback((label, msg) => {
+    setStatus(`${label}: ${msg}`);
+    setCaptureState('idle');
+    setSlotA(s => (s.recording ? { ...s, recording: false } : s));
+    setSlotB(s => (s.recording ? { ...s, recording: false } : s));
+  }, []);
+
   useSlotWs({
     slot: slotA, setSlot: setSlotA, wantConnected: wantA, setWantConnected: setWantA,
     onSample: handleSampleA,
-    onError: (msg) => setStatus(`A: ${msg}`),
+    onError: (msg) => onSlotError('A', msg),
   });
   useSlotWs({
     slot: slotB, setSlot: setSlotB, wantConnected: wantB, setWantConnected: setWantB,
     onSample: handleSampleB,
-    onError: (msg) => setStatus(`B: ${msg}`),
+    onError: (msg) => onSlotError('B', msg),
   });
 
-  // Live-mode controls --------------------------------------------------------
-  const startRec = (slot, setSlot, buf) => {
-    if (!slot.connected) { setStatus('connect first'); return; }
-    buf.rec.length = 0;
-    setSlot(s => ({ ...s, recording: true, recordedPath: null, recCount: 0 }));
-  };
+  // Unified capture -----------------------------------------------------------
+  // One Record button drives every live slot: arm → connect → record in
+  // lockstep → stop → auto-save the pair into dataset/<session>/.
 
-  const stopAndSaveRec = async (slot, setSlot, buf, label) => {
-    setSlot(s => ({ ...s, recording: false }));
-    const samples = buf.rec.slice();
-    if (samples.length === 0) { setStatus(`${label}: nothing recorded`); return; }
-    const path = await pickSaveFile({ defaultPath: `${label}_recording.json` });
-    if (!path) { setStatus(`${label}: save cancelled`); return; }
-    try {
-      const r = await recording.save({ kind: 'vive', samples, path });
-      setSlot(s => ({ ...s, recordedPath: r.path, recCount: r.n }));
-      setStatus(`${label}: saved ${r.n} → ${path.split('/').pop()}`);
-    } catch (e) { setStatus(`${label}: save failed: ${e.message}`); }
-  };
+  const stopCapture = useCallback(async () => {
+    setCaptureState('idle');
+    setSlotA(s => (s.recording ? { ...s, recording: false } : s));
+    setSlotB(s => (s.recording ? { ...s, recording: false } : s));
+    setStatus('saving…');
+
+    const slots = [];
+    if (slotA.mode === 'live') slots.push(['A', setSlotA, slotsBufA]);
+    if (slotB.mode === 'live') slots.push(['B', setSlotB, slotsBufB]);
+
+    let resolved = session;
+    let claimed = false;   // the first non-empty save claims a fresh folder
+    const parts = [];
+    for (const [label, setSlot, buf] of slots) {
+      const samples = buf.rec.slice();
+      if (samples.length === 0) { parts.push(`${label} empty`); continue; }
+      try {
+        const r = await recording.save({
+          kind: 'vive', samples,
+          session: resolved, name: `${label}_recording`, unique: !claimed,
+        });
+        resolved = r.session;   // paired slot writes into the same folder
+        claimed = true;
+        setSlot(s => ({ ...s, recordedPath: r.path, recCount: r.n }));
+        parts.push(`${label} ${r.n}`);
+      } catch (e) { parts.push(`${label} failed (${e.message})`); }
+    }
+    setStatus(claimed
+      ? `saved → dataset/${resolved}/  ·  ${parts.join(' · ')}`
+      : `nothing recorded — ${parts.join(' · ')}`);
+  }, [slotA, slotB, session, slotsBufA, slotsBufB]);
+
+  const onRecord = useCallback(() => {
+    if (captureState === 'recording') { stopCapture(); return; }
+    if (captureState === 'arming') { setCaptureState('idle'); setStatus('record cancelled'); return; }
+    const liveA = slotA.mode === 'live';
+    const liveB = slotB.mode === 'live';
+    if (!liveA && !liveB) { setStatus('no live source to record'); return; }
+    if (liveA) setWantA(true);
+    if (liveB) setWantB(true);
+    setResult(null);
+    setCaptureState('arming');
+    setStatus('connecting…');
+  }, [captureState, slotA, slotB, stopCapture]);
+
+  // Arming → recording: once every live slot is connected with a device
+  // selected, start recording them together in lockstep. The setState calls
+  // advance the capture state machine when the async WS connect finally
+  // resolves — there is no render-time value to derive this from.
+  /* eslint-disable react-hooks/set-state-in-effect -- intentional state-machine transition */
+  useEffect(() => {
+    if (captureState !== 'arming') return;
+    const live = [];
+    if (slotA.mode === 'live') live.push(slotA);
+    if (slotB.mode === 'live') live.push(slotB);
+    if (live.length === 0) { setCaptureState('idle'); return; }
+    if (!live.every(s => s.connected && s.device)) return;   // still coming up
+    if (slotA.mode === 'live') {
+      slotsBufA.rec.length = 0;
+      setSlotA(s => ({ ...s, recording: true, recordedPath: null, recCount: 0 }));
+    }
+    if (slotB.mode === 'live') {
+      slotsBufB.rec.length = 0;
+      setSlotB(s => ({ ...s, recording: true, recordedPath: null, recCount: 0 }));
+    }
+    setCaptureState('recording');
+    setStatus('● recording — move the rig through varied rotations');
+  }, [captureState, slotA, slotB, slotsBufA, slotsBufB]);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   // Import-mode controls -----------------------------------------------------
   const importFile = async (slot, setSlot, label) => {
@@ -212,16 +286,32 @@ export function LinkCalibTab({ solvePattern }) {
 
   const onSolve = useCallback(async () => {
     if (!syncPath) { setStatus('sync first'); return; }
-    setBusy(true); setStatus('solving handeye…');
+    setBusy(true); setStatus('solving — all 5 methods…');
     try {
-      const r = await recording.calibrateHandeyePose({
-        synced_path: syncPath, method: solveMethod, pattern: solvePattern,
+      const r = await recording.calibrateHandeyePoseAll({
+        synced_path: syncPath, pattern: solvePattern,
       });
-      setResult(r);
-      setStatus(r.ok ? `T_${linkLabel} · rms ${r.rms.toFixed(3)}° · ${r.message}` : `failed: ${r.message}`);
+      if (!r.ok || !r.results?.length) {
+        setSolveResults(null); setResult(null);
+        setStatus('solve failed — every method errored');
+        return;
+      }
+      setSolveResults(r.results);
+      setBestMethod(r.best);
+      setViewMethod(r.best);
+      const top = r.results.find(x => x.method === r.best);
+      setResult(top);
+      setStatus(`T_${linkLabel} · best ${r.best} · ${top.rot_rms.toFixed(2)}° / ${top.pos_rms.toFixed(1)} mm`);
     } catch (e) { setStatus(`solve failed: ${e.message}`); }
     finally { setBusy(false); }
-  }, [syncPath, solveMethod, solvePattern, linkLabel]);
+  }, [syncPath, solvePattern, linkLabel]);
+
+  // Switch which solved method the Results panel shows.
+  const selectMethod = useCallback((m) => {
+    setViewMethod(m);
+    const r = solveResults?.find(x => x.method === m);
+    if (r?.ok) setResult(r);
+  }, [solveResults]);
 
   const onSaveYaml = useCallback(async () => {
     if (!result?.ok) { setStatus('nothing to save — run solve first'); return; }
@@ -246,6 +336,7 @@ export function LinkCalibTab({ solvePattern }) {
         per_frame_residuals: [], detected_paths: [],
         iterations: 0, final_cost: 0, message: `loaded from ${p}`,
       });
+      setSolveResults(null);
       setStatus(`loaded ← ${p}`);
     } catch (e) { setStatus(`load failed: ${e.message}`); }
   }, []);
@@ -272,6 +363,20 @@ export function LinkCalibTab({ solvePattern }) {
   const curA = slotA.mode === 'live' ? slotsBufA.curT : null;
   const curB = slotB.mode === 'live' ? slotsBufB.curT : null;
 
+  // Wipe the on-screen trajectory polylines for both slots. Recorded samples
+  // (buf.rec) are left untouched; the polyline rebuilds as new samples arrive.
+  // Gated to non-recording state so the view always matches the live capture.
+  const isRecording = slotA.recording || slotB.recording;
+  const clearTraj = useCallback(() => {
+    slotsBufA.viz.length = 0;
+    slotsBufB.viz.length = 0;
+    setTickCount(n => n + 1);
+  }, [slotsBufA, slotsBufB]);
+
+  const recCount = captureState === 'recording'
+    ? Math.max(slotsBufA.rec.length, slotsBufB.rec.length)
+    : 0;
+
   const Tmat = result?.T ?? [
     [1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1],
   ];
@@ -282,8 +387,8 @@ export function LinkCalibTab({ solvePattern }) {
              [Tmat[1][0], Tmat[1][1], Tmat[1][2]],
              [Tmat[2][0], Tmat[2][1], Tmat[2][2]]];
   const rpy = rpyDeg(R);
-  const rotRms = result?.ok ? result.rms : 0;
-  const transRms = result?.ok ? (result.final_cost ?? 0) : 0;
+  const rotRms = result?.ok ? (result.rot_rms ?? result.rms ?? 0) : 0;
+  const transRms = result?.ok ? (result.pos_rms ?? 0) : 0;
 
   const histData = useMemo(() => result?.per_frame_err?.length ? result.per_frame_err : [], [result]);
 
@@ -313,8 +418,6 @@ export function LinkCalibTab({ solvePattern }) {
             label="A" slot={slotA} setSlot={setSlotA}
             setWantConnected={setWantA}
             buf={slotsBufA}
-            onStartRec={() => startRec(slotA, setSlotA, slotsBufA)}
-            onStopRec={() => stopAndSaveRec(slotA, setSlotA, slotsBufA, 'A')}
             onImportFile={() => importFile(slotA, setSlotA, 'A')}
             onImportMcapTopic={() => importMcapTopic(slotA, setSlotA, 'A')}
             onFlipMode={(mode) => flipMode(setSlotA, setWantA, mode)}
@@ -323,12 +426,33 @@ export function LinkCalibTab({ solvePattern }) {
             label="B" slot={slotB} setSlot={setSlotB}
             setWantConnected={setWantB}
             buf={slotsBufB}
-            onStartRec={() => startRec(slotB, setSlotB, slotsBufB)}
-            onStopRec={() => stopAndSaveRec(slotB, setSlotB, slotsBufB, 'B')}
             onImportFile={() => importFile(slotB, setSlotB, 'B')}
             onImportMcapTopic={() => importMcapTopic(slotB, setSlotB, 'B')}
             onFlipMode={(mode) => flipMode(setSlotB, setWantB, mode)}
           />
+
+          <Section title="Capture" hint={
+            captureState === 'recording' ? `● rec · ${recCount}`
+            : captureState === 'arming' ? 'connecting…'
+            : 'idle'}>
+            <Field label="session">
+              <input className="input" value={session}
+                     disabled={captureState !== 'idle'}
+                     onChange={e => setSession(e.target.value)}/>
+            </Field>
+            <button
+              className={`btn ${captureState === 'recording' ? 'primary' : ''}`}
+              style={{ width: '100%' }}
+              onClick={onRecord}
+              disabled={slotA.mode !== 'live' && slotB.mode !== 'live'}>
+              {captureState === 'recording' ? `■ stop & save · ${recCount}`
+               : captureState === 'arming' ? '⏳ connecting — cancel'
+               : '● record all'}
+            </button>
+            <div className="mono" style={{ fontSize: 10.5, color: 'var(--text-3)' }}>
+              → dataset/{session || '…'}/
+            </div>
+          </Section>
 
           <Section title="Mapping" hint={`${slotA.device || '—'} → ${slotB.device || '—'}`}>
             <Field label="link label">
@@ -384,22 +508,42 @@ export function LinkCalibTab({ solvePattern }) {
             )}
           </Section>
 
-          <Section title="Solve" hint={solveGate ? 'gated' : `${solvePattern.replace('_', '-')} · ready`}>
-            <Field label="method">
-              <select className="select" value={solveMethod}
-                      onChange={e => setSolveMethod(e.target.value)}>
-                <option value="daniilidis">daniilidis</option>
-                <option value="tsai">tsai</option>
-                <option value="park">park</option>
-                <option value="horaud">horaud</option>
-                <option value="andreff">andreff</option>
-              </select>
-            </Field>
-            <button className="btn primary" onClick={onSolve}
+          <Section title="Solve" hint={
+            solveResults ? `best · ${bestMethod}`
+            : solveGate ? 'gated'
+            : `${solvePattern.replace('_', '-')} · ready`}>
+            <button className="btn primary" style={{ width: '100%' }} onClick={onSolve}
                     disabled={!!solveGate || busy} title={solveGate || ''}>
-              ▶ Solve T_{linkLabel}
+              {busy ? '… solving all 5' : solveResults ? '↻ re-solve all 5' : `▶ Solve T_${linkLabel}`}
             </button>
             {solveGate && <div className="mono" style={{ fontSize: 10.5, color:'var(--warn)' }}>{solveGate}</div>}
+            {solveResults && (
+              <>
+                <div className="mono" style={{ fontSize: 10.5, color: 'var(--text-3)', margin: '2px 0' }}>
+                  5 methods · ★ best (combined score) · click to view
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                  {solveResults.map(r => {
+                    const isBest = r.method === bestMethod;
+                    const isView = r.method === viewMethod;
+                    return (
+                      <button
+                        key={r.method}
+                        className={`btn ${isView ? 'primary' : 'ghost'}`}
+                        disabled={!r.ok}
+                        onClick={() => selectMethod(r.method)}
+                        style={{ display: 'flex', justifyContent: 'space-between', gap: 8,
+                                 fontSize: 10.5, padding: '3px 7px' }}>
+                        <span>{isBest ? '★ ' : ''}{r.method}</span>
+                        <span className="mono">
+                          {r.ok ? `${r.rot_rms.toFixed(2)}° / ${r.pos_rms.toFixed(1)} mm` : 'failed'}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </>
+            )}
           </Section>
 
           {status && <div className="mono" style={{ fontSize: 10.5, color: 'var(--text-3)', padding: '0 2px' }}>{status}</div>}
@@ -412,6 +556,15 @@ export function LinkCalibTab({ solvePattern }) {
           <Chk checked={showTraj} onChange={setShowTraj}>trajectories</Chk>
           <Chk checked={showLink} onChange={setShowLink}>rigid link</Chk>
           <Chk checked={showGround} onChange={setShowGround}>ground grid</Chk>
+          <button
+            className="btn ghost"
+            onClick={clearTraj}
+            disabled={isRecording}
+            title={isRecording
+              ? 'stop recording to clear the trajectory'
+              : 'clear the on-screen trajectory — recorded samples are kept'}>
+            ✕ clear traj
+          </button>
           <button
             className={`btn ${showAfter ? 'primary' : 'ghost'}`}
             disabled={!result?.ok}
@@ -498,7 +651,7 @@ export function LinkCalibTab({ solvePattern }) {
 
 function SlotCard({
   label, slot, setSlot, setWantConnected, buf,
-  onStartRec, onStopRec, onImportFile, onImportMcapTopic, onFlipMode,
+  onImportFile, onImportMcapTopic, onFlipMode,
 }) {
   const ready = slotReady(slot);
   const liveCount = slot.recording ? buf.rec.length : 0;
@@ -533,16 +686,11 @@ function SlotCard({
             <input type="number" className="input" value={slot.fps} min={1} max={120}
                    onChange={e => setSlot(s => ({ ...s, fps: +e.target.value || 30 }))}/>
           </Field>
-          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:6 }}>
-            {!slot.connected
-              ? <button className="btn primary" onClick={() => setWantConnected(true)}>⚡ connect</button>
-              : <button className="btn ghost" onClick={() => setWantConnected(false)}>⨯ disconnect</button>}
-            {slot.connected && (
-              slot.recording
-                ? <button className="btn primary" onClick={onStopRec}>⏹ stop & save</button>
-                : <button className="btn" onClick={onStartRec}>● record</button>
-            )}
-          </div>
+          {!slot.connected
+            ? <button className="btn primary" style={{ width: '100%' }}
+                      onClick={() => setWantConnected(true)}>⚡ connect</button>
+            : <button className="btn ghost" style={{ width: '100%' }}
+                      onClick={() => setWantConnected(false)}>⨯ disconnect</button>}
           {slot.recording && <div className="mono" style={{ fontSize: 10.5 }}>{liveCount} samples buffered</div>}
           {slot.recordedPath && (
             <div className="mono" style={{ fontSize: 10.5, color:'var(--text-3)' }}>

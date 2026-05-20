@@ -109,8 +109,11 @@ export const api = {
 };
 
 export const recording = {
-  save: ({ kind, samples, path }) =>
-    request('/recording/save', { method: 'POST', body: JSON.stringify({ kind, samples, path }) }),
+  save: ({ kind, samples, path, session, name, unique }) =>
+    request('/recording/save', {
+      method: 'POST',
+      body: JSON.stringify({ kind, samples, path, session, name, unique }),
+    }),
   listTopics: (mcap_path) =>
     request(`/recording/list_topics?mcap_path=${encodeURIComponent(mcap_path)}`),
   importMcap: ({ mcap_path, topic, out_path }) =>
@@ -123,6 +126,8 @@ export const recording = {
     request('/recording/sync', { method: 'POST', body: JSON.stringify({ a_path, b_path, out_path, max_skew_s, max_pair_gap_s, delta_t_override }) }),
   calibrateHandeyePose: ({ synced_path, method, pattern }) =>
     request('/calibrate/handeye_pose', { method: 'POST', body: JSON.stringify({ synced_path, method, pattern }) }),
+  calibrateHandeyePoseAll: ({ synced_path, pattern }) =>
+    request('/calibrate/handeye_pose_all', { method: 'POST', body: JSON.stringify({ synced_path, pattern }) }),
 };
 
 export async function mjpegUrl(device, opts = {}) {

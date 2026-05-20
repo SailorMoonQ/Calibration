@@ -1,3 +1,6 @@
 [submodule "third_party/oculus_reader"]
 	path = third_party/oculus_reader
 	url = https://github.com/rail-berkeley/oculus_reader.git
+[submodule "third_party/triad_openvr"]
+	path = third_party/triad_openvr
+	url = https://github.com/TriadSemi/triad_openvr.git
