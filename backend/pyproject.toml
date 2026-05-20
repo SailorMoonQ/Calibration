@@ -1,6 +1,6 @@
 [project]
 name = "calib-backend"
-version = "0.1.0"
+version = "0.2.0"
 description = "Calibration Workbench backend — OpenCV + SteamVR + bundle adjustment."
 requires-python = ">=3.10"
 dependencies = [
@@ -26,7 +26,9 @@ dev = [
 steamvr = ["triad-openvr>=1.0.0"]
 # Quest3(s) via OculusReader submodule (third_party/oculus_reader).
 # Requires `adb` on the host and the teleop APK installed on the device.
-oculus = ["pure-python-adb>=0.3.0"]
+# pure-python-adb only ever publishes pre-releases on PyPI (latest 0.3.0.dev0),
+# so the spec must name `.dev0` explicitly — `>=0.3.0` resolves to nothing.
+oculus = ["pure-python-adb>=0.3.0.dev0"]
 
 [build-system]
 requires = ["setuptools>=68", "wheel"]

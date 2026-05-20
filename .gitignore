@@ -538,6 +538,9 @@ release/
 dataset/
 **/.trash/
 
+# Generated precision report (regenerable via scripts/precision_report.py)
+docs/precision/
+
 # Un-ignore renderer JS lib (overrides the Python template's `lib/` rule above)
 !renderer/src/lib/
 !renderer/src/lib/**
