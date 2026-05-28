@@ -67,3 +67,10 @@ def test_unknown_source_raises(monkeypatch):
 def test_release_unknown_is_noop(monkeypatch):
     _patch_builders(monkeypatch)
     pose_manager.release("never-acquired")  # must not raise
+
+
+def test_pico_builder_is_registered():
+    # The real builder is registered (not the monkeypatched _BUILDERS); assert
+    # the key exists and is callable without constructing it (which needs hw).
+    assert "pico" in pose_manager._BUILDERS
+    assert callable(pose_manager._BUILDERS["pico"])

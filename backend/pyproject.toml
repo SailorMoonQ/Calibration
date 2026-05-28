@@ -29,6 +29,11 @@ steamvr = ["triad-openvr>=1.0.0"]
 # pure-python-adb only ever publishes pre-releases on PyPI (latest 0.3.0.dev0),
 # so the spec must name `.dev0` explicitly — `>=0.3.0` resolves to nothing.
 oculus = ["pure-python-adb>=0.3.0.dev0"]
+# PICO via XRoboToolkit. xrobotoolkit_sdk is NOT on PyPI — build it from the
+# third_party/XRoboToolkit-PC-Service-Pybind submodule (see INSTALL.md) and
+# install into this venv. The list is empty because there is no pip-resolvable
+# requirement; the comment is the install contract.
+pico = []
 
 [build-system]
 requires = ["setuptools>=68", "wheel"]

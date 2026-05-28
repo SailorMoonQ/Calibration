@@ -22,6 +22,7 @@ const basename = (p) => (p || '').split('/').pop();
 
 const TRACKER_SOURCES = [
   { value: 'oculus',  label: 'Oculus Reader' },
+  { value: 'pico',    label: 'PICO' },
   { value: 'ros2',    label: 'ROS2 topic' },
   { value: 'steamvr', label: 'SteamVR' },
   { value: 'file',    label: 'JSON file' },
@@ -40,6 +41,7 @@ export function HandEyeTab({ solvePattern, setSolvePattern }) {
 
   const [trackerSource, setTrackerSource] = useState('file');
   const [oculusDevice, setOculusDevice] = useState('');
+  const [picoDevice, setPicoDevice] = useState('');
   const [trackerRos2Topic, setTrackerRos2Topic] = useState('');
   const [steamvrSerial, setSteamvrSerial] = useState('');
 
@@ -65,6 +67,7 @@ export function HandEyeTab({ solvePattern, setSolvePattern }) {
 
   const trackerDeviceKey = () => {
     if (trackerSource === 'oculus')  return oculusDevice || (kind === 'ctrl' ? 'controller_R' : 'hmd');
+    if (trackerSource === 'pico')    return picoDevice || (kind === 'ctrl' ? 'pico_ctrl_r' : 'pico_hmd');
     if (trackerSource === 'steamvr') return steamvrSerial || (kind === 'ctrl' ? 'controller_R' : 'tracker_0');
     return null;
   };
@@ -106,7 +109,7 @@ export function HandEyeTab({ solvePattern, setSolvePattern }) {
         while (win.length && win[0] < cutoff) win.shift();
       };
     } catch (e) { setStatus(`connect failed: ${e.message}`); }
-  }, [trackerSource, oculusDevice, steamvrSerial, kind]);
+  }, [trackerSource, oculusDevice, picoDevice, steamvrSerial, kind]);
 
   const onDisconnectTracker = useCallback(() => {
     const ws = wsRef.current;
@@ -438,6 +441,7 @@ export function HandEyeTab({ solvePattern, setSolvePattern }) {
             hint={
               trackerSource === 'file'    ? (posesPath ? basename(posesPath) : 'pick json') :
               trackerSource === 'oculus'  ? (oculusDevice || 'pick device') :
+              trackerSource === 'pico'    ? (picoDevice || 'pick device') :
               trackerSource === 'ros2'    ? (trackerRos2Topic || 'pick topic') :
                                             (steamvrSerial || 'pick tracker')
             }
@@ -468,6 +472,22 @@ export function HandEyeTab({ solvePattern, setSolvePattern }) {
                 </div>
               </>
             )}
+            {trackerSource === 'pico' && (
+              <>
+                <Field label="device">
+                  <select className="select" value={picoDevice} disabled={connected}
+                    onChange={e => setPicoDevice(e.target.value)}>
+                    <option value="">— none —</option>
+                    <option value="pico_ctrl_l">controller L</option>
+                    <option value="pico_ctrl_r">controller R</option>
+                    <option value="pico_hmd">headset</option>
+                  </select>
+                </Field>
+                <div className="mono" style={{ fontSize: 10.5, color: 'var(--text-3)' }}>
+                  via XRoboToolkit PC Service
+                </div>
+              </>
+            )}
             {trackerSource === 'ros2' && (
               <Ros2TopicPicker
                 topic={trackerRos2Topic}
@@ -493,7 +513,7 @@ export function HandEyeTab({ solvePattern, setSolvePattern }) {
                 <button className="btn" onClick={onPickPoses}>📁 pick json</button>
               </>
             )}
-            {(trackerSource === 'oculus' || trackerSource === 'steamvr') && (
+            {(trackerSource === 'oculus' || trackerSource === 'pico' || trackerSource === 'steamvr') && (
               <>
                 <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:6 }}>
                   {!connected

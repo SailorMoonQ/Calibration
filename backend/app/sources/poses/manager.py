@@ -28,9 +28,16 @@ def _build_steamvr(**kw) -> PoseSource:
     return SteamVRPoseSource()
 
 
+def _build_pico(**kw) -> PoseSource:
+    # XRoboToolkit's PC Service owns the headset link, so no ip param is used.
+    from app.sources.poses.pico import PicoPoseSource
+    return PicoPoseSource()
+
+
 _BUILDERS: dict[str, Callable[..., PoseSource]] = {
     "oculus":  _build_oculus,
     "steamvr": _build_steamvr,
+    "pico":    _build_pico,
 }
 
 
