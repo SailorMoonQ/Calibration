@@ -4,7 +4,7 @@ import { posesWsUrl } from '../api/client.js';
 export const initialSlot = (overrides = {}) => ({
   mode: 'live',                 // 'live' | 'import'
   // live mode
-  backend: 'steamvr',           // 'oculus' | 'steamvr'
+  backend: 'steamvr',           // 'oculus' | 'pico' | 'steamvr'
   adbIp: '',
   fps: 30,
   connected: false,

@@ -698,6 +698,7 @@ function SlotCard({
             <select className="select" value={slot.backend} disabled={slot.connected}
                     onChange={e => setSlot(s => ({ ...s, backend: e.target.value }))}>
               <option value="oculus">oculus (Quest3s)</option>
+              <option value="pico">pico (XRoboToolkit)</option>
               <option value="steamvr">steamvr (Vive tracker)</option>
             </select>
           </Field>
