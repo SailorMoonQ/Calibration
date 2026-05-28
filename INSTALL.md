@@ -54,6 +54,38 @@ The USB camera path works regardless of whether ROS2 is sourced.
   `triad-openvr` (install with `pip3 install --user triad-openvr`).
 - **Quest3 (Oculus)**: requires `adb` on the host and the OculusReader
   APK on the device (see `third_party/oculus_reader/`).
+- **PICO (XRoboToolkit)**: see the detailed steps below — the Python
+  module is built from source, not installed from PyPI.
+
+### PICO tracker (XRoboToolkit)
+
+PICO has no first-party Python pose SDK, so we use XRoboToolkit.
+`xrobotoolkit_sdk` is **not on PyPI** — build it from source:
+
+1. **Headset:** install the XRoboToolkit client APK on the PICO
+   (`adb install <client>.apk`) and launch it.
+2. **PC Service:** build and run `XRoboToolkit-PC-Service` (the daemon that
+   receives poses from the headset). It is single-instance — start it before
+   connecting from the Workbench.
+3. **Python module:** initialize the submodule and build it into the backend's
+   Python environment:
+   ```bash
+   git submodule update --init third_party/XRoboToolkit-PC-Service-Pybind
+   cd third_party/XRoboToolkit-PC-Service-Pybind
+   # copy PC-Service compiled libs/headers into lib/ and include/ per its README
+   pip3 install --user .        # or: python3 setup.py install
+   ```
+4. **Verify:** `python3 -c "import xrobotoolkit_sdk; xrobotoolkit_sdk.init(); print('ok')"`
+   should print `ok` with the PC Service running.
+
+In the app, pick **PICO** as the tracker source (Hand-Eye) or slot backend
+(Link). Devices: `pico_ctrl_l`, `pico_ctrl_r`, `pico_hmd`. No adb-IP field is
+needed — the PC Service owns the headset link.
+
+> **Note:** the `git submodule add` for `third_party/XRoboToolkit-PC-Service-Pybind`
+> was deferred during development (needs GitHub access). On a networked machine, run:
+> `git submodule add https://github.com/XR-Robotics/XRoboToolkit-PC-Service-Pybind.git third_party/XRoboToolkit-PC-Service-Pybind`
+> and commit, then the `submodule update --init` above will track it.
 
 ## 4. Run
 
