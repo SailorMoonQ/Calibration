@@ -1176,8 +1176,8 @@ async def poses_stream(
 
     Query params:
       - fps:     tick rate (clamped ≥ 1)
-      - sources: comma list, e.g. "steamvr" or "oculus,steamvr"
-      - ip:      optional IP for network ADB (applies to the oculus source)
+      - sources: comma list, e.g. "steamvr", "oculus,steamvr", or "pico"
+      - ip:      optional IP for network ADB (oculus only; ignored by pico/steamvr)
     """
     await ws.accept()
     names = _parse_sources(sources)
