@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { Section, Seg, Field, Chk, KV, NumInput, Spark, Histogram } from './primitives.jsx';
+import { useTelemetry } from '../lib/telemetry.jsx';
 
 function FrameThumb({ f }) {
   return (
@@ -15,7 +16,7 @@ function FrameThumb({ f }) {
   );
 }
 
-export function FrameStrip({ frames, selected, onSelect, coverage }) {
+export function FrameStrip({ frames, selected, onSelect, coverage, okBelow = 0.35, warnBelow = 0.6 }) {
   const activeRef = useRef(null);
   // Whenever the selection changes, slide the strip so the active thumb is centered.
   // `block: 'nearest'` keeps the page from also scrolling vertically.
@@ -24,6 +25,12 @@ export function FrameStrip({ frames, selected, onSelect, coverage }) {
       activeRef.current.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
     }
   }, [selected]);
+
+  // Normalize the per-frame bar against the strip's own max so domain (mm vs px)
+  // doesn't matter — the longest bar is "worst frame in this batch", the shortest
+  // is "best". The traffic-light thresholds for the numeric label still come from
+  // the caller (defaults are pixel-domain, HandEye overrides with mm-domain).
+  const barMax = Math.max(warnBelow * 2, ...frames.map(f => f.err || 0)) || 1;
 
   return (
     <div className="framestrip">
@@ -34,6 +41,11 @@ export function FrameStrip({ frames, selected, onSelect, coverage }) {
       <div style={{ width: 1, height: 38, background: 'var(--border-soft)' }}/>
       {frames.map(f => {
         const isActive = selected === f.id;
+        const kind = trafficKindForRms(f.err, okBelow, warnBelow);
+        const numColor = kind === 'err' ? 'oklch(0.75 0.17 25)' : kind === 'warn' ? 'oklch(0.8 0.15 70)' : 'oklch(0.82 0.14 150)';
+        const barColor = kind === 'err' ? 'var(--err)' : kind === 'warn' ? 'var(--warn)' : 'var(--ok)';
+        // Bar shrinks as error grows: 100% when err=0, 0% when err≥barMax.
+        const barPct = Math.max(0, (1 - Math.min(1, f.err / barMax))) * 100;
         return (
           <div key={f.id}
                ref={isActive ? activeRef : null}
@@ -41,8 +53,8 @@ export function FrameStrip({ frames, selected, onSelect, coverage }) {
                onClick={() => onSelect(f.id)}>
             <FrameThumb f={f}/>
             <span className="fnum">#{f.id.toString().padStart(2,'0')}</span>
-            <span className="ferr" style={{ color: f.err > 0.6 ? 'oklch(0.75 0.17 25)' : f.err > 0.35 ? 'oklch(0.8 0.15 70)' : 'oklch(0.82 0.14 150)' }}>{f.err.toFixed(2)}</span>
-            <span className="fbar" style={{ width: (1 - Math.min(1, f.err)) * 100 + '%', background: f.err > 0.6 ? 'var(--err)' : f.err > 0.35 ? 'var(--warn)' : 'var(--ok)' }}/>
+            <span className="ferr" style={{ color: numColor }}>{f.err.toFixed(2)}</span>
+            <span className="fbar" style={{ width: barPct + '%', background: barColor }}/>
           </div>
         );
       })}
@@ -72,32 +84,77 @@ export function CoverageGrid({ cells, w = 110, h = 72 }) {
   );
 }
 
-export function ErrorPanel({ rms, frames, histData }) {
-  const traffic = rms < 0.25 ? 'ok' : rms < 0.5 ? 'warn' : 'err';
-  const trafficColor = traffic === 'ok' ? 'var(--ok)' : traffic === 'warn' ? 'var(--warn)' : 'var(--err)';
+// Traffic-light coloring for any scalar error. Thresholds default to the
+// pixel-domain reprojection-error scale; callers in HandEye / Link pass
+// degree- or millimetre-domain thresholds.
+export function trafficKindForRms(rms, okBelow, warnBelow) {
+  if (!Number.isFinite(rms)) return 'idle';
+  if (rms < okBelow) return 'ok';
+  if (rms < warnBelow) return 'warn';
+  return 'err';
+}
+
+export function trafficColor(kind) {
+  return kind === 'ok' ? 'var(--ok)'
+       : kind === 'warn' ? 'var(--warn)'
+       : kind === 'err' ? 'var(--err)'
+       : 'var(--text-4)';
+}
+
+// Derive {mean, max, σ} from the actual per-corner residuals. Falls back to
+// rms-only display when histData is empty (e.g. yaml without per-frame data).
+function residualStats(data) {
+  if (!data || data.length === 0) return null;
+  const n = data.length;
+  let sum = 0, max = -Infinity;
+  for (const v of data) { sum += v; if (v > max) max = v; }
+  const mean = sum / n;
+  let sqSum = 0;
+  for (const v of data) { const d = v - mean; sqSum += d * d; }
+  const sigma = Math.sqrt(sqSum / n);
+  return { mean, max, sigma };
+}
+
+export function ErrorPanel({
+  rms, frames, histData,
+  title = 'Reprojection Error',
+  unit = 'px',
+  okBelow = 0.25,
+  warnBelow = 0.5,
+}) {
+  const kind = trafficKindForRms(rms, okBelow, warnBelow);
+  const color = trafficColor(kind);
+  const stats = residualStats(histData);
   return (
     <div>
-      <Section title="Reprojection Error" hint="px">
+      <Section title={title} hint={unit}>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', alignItems: 'baseline', gap: 10 }}>
           <div>
             <div style={{ fontSize: 10.5, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>RMS over frames</div>
-            <div style={{ fontFamily: 'JetBrains Mono', fontSize: 24, fontWeight: 500, color: trafficColor, letterSpacing: '-0.02em' }}>{rms.toFixed(3)}<span style={{ fontSize: 11, color: 'var(--text-3)', marginLeft: 4 }}>px</span></div>
+            <div style={{ fontFamily: 'JetBrains Mono', fontSize: 24, fontWeight: 500, color, letterSpacing: '-0.02em' }}>{rms.toFixed(3)}<span style={{ fontSize: 11, color: 'var(--text-3)', marginLeft: 4 }}>{unit}</span></div>
           </div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 4, fontFamily: 'JetBrains Mono', fontSize: 11, color: 'var(--text-2)', textAlign: 'right' }}>
-            <div>mean <b style={{color: 'var(--text)'}}>{(rms * 0.92).toFixed(3)}</b></div>
-            <div>max  <b style={{color: 'var(--text)'}}>{(rms * 2.4).toFixed(3)}</b></div>
-            <div>σ    <b style={{color: 'var(--text)'}}>{(rms * 0.41).toFixed(3)}</b></div>
-          </div>
+          {stats ? (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 4, fontFamily: 'JetBrains Mono', fontSize: 11, color: 'var(--text-2)', textAlign: 'right' }}>
+              <div>mean <b style={{color: 'var(--text)'}}>{stats.mean.toFixed(3)}</b></div>
+              <div>max  <b style={{color: 'var(--text)'}}>{stats.max.toFixed(3)}</b></div>
+              <div>σ    <b style={{color: 'var(--text)'}}>{stats.sigma.toFixed(3)}</b></div>
+            </div>
+          ) : (
+            <div style={{ fontFamily: 'JetBrains Mono', fontSize: 11, color: 'var(--text-4)', textAlign: 'right' }}>
+              <div>no per-frame</div>
+              <div>data</div>
+            </div>
+          )}
         </div>
 
         <div className="chart-wrap" style={{ marginTop: 8 }}>
           <div className="chart-title"><span>Per-frame RMS</span><b>{frames.length} frames</b></div>
-          <Spark data={frames} w={280} h={46} color={trafficColor} threshold={0.5}/>
+          <Spark data={frames} w={280} h={46} color={color} threshold={warnBelow}/>
         </div>
 
         <div className="chart-wrap" style={{ marginTop: 6 }}>
           <div className="chart-title"><span>Residual distribution</span><b>{histData.length} corners</b></div>
-          <Histogram data={histData} w={280} h={54} color={trafficColor}/>
+          <Histogram data={histData} w={280} h={54} color={color} unit={unit}/>
         </div>
       </Section>
     </div>
@@ -171,13 +228,14 @@ export function SolverButton({ onSolve, busy, label = "Run calibration", status,
   );
 }
 
-export function SolverPanel({ iters = 0, cost = 0, cond = 0, algo = '' }) {
+export function SolverPanel({ iters = 0, cost = 0, costUnit = '', costLabel = 'final cost', cond = 0, algo = '' }) {
+  const costStr = `${cost.toFixed(4)}${costUnit ? ' ' + costUnit : ''}`;
   return (
     <Section title="Solver" hint={algo}>
       <KV items={[
-        ['iterations', iters, ''],
-        ['final cost', cost.toFixed(4), ''],
-        ['condition κ', cond.toFixed(1), cond > 1000 ? 'warn' : ''],
+        ['iterations', iters ? iters : '—', ''],
+        [costLabel, costStr, ''],
+        ['condition κ', cond > 0 ? cond.toFixed(1) : '—', cond > 1000 ? 'warn' : ''],
       ]}/>
     </Section>
   );
@@ -262,20 +320,31 @@ export function TargetPanel({ board, onBoard }) {
   );
 }
 
-export function LogStrip({ lines }) {
+// Read camera FPS and tracker pose-stream Hz from the live telemetry context
+// rather than hardcoding. Falls back to "—" while no source is connected so
+// the footer doesn't lie about activity.
+export function LogStrip({ lines = [] }) {
+  const { cameras, poses } = useTelemetry();
+  const camFps = (() => {
+    const entries = Object.values(cameras || {});
+    if (!entries.length) return null;
+    // If multiple cameras are streaming, sum their capture rates.
+    const total = entries.reduce((s, c) => s + (c.fps || 0), 0);
+    return total > 0 ? total : null;
+  })();
+  const trackerSrc = poses?.source?.[0] ?? null;
+  const trackerN = poses?.bases ?? null;
   return (
     <div className="footer">
       <span><b>ready</b></span>
+      {lines[0] && (<><span className="sep">│</span><span>{lines[0]}</span></>)}
+      <span style={{ flex: 1, color: 'var(--text-4)', overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>
+        {lines[1] || ''}
+      </span>
       <span className="sep">│</span>
-      <span>{lines[0]}</span>
+      <span>cam <b>{camFps != null ? `${camFps.toFixed(1)} fps` : '—'}</b></span>
       <span className="sep">│</span>
-      <span style={{ flex: 1, color: 'var(--text-4)', overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>{lines[1]}</span>
-      <span className="sep">│</span>
-      <span>cam <b>30.1 fps</b></span>
-      <span className="sep">│</span>
-      <span>tracker <b>240 Hz</b></span>
-      <span className="sep">│</span>
-      <span>mem <b>284 MB</b></span>
+      <span>tracker <b>{trackerSrc ? `${trackerSrc}${trackerN ? ` · ${trackerN}` : ''}` : '—'}</b></span>
     </div>
   );
 }

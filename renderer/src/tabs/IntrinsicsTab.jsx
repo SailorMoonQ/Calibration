@@ -9,6 +9,7 @@ import { useCameraSource, CameraSourcePanel } from '../components/CameraSource.j
 import {
   FrameStrip, ErrorPanel, TargetPanel,
   CaptureControls, SolverButton, SolverPanel,
+  trafficKindForRms, trafficColor,
 } from '../components/panels.jsx';
 import { computeCoverage, cellIndexFor } from '../lib/coverage.js';
 import { DEFAULT_CHESS_BOARD } from '../lib/board.js';
@@ -321,6 +322,9 @@ export function IntrinsicsTab() {
   };
 
   const converged = result?.ok ?? false;
+  // Pinhole reprojection-error thresholds (pixels).
+  const PX_OK = 0.25, PX_WARN = 0.5;
+  const rmsKind = converged ? trafficKindForRms(rms, PX_OK, PX_WARN) : 'idle';
 
   const emptyCell = (text) => (
     <div style={{
@@ -392,8 +396,8 @@ export function IntrinsicsTab() {
       <div className="rail">
         <div className="rail-header">
           <span>Pinhole Intrinsics</span>
-          <span className="mono" style={{color:'var(--text-4)'}}>
-            {result?.ok ? `rms ${result.rms.toFixed(2)}` : 'idle'}
+          <span className="mono" style={{color: converged ? trafficColor(rmsKind) : 'var(--text-4)'}}>
+            {result?.ok ? `rms ${result.rms.toFixed(2)} px` : 'idle'}
           </span>
         </div>
         <div className="rail-scroll">
@@ -459,7 +463,7 @@ export function IntrinsicsTab() {
           <div className="read">
             {datasetFiles.length > 0 && <>frame <b>#{selectedFrame.toString().padStart(2,'0')}</b> · </>}
             {result?.ok
-              ? <>rms <b>{rms.toFixed(3)}</b> px</>
+              ? <>rms <b style={{color: trafficColor(rmsKind)}}>{rms.toFixed(3)}</b> px</>
               : busy ? <>solving…</> : <>not calibrated</>}
           </div>
         </div>
@@ -487,12 +491,13 @@ export function IntrinsicsTab() {
       <div className="rail">
         <div className="rail-header">
           <span>Results</span>
-          <span className="mono" style={{color: converged ? 'var(--ok)' : 'var(--text-4)'}}>
-            {converged ? '● converged' : busy ? '● solving' : '○ idle'}
+          <span className="mono" style={{color: converged ? trafficColor(rmsKind) : 'var(--text-4)'}}>
+            {converged ? `● ${rms.toFixed(3)} px` : busy ? '● solving' : '○ idle'}
           </span>
         </div>
         <div className="rail-scroll">
-          <ErrorPanel rms={rms} frames={sparkData} histData={histData}/>
+          <ErrorPanel rms={rms} frames={sparkData} histData={histData}
+            okBelow={PX_OK} warnBelow={PX_WARN}/>
           <Section title="Intrinsic matrix K">
             <Matrix m={K}/>
           </Section>
@@ -508,7 +513,7 @@ export function IntrinsicsTab() {
           </Section>
           <SolverPanel
             iters={result?.iterations ?? 0}
-            cost={result?.final_cost ?? 0}
+            cost={result?.final_cost ?? 0} costUnit="px²"
             cond={0}/>
         </div>
         <div style={{ padding: 10, borderTop: '1px solid var(--border-soft)', background: 'var(--surface-2)', display:'flex', gap: 6 }}>

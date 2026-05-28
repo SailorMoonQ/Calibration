@@ -11,6 +11,7 @@ import {
 import {
   FrameStrip, ErrorPanel, TargetPanel,
   CaptureControls, SolverButton, SolverPanel,
+  trafficKindForRms, trafficColor,
 } from '../components/panels.jsx';
 import { makeT, applyT, composeT } from '../lib/math3d.js';
 import { DEFAULT_BOARD } from '../lib/board.js';
@@ -351,7 +352,11 @@ export function HandEyeTab({ solvePattern, setSolvePattern }) {
         K: d.K || null, D: d.D || [], T: d.T || null,
         per_frame_err: d.frames?.per_frame_err || [],
         per_frame_residuals: [], detected_paths: [],
-        iterations: 0, final_cost: 0, message: `loaded from ${p}`,
+        iterations: 0,
+        // rms here is rotation rms (degrees); final_cost is translation rms (mm).
+        // Prefer explicit rot_rms/pos_rms when the YAML carries them.
+        final_cost: d.pos_rms ?? d.final_cost ?? 0,
+        message: `loaded from ${p}`,
       });
       setStatus(`loaded ← ${p}`);
     } catch (e) { setStatus(`load failed: ${e.message}`); }
@@ -381,6 +386,17 @@ export function HandEyeTab({ solvePattern, setSolvePattern }) {
 
   const rotRms = result?.ok ? result.rms : 0;
   const transRms = result?.ok ? result.final_cost : 0;
+  // Traffic-light thresholds for hand-eye quality: rotation in degrees,
+  // translation in millimetres. The overall pill reflects the worse axis.
+  const HE_ROT_OK = 0.5, HE_ROT_WARN = 1.0;        // degrees
+  const HE_TRANS_OK = 2.0, HE_TRANS_WARN = 5.0;    // mm
+  const rotKind = result?.ok ? trafficKindForRms(rotRms, HE_ROT_OK, HE_ROT_WARN) : 'idle';
+  const transKind = result?.ok ? trafficKindForRms(transRms, HE_TRANS_OK, HE_TRANS_WARN) : 'idle';
+  const overallKind = result?.ok
+    ? (rotKind === 'err' || transKind === 'err' ? 'err'
+      : rotKind === 'warn' || transKind === 'warn' ? 'warn' : 'ok')
+    : 'idle';
+  const overallColor = trafficColor(overallKind);
   const vpW = 900, vpH = 620;
 
   // Coverage. Two sources, in order of preference:
@@ -547,13 +563,14 @@ export function HandEyeTab({ solvePattern, setSolvePattern }) {
           <div className="spacer"/>
           <div className="read">
             {result?.ok
-              ? <>pairs <b>{result.iterations}</b> · rot <b>{rotRms.toFixed(3)}°</b> · trans <b>{transRms.toFixed(2)} mm</b></>
+              ? <>{result.iterations > 0 && <>pairs <b>{result.iterations}</b> · </>}rot <b style={{color: trafficColor(rotKind)}}>{rotRms.toFixed(3)}°</b> · trans <b style={{color: trafficColor(transKind)}}>{transRms.toFixed(2)} mm</b></>
               : <>awaiting solve</>}
           </div>
         </div>
         <FrameStrip frames={frames} selected={selected}
           onSelect={(id) => { setSelected(id); setViewMode('frame'); }}
-          coverage={coverage.percent}/>
+          coverage={coverage.percent}
+          okBelow={HE_TRANS_OK} warnBelow={HE_TRANS_WARN}/>
         <div className="vp-body" style={{ gridTemplateColumns: '1fr 0.7fr', gap: 1, background: 'var(--view-border)' }}>
           <div className="vp-cell">
             <span className="vp-label">scene · world = tracker-base</span>
@@ -602,7 +619,7 @@ export function HandEyeTab({ solvePattern, setSolvePattern }) {
       <div className="rail">
         <div className="rail-header">
           <span>Results · {xmatLabel}</span>
-          <span className="mono" style={{color: result?.ok ? 'var(--ok)' : 'var(--text-4)'}}>
+          <span className="mono" style={{color: result?.ok ? overallColor : 'var(--text-4)'}}>
             {result?.ok ? `● ${rotRms.toFixed(2)}° / ${transRms.toFixed(1)} mm` : busy ? '● solving' : '○ idle'}
           </span>
         </div>
@@ -615,15 +632,24 @@ export function HandEyeTab({ solvePattern, setSolvePattern }) {
               ['||t||',   `${tNorm.toFixed(2)} mm`, 'pos'],
             ]}/>
           </Section>
-          <ErrorPanel rms={rotRms} frames={frames.map(f => f.err)} histData={histData}/>
+          <ErrorPanel
+            rms={rotRms} frames={frames.map(f => f.err)} histData={histData}
+            title="Rotation Error" unit="°"
+            okBelow={HE_ROT_OK} warnBelow={HE_ROT_WARN}/>
+          <ErrorPanel
+            rms={transRms} frames={frames.map(f => f.err)} histData={histData}
+            title="Translation Error" unit="mm"
+            okBelow={HE_TRANS_OK} warnBelow={HE_TRANS_WARN}/>
           <Section title="Consistency" hint="world-board scatter">
             <KV items={[
-              ['rot rms',   `${rotRms.toFixed(3)}°`,  rotRms < 1 ? 'pos' : 'warn'],
-              ['trans rms', `${transRms.toFixed(2)} mm`, transRms < 5 ? 'pos' : 'warn'],
-              ['N pairs',   `${result?.iterations ?? 0}`, ''],
+              ['rot rms',   `${rotRms.toFixed(3)}°`,    result?.ok ? (rotKind === 'ok' ? 'pos' : rotKind) : ''],
+              ['trans rms', `${transRms.toFixed(2)} mm`, result?.ok ? (transKind === 'ok' ? 'pos' : transKind) : ''],
+              ['N pairs',   result?.iterations ? `${result.iterations}` : '—', ''],
             ]}/>
           </Section>
-          <SolverPanel iters={result?.iterations || 0} cost={transRms} cond={0}
+          <SolverPanel iters={result?.iterations || 0}
+            cost={transRms} costUnit="mm" costLabel="trans rms"
+            cond={0}
             algo={`cv2.calibrateHandEye · ${method}`}/>
         </div>
         <div style={{ padding: 10, borderTop: '1px solid var(--border-soft)', background: 'var(--surface-2)', display: 'flex', gap: 6 }}>

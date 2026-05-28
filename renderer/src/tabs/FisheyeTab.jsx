@@ -9,6 +9,7 @@ import { useCameraSource, CameraSourcePanel } from '../components/CameraSource.j
 import {
   FrameStrip, ErrorPanel, TargetPanel,
   CaptureControls, SolverButton, SolverPanel,
+  trafficKindForRms, trafficColor,
 } from '../components/panels.jsx';
 import { computeCoverage, cellIndexFor } from '../lib/coverage.js';
 import { DEFAULT_CHESS_BOARD } from '../lib/board.js';
@@ -333,6 +334,9 @@ export function FisheyeTab() {
   };
 
   const rms = result?.ok ? result.rms : 0;
+  // Fisheye reprojection-error thresholds (pixels). Same scale as pinhole.
+  const PX_OK = 0.25, PX_WARN = 0.5;
+  const rmsKind = result?.ok ? trafficKindForRms(rms, PX_OK, PX_WARN) : 'idle';
   const Kraw = result?.K ?? null;
   const K44 = Kraw
     ? [[...Kraw[0], 0], [...Kraw[1], 0], [...Kraw[2], 0], [0,0,0,1]]
@@ -425,8 +429,8 @@ export function FisheyeTab() {
       <div className="rail">
         <div className="rail-header">
           <span>Fish-eye Intrinsics</span>
-          <span className="mono" style={{color:'var(--text-4)'}}>
-            {result?.ok ? `rms ${result.rms.toFixed(2)}` : 'idle'}
+          <span className="mono" style={{color: result?.ok ? trafficColor(rmsKind) : 'var(--text-4)'}}>
+            {result?.ok ? `rms ${result.rms.toFixed(2)} px` : 'idle'}
           </span>
         </div>
         <div className="rail-scroll">
@@ -513,7 +517,7 @@ export function FisheyeTab() {
             {streamInfo?.open && (
               <>{streamInfo.width}×{streamInfo.height} · <b>{streamInfo.capture_fps?.toFixed(1) ?? '—'}</b> fps · </>
             )}
-            {result?.ok ? <>rms <b>{result.rms.toFixed(3)}</b> px</> : <>no calibration yet</>}
+            {result?.ok ? <>rms <b style={{color: trafficColor(rmsKind)}}>{result.rms.toFixed(3)}</b> px</> : <>no calibration yet</>}
           </div>
         </div>
         <FrameStrip frames={frames} selected={selected} onSelect={(id) => { setSelected(id); setViewMode('frame'); }} coverage={coverage.percent}/>
@@ -546,12 +550,13 @@ export function FisheyeTab() {
 
       <div className="rail">
         <div className="rail-header"><span>Results</span>
-          <span className="mono" style={{color: result?.ok ? (rms < 0.5 ? 'var(--ok)' : 'var(--warn)') : 'var(--text-4)'}}>
+          <span className="mono" style={{color: result?.ok ? trafficColor(rmsKind) : 'var(--text-4)'}}>
             {result?.ok ? `● ${rms.toFixed(2)} px` : busy ? '● solving' : '○ idle'}
           </span>
         </div>
         <div className="rail-scroll">
-          <ErrorPanel rms={rms} frames={sparkData} histData={histData}/>
+          <ErrorPanel rms={rms} frames={sparkData} histData={histData}
+            okBelow={PX_OK} warnBelow={PX_WARN}/>
           <Section title="K (fisheye)">
             <Matrix m={K44}/>
           </Section>
@@ -567,7 +572,7 @@ export function FisheyeTab() {
           </Section>
           <SolverPanel
             iters={result?.iterations ?? 0}
-            cost={result?.final_cost ?? 0}
+            cost={result?.final_cost ?? 0} costUnit="px²"
             cond={0}
             algo="cv2.fisheye · Levenberg-Marquardt"/>
         </div>
