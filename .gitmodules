@@ -4,3 +4,6 @@
 [submodule "third_party/triad_openvr"]
 	path = third_party/triad_openvr
 	url = https://github.com/TriadSemi/triad_openvr.git
+[submodule "third_party/XRoboToolkit-PC-Service-Pybind"]
+	path = third_party/XRoboToolkit-PC-Service-Pybind
+	url = https://github.com/XR-Robotics/XRoboToolkit-PC-Service-Pybind.git

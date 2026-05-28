@@ -68,24 +68,38 @@ PICO has no first-party Python pose SDK, so we use XRoboToolkit.
    receives poses from the headset). It is single-instance — start it before
    connecting from the Workbench.
 3. **Python module:** initialize the submodule and build it into the backend's
-   Python environment:
+   Python environment. The pybind module links a native `libPXREARobotSDK.so`
+   that you build from the PC-Service repo first:
    ```bash
    git submodule update --init third_party/XRoboToolkit-PC-Service-Pybind
    cd third_party/XRoboToolkit-PC-Service-Pybind
-   # copy PC-Service compiled libs/headers into lib/ and include/ per its README
-   pip3 install --user .        # or: python3 setup.py install
+
+   # 1. build the native SDK lib
+   mkdir -p tmp && cd tmp
+   git clone https://github.com/XR-Robotics/XRoboToolkit-PC-Service.git
+   (cd XRoboToolkit-PC-Service/RoboticsService/PXREARobotSDK && bash build.sh)
+   cd ..
+
+   # 2. stage the header + lib the pybind build expects
+   mkdir -p lib include
+   cp tmp/XRoboToolkit-PC-Service/RoboticsService/PXREARobotSDK/PXREARobotSDK.h include/
+   cp -r tmp/XRoboToolkit-PC-Service/RoboticsService/PXREARobotSDK/nlohmann include/nlohmann/
+   cp tmp/XRoboToolkit-PC-Service/RoboticsService/PXREARobotSDK/build/libPXREARobotSDK.so lib/
+
+   # 3. build the Python module into the backend venv
+   ../../backend/.venv/bin/pip install pybind11
+   ../../backend/.venv/bin/python setup.py install
    ```
-4. **Verify:** `python3 -c "import xrobotoolkit_sdk; xrobotoolkit_sdk.init(); print('ok')"`
-   should print `ok` with the PC Service running.
+   Build prereqs: `cmake` (≥3.1), a C++17 compiler, and the Python dev headers
+   (`python3-dev`). The installed module embeds an RPATH to the `lib/` above, so
+   keep the submodule's `lib/libPXREARobotSDK.so` in place after building.
+4. **Verify:** `backend/.venv/bin/python -c "import xrobotoolkit_sdk; print('ok')"`
+   should print `ok` (importable without hardware). With the PC Service running
+   and a headset connected, `xrobotoolkit_sdk.init()` then connects to the stream.
 
 In the app, pick **PICO** as the tracker source (Hand-Eye) or slot backend
 (Link). Devices: `pico_ctrl_l`, `pico_ctrl_r`, `pico_hmd`. No adb-IP field is
 needed — the PC Service owns the headset link.
-
-> **Note:** the `git submodule add` for `third_party/XRoboToolkit-PC-Service-Pybind`
-> was deferred during development (needs GitHub access). On a networked machine, run:
-> `git submodule add https://github.com/XR-Robotics/XRoboToolkit-PC-Service-Pybind.git third_party/XRoboToolkit-PC-Service-Pybind`
-> and commit, then the `submodule update --init` above will track it.
 
 ## 4. Run
 
