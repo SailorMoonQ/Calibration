@@ -3,8 +3,6 @@ matrices and skips momentarily-untracked devices. xrobotoolkit_sdk is stubbed
 so these tests need no PICO hardware or PC Service."""
 from __future__ import annotations
 
-import math
-
 import numpy as np
 import pytest
 from scipy.spatial.transform import Rotation
