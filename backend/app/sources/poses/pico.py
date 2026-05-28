@@ -40,3 +40,48 @@ def _pose7_to_4x4(p) -> list[list[float]] | None:
         [2 * (qx * qz - qy * qw),     2 * (qy * qz + qx * qw),     1 - 2 * (qx * qx + qy * qy), z],
         [0.0, 0.0, 0.0, 1.0],
     ]
+
+
+class PicoPoseSource(PoseSource):
+    def __init__(self) -> None:
+        try:
+            import xrobotoolkit_sdk as xrt  # type: ignore
+        except ImportError as e:
+            raise RuntimeError(
+                "PICO support not installed — build xrobotoolkit_sdk and see "
+                "INSTALL.md (PICO section)"
+            ) from e
+        try:
+            xrt.init()
+        except Exception as e:
+            raise RuntimeError(
+                f"PICO init failed: {e} — is the XRoboToolkit PC Service running "
+                "and the headset connected?"
+            ) from e
+        self._xrt = xrt
+        log.info("PicoPoseSource initialized via xrobotoolkit_sdk")
+
+    def hello(self) -> dict:
+        return {"devices": list(DEVICES), "gt_T_a_b": None, "bases": 0}
+
+    def poll(self, t: float) -> dict[str, list[list[float]]]:
+        readers = (
+            ("pico_ctrl_l", self._xrt.get_left_controller_pose),
+            ("pico_ctrl_r", self._xrt.get_right_controller_pose),
+            ("pico_hmd", self._xrt.get_headset_pose),
+        )
+        out: dict[str, list[list[float]]] = {}
+        for dev, read in readers:
+            try:
+                m = _pose7_to_4x4(read())
+            except Exception:
+                continue
+            if m is not None:
+                out[dev] = m
+        return out
+
+    def close(self) -> None:
+        try:
+            self._xrt.close()
+        except Exception:
+            log.exception("xrobotoolkit_sdk close failed")
