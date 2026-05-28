@@ -3,7 +3,7 @@ import { Section, Seg, Chk, Field, Matrix, KV } from '../components/primitives.j
 import {
   Scene3D, Tracker3D, Controller3D, Traj3D, RigidLink3D, Ground3D,
 } from '../components/scene3d.jsx';
-import { ErrorPanel, SolverPanel } from '../components/panels.jsx';
+import { ErrorPanel, SolverPanel, trafficKindForRms, trafficColor } from '../components/panels.jsx';
 import { applyT, invT } from '../lib/math3d.js';
 import { api, pickSaveFile, pickOpenFile, recording } from '../api/client.js';
 import { useReportPoses } from '../lib/telemetry.jsx';
@@ -331,6 +331,8 @@ export function LinkCalibTab({ solvePattern }) {
       const d = resp.data || {};
       setResult({
         ok: true, rms: d.rms ?? 0,
+        rot_rms: d.rot_rms ?? d.rms ?? 0,
+        pos_rms: d.pos_rms ?? 0,
         T: d.T || null,
         per_frame_err: d.frames?.per_frame_err || [],
         per_frame_residuals: [], detected_paths: [],
@@ -389,6 +391,17 @@ export function LinkCalibTab({ solvePattern }) {
   const rpy = rpyDeg(R);
   const rotRms = result?.ok ? (result.rot_rms ?? result.rms ?? 0) : 0;
   const transRms = result?.ok ? (result.pos_rms ?? 0) : 0;
+  // Traffic-light thresholds for link calibration: rotation in degrees,
+  // translation in millimetres.
+  const LINK_ROT_OK = 0.5, LINK_ROT_WARN = 1.0;
+  const LINK_TRANS_OK = 2.0, LINK_TRANS_WARN = 5.0;
+  const rotKind = result?.ok ? trafficKindForRms(rotRms, LINK_ROT_OK, LINK_ROT_WARN) : 'idle';
+  const transKind = result?.ok ? trafficKindForRms(transRms, LINK_TRANS_OK, LINK_TRANS_WARN) : 'idle';
+  const overallKind = result?.ok
+    ? (rotKind === 'err' || transKind === 'err' ? 'err'
+      : rotKind === 'warn' || transKind === 'warn' ? 'warn' : 'ok')
+    : 'idle';
+  const overallColor = trafficColor(overallKind);
 
   const histData = useMemo(() => result?.per_frame_err?.length ? result.per_frame_err : [], [result]);
 
@@ -526,6 +539,8 @@ export function LinkCalibTab({ solvePattern }) {
                   {solveResults.map(r => {
                     const isBest = r.method === bestMethod;
                     const isView = r.method === viewMethod;
+                    const rk = r.ok ? trafficKindForRms(r.rot_rms, LINK_ROT_OK, LINK_ROT_WARN) : 'idle';
+                    const tk = r.ok ? trafficKindForRms(r.pos_rms, LINK_TRANS_OK, LINK_TRANS_WARN) : 'idle';
                     return (
                       <button
                         key={r.method}
@@ -536,7 +551,13 @@ export function LinkCalibTab({ solvePattern }) {
                                  fontSize: 10.5, padding: '3px 7px' }}>
                         <span>{isBest ? '★ ' : ''}{r.method}</span>
                         <span className="mono">
-                          {r.ok ? `${r.rot_rms.toFixed(2)}° / ${r.pos_rms.toFixed(1)} mm` : 'failed'}
+                          {r.ok ? (
+                            <>
+                              <span style={{ color: trafficColor(rk) }}>{r.rot_rms.toFixed(2)}°</span>
+                              {' / '}
+                              <span style={{ color: trafficColor(tk) }}>{r.pos_rms.toFixed(1)} mm</span>
+                            </>
+                          ) : 'failed'}
                         </span>
                       </button>
                     );
@@ -574,7 +595,7 @@ export function LinkCalibTab({ solvePattern }) {
           <div className="spacer"/>
           <div className="read">
             {result?.ok
-              ? <>‖t‖ <b>{tNorm.toFixed(2)} mm</b> · rot rms <b>{rotRms.toFixed(3)}°</b> · trans rms <b>{transRms.toFixed(2)} mm</b></>
+              ? <>‖t‖ <b>{tNorm.toFixed(2)} mm</b> · rot rms <b style={{color: trafficColor(rotKind)}}>{rotRms.toFixed(3)}°</b> · trans rms <b style={{color: trafficColor(transKind)}}>{transRms.toFixed(2)} mm</b></>
               : <>{readyA && readyB ? 'awaiting sync/solve' : 'configure both slots'}</>}
           </div>
         </div>
@@ -612,7 +633,7 @@ export function LinkCalibTab({ solvePattern }) {
       <div className="rail">
         <div className="rail-header">
           <span>Results · T_{linkLabel}</span>
-          <span className="mono" style={{color: result?.ok ? 'var(--ok)' : 'var(--text-4)'}}>
+          <span className="mono" style={{color: result?.ok ? overallColor : 'var(--text-4)'}}>
             {result?.ok ? `● ${transRms.toFixed(2)} mm` : busy ? '● solving' : '○ idle'}
           </span>
         </div>
@@ -627,14 +648,19 @@ export function LinkCalibTab({ solvePattern }) {
           </Section>
           <Section title="Residuals" hint="per-pair deviation">
             <KV items={[
-              ['rot rms',  `${rotRms.toFixed(4)}°`, rotRms < 0.5 ? 'pos' : 'warn'],
-              ['trans rms',`${transRms.toFixed(3)} mm`, transRms < 2 ? 'pos' : 'warn'],
+              ['rot rms',  `${rotRms.toFixed(4)}°`,    result?.ok ? (rotKind === 'ok' ? 'pos' : rotKind) : ''],
+              ['trans rms',`${transRms.toFixed(3)} mm`, result?.ok ? (transKind === 'ok' ? 'pos' : transKind) : ''],
             ]}/>
           </Section>
           {histData.length > 0 && (
-            <ErrorPanel rms={transRms} frames={histData.slice(0, 60)} histData={histData}/>
+            <ErrorPanel
+              rms={transRms} frames={histData.slice(0, 60)} histData={histData}
+              title="Translation Error" unit="mm"
+              okBelow={LINK_TRANS_OK} warnBelow={LINK_TRANS_WARN}/>
           )}
-          <SolverPanel iters={result?.iterations || 0} cost={transRms} cond={0}
+          <SolverPanel iters={result?.iterations || 0}
+            cost={transRms} costUnit="mm" costLabel="trans rms"
+            cond={0}
             algo="SE(3) chordal-mean + SVD projection"/>
         </div>
         <div style={{ padding: 10, borderTop: '1px solid var(--border-soft)', background: 'var(--surface-2)', display: 'flex', gap: 6 }}>

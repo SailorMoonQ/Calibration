@@ -83,7 +83,12 @@ button { font-family: inherit; font-size: inherit; color: inherit; }
   padding: 0 8px;
   gap: 2px;
   overflow-x: auto;
+  /* Without this, setting overflow-x makes overflow-y auto too, which can
+     produce a stray vertical scrollbar when any child's box edges past the
+     fixed --tab-h by even 1px (focus rings, descenders, etc). */
+  overflow-y: hidden;
 }
+.tabs::-webkit-scrollbar { height: 0; }
 .tab {
   position: relative;
   display: flex; align-items: center; gap: 8px;
@@ -256,6 +261,9 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
 }
 .vp-split { grid-template-columns: 1fr 1fr; gap: 1px; background: var(--view-border); }
 .vp-cell { background: var(--view-bg); position: relative; overflow: hidden; min-height: 0; }
+/* Drag-to-orbit in Scene3D selects any <text> labels (e.g. "world", the
+   yaw/pitch help line). Suppress text selection inside viewport cells. */
+.vp-cell, .vp-cell * { user-select: none; -webkit-user-select: none; }
 
 .vp-label {
   position: absolute; left: 10px; top: 8px; z-index: 3;

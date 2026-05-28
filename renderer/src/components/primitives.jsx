@@ -123,7 +123,7 @@ export function Spark({ data, w = 200, h = 44, color = 'var(--accent)', threshol
   );
 }
 
-export function Histogram({ data, bins = 20, w = 280, h = 60, color = 'var(--accent)' }) {
+export function Histogram({ data, bins = 20, w = 280, h = 60, color = 'var(--accent)', unit = 'px' }) {
   if (!data?.length) return null;
   const counts = Array(bins).fill(0);
   const max = Math.max(...data) || 1;  // avoid div-by-zero when all values are 0
@@ -141,7 +141,7 @@ export function Histogram({ data, bins = 20, w = 280, h = 60, color = 'var(--acc
       })}
       <line x1="0" x2={w} y1={h-10} y2={h-10} stroke="var(--border)"/>
       <text x="2" y={h - 1} fontSize="9" fill="var(--text-4)" fontFamily="JetBrains Mono">0</text>
-      <text x={w-2} y={h - 1} fontSize="9" fill="var(--text-4)" fontFamily="JetBrains Mono" textAnchor="end">{max.toFixed(2)} px</text>
+      <text x={w-2} y={h - 1} fontSize="9" fill="var(--text-4)" fontFamily="JetBrains Mono" textAnchor="end">{max.toFixed(2)} {unit}</text>
     </svg>
   );
 }
