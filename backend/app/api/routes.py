@@ -460,6 +460,35 @@ async def dataset_delete(body: dict):
     return {"ok": True, "path": path, "trash_path": dest}
 
 
+@router.post("/dataset/clear")
+async def dataset_clear(body: dict):
+    """Soft-delete every image directly inside <path> into <path>/.trash/, leaving
+    the folder itself in place. Returns the moved files so the renderer can offer a
+    single undo. Non-image files, sub-directories, and the .trash dir are untouched."""
+    path = body.get("path")
+    if not path or not os.path.isdir(path):
+        raise HTTPException(status_code=404, detail="folder not found")
+    trash_dir = os.path.join(path, ".trash")
+    moved: list[dict] = []
+    try:
+        os.makedirs(trash_dir, exist_ok=True)
+        for name in sorted(os.listdir(path)):
+            src = os.path.join(path, name)
+            if not os.path.isfile(src):
+                continue
+            if os.path.splitext(name)[1].lower() not in _IMAGE_EXTS:
+                continue
+            dest = os.path.join(trash_dir, name)
+            if os.path.exists(dest):
+                stem, suf = os.path.splitext(name)
+                dest = os.path.join(trash_dir, f"{stem}_{int(time.time() * 1000)}{suf}")
+            os.rename(src, dest)
+            moved.append({"path": src, "trash_path": dest})
+    except OSError as e:
+        raise HTTPException(status_code=500, detail=f"clear failed: {e}") from e
+    return {"ok": True, "moved": moved, "count": len(moved)}
+
+
 @router.post("/dataset/restore")
 async def dataset_restore(body: dict):
     """Move a file out of the trash back to its original dataset path. Used by the

@@ -138,6 +138,24 @@ export function IntrinsicsTab() {
     return r.files;
   };
 
+  // Soft-delete every image in the folder to .trash/ (keeps the folder path).
+  // Undoable as a single ⌘Z that restores them all.
+  const onClear = async () => {
+    if (!datasetPath || datasetFiles.length === 0) { setStatus(t('common.noImagesToRemove')); return; }
+    if (!window.confirm(t('common.confirmClear', { count: datasetFiles.length }))) return;
+    try {
+      const r = await api.clearDataset(datasetPath);
+      if (r.moved?.length) {
+        pushUndo({ kind: 'clear', entries: r.moved.map(m => ({ path: m.path, trashPath: m.trash_path })) });
+      }
+      await refreshDataset();
+      setSelected(1);
+      setResult(null);
+      setViewMode('live');
+      setStatus(t('common.removedImages', { count: r.count }));
+    } catch (e) { setStatus(t('common.clearFailed', { error: e.message }), true); }
+  };
+
   const onDrop = async () => {
     const path = datasetFiles[selectedFrame - 1];
     if (!path) { setStatus(t('common.noFrameSelected')); return; }
@@ -218,6 +236,10 @@ export function IntrinsicsTab() {
         await api.restoreFrame(entry.trashPath, entry.path);
         await refreshDataset();
         setStatus(t('common.undidDrop', { name: entry.path.split('/').pop() }));
+      } else if (entry.kind === 'clear') {
+        for (const e of entry.entries) await api.restoreFrame(e.trashPath, e.path);
+        await refreshDataset();
+        setStatus(t('common.undidClear', { count: entry.entries.length }));
       }
     } catch (e) {
       stack.push(entry);
@@ -424,7 +446,7 @@ export function IntrinsicsTab() {
             </Field>
             <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:6 }}>
               <button className="btn" onClick={onPickFolder}>{t('common.pickFolder')}</button>
-              <button className="btn ghost" onClick={() => { setDatasetPath(''); setDatasetFiles([]); setResult(null); setStatus(''); }}>{t('common.clear')}</button>
+              <button className="btn ghost" onClick={onClear}>{t('common.clear')}</button>
             </div>
             {status && <div className="mono" style={{ fontSize: 10.5, color:'var(--text-3)', marginTop: 2 }}>{status}</div>}
           </Section>
