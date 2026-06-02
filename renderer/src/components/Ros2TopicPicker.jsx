@@ -27,8 +27,8 @@ export function Ros2TopicPicker({ topic, onTopic }) {
   useEffect(() => { fetchTopics(); }, [fetchTopics]);
 
   const onUseManual = () => {
-    const t = manual.trim();
-    if (t) onTopic(t);
+    const v = manual.trim();
+    if (v) onTopic(v);
   };
 
   return (

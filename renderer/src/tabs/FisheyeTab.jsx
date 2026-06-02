@@ -1,4 +1,5 @@
 import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Section, Seg, Chk, Field, Matrix } from '../components/primitives.jsx';
 import { DetectedFrame } from '../components/DetectedFrame.jsx';
 import { RectifiedFrame } from '../components/RectifiedFrame.jsx';
@@ -18,6 +19,7 @@ import { api, pickFolder, pickSaveFile, pickOpenFile } from '../api/client.js';
 const ZERO_K = [[0,0,0,0],[0,0,0,0],[0,0,0,0],[0,0,0,1]];
 
 export function FisheyeTab() {
+  const { t } = useTranslation();
   const [board, setBoard] = useState(DEFAULT_CHESS_BOARD);
   const [model, setModel] = useState('equidistant');
   const [view, setView] = useState('split');
@@ -39,7 +41,11 @@ export function FisheyeTab() {
   const [datasetFiles, setDatasetFiles] = useState([]);
   const [result, setResult] = useState(null);
   const [busy, setBusy] = useState(false);
-  const [status, setStatus] = useState('');
+  // status carries a message plus an explicit error flag, so the solver-status
+  // color is language-independent (no regex-matching the localized text).
+  const [status, setStatusMsg] = useState('');
+  const [statusErr, setStatusErr] = useState(false);
+  const setStatus = (msg, isErr = false) => { setStatusMsg(msg); setStatusErr(isErr); };
 
   const [viewMode, setViewMode] = useState('live'); // 'live' | 'frame'
 
@@ -81,7 +87,7 @@ export function FisheyeTab() {
     api.listDataset(datasetPath).then(r => {
       if (cancelled) return;
       setDatasetFiles(r.files);
-      setStatus(`${r.count} images in dataset`);
+      setStatus(t('common.imagesInDataset', { count: r.count }));
       setSelected(1);
       if (skipResultResetRef.current) {
         // onLoad just brought a fresh calibration in tandem with this dataset path;
@@ -90,7 +96,7 @@ export function FisheyeTab() {
       } else {
         setResult(null);
       }
-    }).catch(e => !cancelled && setStatus(`listing failed: ${e.message}`));
+    }).catch(e => !cancelled && setStatus(t('common.listingFailed', { error: e.message }), true));
     return () => { cancelled = true; };
   }, [datasetPath]);
 
@@ -166,13 +172,13 @@ export function FisheyeTab() {
       try {
         const r = await api.snap(liveDevice, datasetPath);
         pushUndo({ kind: 'snap', path: r.path });
-        setStatus(`auto-snapped → ${r.path.split('/').pop()} (cell ${idx})`);
+        setStatus(t('common.autoSnapped', { name: r.path.split('/').pop(), cell: idx }));
         const files = await refreshDataset();
         if (files) setSelected(files.length);
       } catch (e) {
         // Roll back the cell so the user can retry that pose.
         snappedCellsRef.current.delete(idx);
-        setStatus(`auto-snap failed: ${e.message}`);
+        setStatus(t('common.autoSnapFailed', { error: e.message }), true);
       } finally {
         autoSnapInFlightRef.current = false;
       }
@@ -180,7 +186,7 @@ export function FisheyeTab() {
   }, [autoCapture, liveDevice, datasetPath, autoRate]);
 
   const onDrop = async () => {
-    if (!selectedPath) { setStatus('no frame selected to drop'); return; }
+    if (!selectedPath) { setStatus(t('common.noFrameSelected')); return; }
     const name = selectedPath.split('/').pop();
     try {
       const r = await api.deleteFrame(selectedPath);
@@ -189,29 +195,29 @@ export function FisheyeTab() {
       const newLen = files?.length ?? 0;
       setSelected(Math.min(Math.max(1, selected), Math.max(1, newLen)));
       if (newLen === 0) setViewMode('live');
-      setStatus(`dropped ${name} · ⌘Z to undo`);
-    } catch (e) { setStatus(`drop failed: ${e.message}`); }
+      setStatus(t('common.dropped', { name }));
+    } catch (e) { setStatus(t('common.dropFailed', { error: e.message }), true); }
   };
 
   // Undo the last destructive action. Snap-undo trashes the just-snapped file;
   // drop-undo restores from the .trash/ directory it landed in.
   const onUndo = async () => {
     const stack = undoStackRef.current;
-    if (!stack.length) { setStatus('nothing to undo'); return; }
+    if (!stack.length) { setStatus(t('common.nothingToUndo')); return; }
     const entry = stack.pop();
     try {
       if (entry.kind === 'snap') {
         await api.deleteFrame(entry.path);
         await refreshDataset();
-        setStatus(`undid snap · ${entry.path.split('/').pop()}`);
+        setStatus(t('common.undidSnap', { name: entry.path.split('/').pop() }));
       } else if (entry.kind === 'drop') {
         await api.restoreFrame(entry.trashPath, entry.path);
         await refreshDataset();
-        setStatus(`undid drop · ${entry.path.split('/').pop()}`);
+        setStatus(t('common.undidDrop', { name: entry.path.split('/').pop() }));
       }
     } catch (e) {
       stack.push(entry);  // put it back so the user can retry
-      setStatus(`undo failed: ${e.message}`);
+      setStatus(t('common.undoFailed', { error: e.message }), true);
     }
   };
 
@@ -253,22 +259,22 @@ export function FisheyeTab() {
     let dir = datasetPath;
     if (!dir) {
       const picked = await pickFolder();
-      if (!picked) { setStatus('pick a session folder before snapping'); return; }
+      if (!picked) { setStatus(t('common.pickSessionFolder'), true); return; }
       setDatasetPath(picked);
       dir = picked;
     }
-    if (!liveDevice) { setStatus('pick a camera first'); return; }
+    if (!liveDevice) { setStatus(t('common.pickCamera'), true); return; }
     try {
       const r = await api.snap(liveDevice, dir);
       pushUndo({ kind: 'snap', path: r.path });
-      setStatus(`snapped → ${r.path.split('/').pop()} · ⌘Z to undo`);
+      setStatus(t('common.snapped', { name: r.path.split('/').pop() }));
       if (dir === datasetPath) {
         // Refresh the listing but keep the live view in the cell — the user is mid-capture
         // and shouldn't have the frame jump to the just-saved still. Click a thumbnail in
         // the FrameStrip to inspect a saved frame.
         await refreshDataset();
       }
-    } catch (e) { setStatus(`snap failed: ${e.message}`); }
+    } catch (e) { setStatus(t('common.snapFailed', { error: e.message }), true); }
   };
   // Keep refs pointed at the latest closures so the global keydown handler
   // always invokes the up-to-date functions (which close over liveDevice / datasetPath).
@@ -277,8 +283,8 @@ export function FisheyeTab() {
   useEffect(() => { onDropRef.current = onDrop; });
 
   const onRun = async () => {
-    if (!datasetPath) { setStatus('pick a dataset folder first'); return; }
-    setBusy(true); setStatus('fisheye solving…');
+    if (!datasetPath) { setStatus(t('common.pickDatasetFolder'), true); return; }
+    setBusy(true); setStatus(t('fisheye.solving'));
     try {
       const res = await api.calibrate('fisheye', {
         board: boardPayload(),
@@ -286,12 +292,12 @@ export function FisheyeTab() {
         dataset_path: datasetPath,
       });
       setResult(res);
-      setStatus(res.ok ? `rms ${res.rms.toFixed(4)} px · ${res.message}` : `failed: ${res.message}`);
-    } catch (e) { setStatus(`error: ${e.message}`); } finally { setBusy(false); }
+      setStatus(res.ok ? t('fisheye.rmsResult', { rms: res.rms.toFixed(4), message: res.message }) : t('common.failed', { message: res.message }), !res.ok);
+    } catch (e) { setStatus(t('common.error', { error: e.message }), true); } finally { setBusy(false); }
   };
 
   const onSave = async () => {
-    if (!result?.ok) { setStatus('nothing to save — run calibration first'); return; }
+    if (!result?.ok) { setStatus(t('common.nothingToSave')); return; }
     const p = await pickSaveFile({ defaultPath: 'fisheye.yaml' });
     if (!p) return;
     try {
@@ -300,8 +306,8 @@ export function FisheyeTab() {
         result, board: boardPayload(), dataset_path: datasetPath || null,
       });
       const fmt = p.toLowerCase().endsWith('.json') ? 'json' : 'yaml';
-      setStatus(`saved (${fmt}) → ${p}`);
-    } catch (e) { setStatus(`save failed: ${e.message}`); }
+      setStatus(t('common.savedFmt', { fmt, path: p }));
+    } catch (e) { setStatus(t('common.saveFailed', { error: e.message }), true); }
   };
 
   const onLoad = async () => {
@@ -334,8 +340,8 @@ export function FisheyeTab() {
       const fmt = p.toLowerCase().endsWith('.json') ? 'json' : 'yaml';
       const fxRound = Kload?.[0]?.[0]?.toFixed?.(1) ?? '?';
       const rmsRound = (d.rms ?? 0).toFixed(3);
-      setStatus(`loaded (${fmt}) ← ${p.split('/').pop()} · rms ${rmsRound} · fx ${fxRound}`);
-    } catch (e) { setStatus(`load failed: ${e.message}`); }
+      setStatus(t('fisheye.loadedDetail', { fmt, name: p.split('/').pop(), rms: rmsRound, fx: fxRound }));
+    } catch (e) { setStatus(t('common.loadFailed', { error: e.message }), true); }
   };
 
   const rms = result?.ok ? result.rms : 0;
@@ -371,7 +377,7 @@ export function FisheyeTab() {
   const rawCell = (
     <div className="vp-cell" key="raw">
       <span className="vp-label">
-        {showLive ? `live · ${liveDevice}` : 'raw · distorted'}
+        {showLive ? t('fisheye.liveLabel', { device: liveDevice }) : t('fisheye.rawDistorted')}
       </span>
       {showLive ? (
         liveDetect
@@ -388,7 +394,7 @@ export function FisheyeTab() {
           overlay={showResid ? 'residuals' : 'none'}
           residuals={residualsByPath?.get(selectedPath)}/>
       ) : (
-        emptyCell('connect a camera or load a dataset')
+        emptyCell(t('fisheye.connectOrLoad'))
       )}
       <div className="vp-corner-read">
         <div>fx <b>{K44[0][0].toFixed(2)}</b>  fy <b>{K44[1][1].toFixed(2)}</b></div>
@@ -411,65 +417,65 @@ export function FisheyeTab() {
       body = <RectifiedFrame path={selectedPath} K={Kraw} D={D}
                 balance={balance} fovScale={fovScale} method={m}/>;
     } else if (calibrated) {
-      body = emptyCell('connect a camera or select a frame to see the rectified view');
+      body = emptyCell(t('fisheye.connectOrSelectFrame'));
     } else {
-      body = emptyCell('run calibration to see the rectified view');
+      body = emptyCell(t('fisheye.runToRectify'));
     }
     return (
       <div className="vp-cell" key={m}>
-        <span className="vp-label">{useLive ? `${label} · live` : label}</span>
+        <span className="vp-label">{useLive ? t('fisheye.liveSuffix', { label }) : label}</span>
         {body}
         <div className="vp-corner-read">
-          <div>method <b>{m === 'undistort' ? 'cv2.fisheye.undistortImage' : 'initUndistortRectifyMap + remap'}</b></div>
-          <div>balance <b>{balance.toFixed(2)}</b>  fov_scale <b>{fovScale.toFixed(2)}</b></div>
+          <div>{t('fisheye.method')} <b>{m === 'undistort' ? t('fisheye.methodCvUndistort') : t('fisheye.methodRemapFull')}</b></div>
+          <div>{t('fisheye.balanceRead')} <b>{balance.toFixed(2)}</b>  {t('fisheye.fovScaleRead')} <b>{fovScale.toFixed(2)}</b></div>
         </div>
       </div>
     );
   };
 
-  const rectCell = rectifiedCell(method, `rectified · ${method === 'undistort' ? 'undistortImage' : 'remap'}`);
+  const rectCell = rectifiedCell(method, method === 'undistort' ? t('fisheye.rectifiedUndistort') : t('fisheye.rectifiedRemap'));
 
   return (
     <div className="workspace">
       <div className="rail">
         <div className="rail-header">
-          <span>Fish-eye Intrinsics</span>
+          <span>{t('fisheye.railTitle')}</span>
           <span className="mono" style={{color: result?.ok ? trafficColor(rmsKind) : 'var(--text-4)'}}>
-            {result?.ok ? `rms ${result.rms.toFixed(2)} px` : 'idle'}
+            {result?.ok ? t('common.rmsPx', { rms: result.rms.toFixed(2) }) : t('common.idle')}
           </span>
         </div>
         <div className="rail-scroll">
           <CameraSourcePanel source={cam} onLivePreview={() => setViewMode('live')}/>
-          <Section title="Dataset" hint={datasetFiles.length ? `${datasetFiles.length} images` : 'not loaded'}>
-            <Field label="folder">
-              <input className="input" value={datasetPath} placeholder="/path/to/frames/"
+          <Section title={t('fisheye.dataset')} hint={datasetFiles.length ? t('common.images', { count: datasetFiles.length }) : t('common.notLoaded')}>
+            <Field label={t('common.folder')}>
+              <input className="input" value={datasetPath} placeholder={t('framePlaceholder.pathOrPlaceholder')}
                      onChange={e => setDatasetPath(e.target.value)}/>
             </Field>
             <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:6 }}>
-              <button className="btn" onClick={onPickFolder}>📁 pick folder</button>
-              <button className="btn ghost" onClick={() => { setDatasetPath(''); setDatasetFiles([]); setResult(null); setStatus(''); }}>clear</button>
+              <button className="btn" onClick={onPickFolder}>{t('common.pickFolder')}</button>
+              <button className="btn ghost" onClick={() => { setDatasetPath(''); setDatasetFiles([]); setResult(null); setStatus(''); }}>{t('common.clear')}</button>
             </div>
             {status && <div className="mono" style={{ fontSize: 10.5, color: 'var(--text-3)', marginTop: 2 }}>{status}</div>}
           </Section>
           <TargetPanel board={board} onBoard={setBoard}/>
-          <Section title="Projection model" hint={model}>
+          <Section title={t('fisheye.projectionModel')} hint={model}>
             <Seg value={model} onChange={setModel} full options={[
-              {value:'equidistant',label:'equidistant'},{value:'kb',label:'Kannala-Brandt'},{value:'omni',label:'omni (Mei)'}
+              {value:'equidistant',label:t('fisheye.modelEquidistant')},{value:'kb',label:t('fisheye.modelKb')},{value:'omni',label:t('fisheye.modelOmni')}
             ]}/>
-            <Chk checked={true} onChange={()=>{}}>estimate k₁…k₄</Chk>
-            <Chk checked={false} onChange={()=>{}}>include ξ (mirror)</Chk>
-            <Chk checked={true} onChange={()=>{}}>bundle adjust poses</Chk>
-            <Chk checked={true} onChange={()=>{}}>apply FOV mask</Chk>
+            <Chk checked={true} onChange={()=>{}}>{t('fisheye.estimateK')}</Chk>
+            <Chk checked={false} onChange={()=>{}}>{t('fisheye.includeXi')}</Chk>
+            <Chk checked={true} onChange={()=>{}}>{t('fisheye.bundleAdjust')}</Chk>
+            <Chk checked={true} onChange={()=>{}}>{t('fisheye.applyFovMask')}</Chk>
           </Section>
-          <Section title="Undistortion preview">
-            <Field label="balance">
+          <Section title={t('fisheye.undistortionPreview')}>
+            <Field label={t('fisheye.balance')}>
               <div className="slider-row">
                 <input type="range" min="0" max="100" value={Math.round(balance * 100)}
                        onChange={e => setBalance(+e.target.value / 100)}/>
                 <span className="mono">{balance.toFixed(2)}</span>
               </div>
             </Field>
-            <Field label="fov scale">
+            <Field label={t('fisheye.fovScale')}>
               <div className="slider-row">
                 <input type="range" min="10" max="300" value={Math.round(fovScale * 100)}
                        onChange={e => setFovScale(+e.target.value / 100)}/>
@@ -495,7 +501,7 @@ export function FisheyeTab() {
           status={status}
           statusKind={
             !status ? undefined :
-            /^failed|error|cannot|did not|need ≥|too many|pick |snap failed|listing failed|save failed|load failed/i.test(status) ? 'err' :
+            statusErr ? 'err' :
             result?.ok ? 'ok' : 'warn'
           }/>
       </div>
@@ -503,26 +509,26 @@ export function FisheyeTab() {
       <div className="viewport">
         <div className="vp-toolbar">
           <Seg value={view} onChange={setView} options={[
-            {value:'split',label:'split'},
-            {value:'raw',label:'raw'},
-            {value:'rect',label:'rectified'},
-            {value:'compare',label:'compare methods'},
+            {value:'split',label:t('fisheye.viewSplit')},
+            {value:'raw',label:t('fisheye.viewRaw')},
+            {value:'rect',label:t('fisheye.viewRectified')},
+            {value:'compare',label:t('fisheye.viewCompare')},
           ]}/>
           {view !== 'compare' && view !== 'raw' && (
             <Seg value={method} onChange={setMethod} options={[
-              {value:'remap',label:'remap'},
-              {value:'undistort',label:'undistort'},
+              {value:'remap',label:t('fisheye.methodRemap')},
+              {value:'undistort',label:t('fisheye.methodUndistort')},
             ]}/>
           )}
-          <Chk checked={showBoard} onChange={setShowBoard}>board</Chk>
-          <Chk checked={showResid} onChange={setShowResid}>residuals</Chk>
-          <Chk checked={liveDetect} onChange={setLiveDetect}>detect live</Chk>
+          <Chk checked={showBoard} onChange={setShowBoard}>{t('fisheye.board')}</Chk>
+          <Chk checked={showResid} onChange={setShowResid}>{t('fisheye.residuals')}</Chk>
+          <Chk checked={liveDetect} onChange={setLiveDetect}>{t('fisheye.detectLive')}</Chk>
           <div className="spacer"/>
           <div className="read">
             {streamInfo?.open && (
               <>{streamInfo.width}×{streamInfo.height} · <b>{streamInfo.capture_fps?.toFixed(1) ?? '—'}</b> fps · </>
             )}
-            {result?.ok ? <>rms <b style={{color: trafficColor(rmsKind)}}>{result.rms.toFixed(3)}</b> px</> : <>no calibration yet</>}
+            {result?.ok ? <>rms <b style={{color: trafficColor(rmsKind)}}>{result.rms.toFixed(3)}</b> px</> : <>{t('fisheye.noCalibrationYet')}</>}
           </div>
         </div>
         <FrameStrip frames={frames} selected={selected} onSelect={(id) => { setSelected(id); setViewMode('frame'); }} coverage={coverage.percent}/>
@@ -534,8 +540,8 @@ export function FisheyeTab() {
             cells = [rawCell];
           } else if (view === 'compare') {
             cells = [
-              rectifiedCell('remap', 'rectified · initUndistortRectifyMap + remap'),
-              rectifiedCell('undistort', 'rectified · cv2.fisheye.undistortImage'),
+              rectifiedCell('remap', t('fisheye.rectifiedRemapFull')),
+              rectifiedCell('undistort', t('fisheye.rectifiedUndistortFull')),
             ];
           } else if (view === 'raw') {
             cells = [rawCell];
@@ -554,18 +560,18 @@ export function FisheyeTab() {
       </div>
 
       <div className="rail">
-        <div className="rail-header"><span>Results</span>
+        <div className="rail-header"><span>{t('fisheye.results')}</span>
           <span className="mono" style={{color: result?.ok ? trafficColor(rmsKind) : 'var(--text-4)'}}>
-            {result?.ok ? `● ${rms.toFixed(2)} px` : busy ? '● solving' : '○ idle'}
+            {result?.ok ? `● ${rms.toFixed(2)} px` : busy ? t('common.solvingDot') : t('common.idleDot')}
           </span>
         </div>
         <div className="rail-scroll">
           <ErrorPanel rms={rms} frames={sparkData} histData={histData}
             okBelow={PX_OK} warnBelow={PX_WARN}/>
-          <Section title="K (fisheye)">
+          <Section title={t('fisheye.kFisheye')}>
             <Matrix m={K44}/>
           </Section>
-          <Section title="Distortion (k₁…k₄)" hint={model}>
+          <Section title={t('fisheye.distortionK')} hint={model}>
             <div className="mono" style={{ fontSize: 11.5, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '3px 12px' }}>
               {['k₁','k₂','k₃','k₄'].map((lbl, i) => (
                 <React.Fragment key={i}>
@@ -579,11 +585,11 @@ export function FisheyeTab() {
             iters={result?.iterations ?? 0}
             cost={result?.final_cost ?? 0} costUnit="px²"
             cond={0}
-            algo="cv2.fisheye · Levenberg-Marquardt"/>
+            algo={t('fisheye.algo')}/>
         </div>
         <div style={{ padding: 10, borderTop: '1px solid var(--border-soft)', background: 'var(--surface-2)', display: 'flex', gap: 6 }}>
-          <button className="btn" style={{flex:1}} onClick={onLoad}>↓ load</button>
-          <button className="btn primary" style={{flex:1}} onClick={onSave} disabled={!result?.ok}>↑ save</button>
+          <button className="btn" style={{flex:1}} onClick={onLoad}>{t('common.load')}</button>
+          <button className="btn primary" style={{flex:1}} onClick={onSave} disabled={!result?.ok}>{t('common.save')}</button>
         </div>
       </div>
     </div>

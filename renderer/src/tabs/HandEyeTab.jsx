@@ -1,4 +1,5 @@
 import { useState, useMemo, useEffect, useRef, useCallback } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Section, Seg, Chk, Field, Matrix, KV } from '../components/primitives.jsx';
 import { DetectedFrame } from '../components/DetectedFrame.jsx';
 import { LivePreview } from '../components/LivePreview.jsx';
@@ -29,9 +30,10 @@ const TRACKER_SOURCES = [
 ];
 
 export function HandEyeTab({ solvePattern, setSolvePattern }) {
+  const { t } = useTranslation();
   const [kind, setKind] = useState('hmd');
   const isHMD = kind === 'hmd';
-  const trackerLabel = isHMD ? 'HMD' : 'controller';
+  const trackerLabel = isHMD ? t('handeye.trackerHmd') : t('handeye.trackerController');
   const xmatLabel = isHMD ? 'T_hmd_cam' : 'T_ctrl_cam';
   const TrackerGlyph = isHMD ? HMD3D : Controller3D;
 
@@ -75,17 +77,17 @@ export function HandEyeTab({ solvePattern, setSolvePattern }) {
   const onConnectTracker = useCallback(async () => {
     if (wsRef.current) return;
     if (trackerSource === 'file' || trackerSource === 'ros2') {
-      setStatus(`${trackerSource} not supported as a live recorder this iteration`);
+      setStatus(t('handeye.notSupportedLive', { source: trackerSource }));
       return;
     }
     const device = trackerDeviceKey();
-    if (!device) { setStatus('pick a tracker device first'); return; }
-    setStatus('connecting tracker…');
+    if (!device) { setStatus(t('handeye.pickTrackerDevice')); return; }
+    setStatus(t('handeye.connectingTracker'));
     try {
       const url = await posesWsUrl({ fps: 30, sources: [trackerSource] });
       const ws = new WebSocket(url);
       wsRef.current = ws;
-      ws.onopen = () => { setConnected(true); setStatus(`tracker ws open · ${trackerSource}`); };
+      ws.onopen = () => { setConnected(true); setStatus(t('handeye.wsOpen', { source: trackerSource })); };
       ws.onclose = () => {
         setConnected(false);
         wsRef.current = null;
@@ -94,10 +96,10 @@ export function HandEyeTab({ solvePattern, setSolvePattern }) {
         setPoseHz(0);
         setLivePoseT(null);
       };
-      ws.onerror = () => setStatus('tracker ws error');
+      ws.onerror = () => setStatus(t('handeye.wsError'));
       ws.onmessage = (ev) => {
         let m; try { m = JSON.parse(ev.data); } catch { return; }
-        if (m.type === 'error') { setStatus(`${m.source} error: ${m.message}`); return; }
+        if (m.type === 'error') { setStatus(t('handeye.sourceError', { source: m.source, message: m.message })); return; }
         if (m.type !== 'sample' || !m.poses) return;
         const T = m.poses[device];
         if (!T) return;
@@ -108,7 +110,7 @@ export function HandEyeTab({ solvePattern, setSolvePattern }) {
         const cutoff = ts - 1.0;
         while (win.length && win[0] < cutoff) win.shift();
       };
-    } catch (e) { setStatus(`connect failed: ${e.message}`); }
+    } catch (e) { setStatus(t('handeye.connectFailed', { error: e.message })); }
   }, [trackerSource, oculusDevice, picoDevice, steamvrSerial, kind]);
 
   const onDisconnectTracker = useCallback(() => {
@@ -185,8 +187,8 @@ export function HandEyeTab({ solvePattern, setSolvePattern }) {
       if (cancelled) return;
       setDatasetFiles(r.files);
       setSelected(1);
-      setStatus(`${r.count} images`);
-    }).catch(e => !cancelled && setStatus(`listing failed: ${e.message}`));
+      setStatus(t('common.images', { count: r.count }));
+    }).catch(e => !cancelled && setStatus(t('common.listingFailed', { error: e.message })));
     return () => { cancelled = true; };
   }, [datasetPath]);
 
@@ -202,7 +204,7 @@ export function HandEyeTab({ solvePattern, setSolvePattern }) {
 
   const onPickPoses = async () => {
     const p = await pickOpenFile({ filters: [{ name: 'JSON', extensions: ['json'] }] });
-    if (p) { setPosesPath(p); setStatus(`poses ← ${basename(p)}`); }
+    if (p) { setPosesPath(p); setStatus(t('handeye.posesLoaded', { name: basename(p) })); }
   };
 
   const onLoadIntrinsics = async () => {
@@ -211,35 +213,35 @@ export function HandEyeTab({ solvePattern, setSolvePattern }) {
     try {
       const resp = await api.loadCalibration(p);
       const d = resp.data || {};
-      if (!d.K || !d.D) { setStatus(`${basename(p)}: no K/D in yaml`); return; }
+      if (!d.K || !d.D) { setStatus(t('handeye.noKdInYaml', { name: basename(p) })); return; }
       setCamInt({ K: d.K, D: d.D, path: p });
-      setStatus(`intrinsics ← ${basename(p)}`);
-    } catch (e) { setStatus(`intrinsics load failed: ${e.message}`); }
+      setStatus(t('handeye.intrinsicsLoaded', { name: basename(p) }));
+    } catch (e) { setStatus(t('handeye.intrinsicsLoadFailed', { error: e.message })); }
   };
 
   const onSnap = async () => {
     let dir = datasetPath;
     if (!dir) {
       const picked = await pickFolder();
-      if (!picked) { setStatus('pick a session folder before snapping'); return; }
+      if (!picked) { setStatus(t('common.pickSessionFolder')); return; }
       setDatasetPath(picked); dir = picked;
     }
-    if (!liveDevice) { setStatus('pick a camera first'); return; }
+    if (!liveDevice) { setStatus(t('common.pickCamera')); return; }
 
     // Read pose snapshot BEFORE the snap so time skew is bounded by image-write
     // latency, not the snap RPC round trip. lp may be null (image-only snap).
     const lp = connected ? latestPoseRef.current : null;
     if (connected) {
-      if (!lp) { setStatus('no pose yet — wait for tracker stream'); return; }
+      if (!lp) { setStatus(t('handeye.noPoseYet')); return; }
       const ageMs = Math.round((Date.now() / 1000 - lp.ts) * 1000);
-      if (ageMs > 200) { setStatus(`pose stale (Δt = ${ageMs} ms) — check tracker`); return; }
+      if (ageMs > 200) { setStatus(t('handeye.poseStale', { ms: ageMs })); return; }
     }
 
     let imagePath;
     try {
       const r = await api.snap(liveDevice, dir);
       imagePath = r.path;
-    } catch (e) { setStatus(`snap failed: ${e.message}`); return; }
+    } catch (e) { setStatus(t('common.snapFailed', { error: e.message })); return; }
 
     const fname = basename(imagePath);
 
@@ -257,13 +259,13 @@ export function HandEyeTab({ solvePattern, setSolvePattern }) {
           if (posesPath !== posesPathLocal) setPosesPath(posesPathLocal);
         } catch (e) {
           if (attempt === 1) {
-            setStatus(`image saved, pose append failed: ${e.message}`);
+            setStatus(t('handeye.imagePoseAppendFailed', { error: e.message }));
           }
         }
       }
-      if (appended) setStatus(`snapped+pose → ${fname}`);
+      if (appended) setStatus(t('handeye.snappedPose', { name: fname }));
     } else {
-      setStatus(`snap (image only — connect tracker for pose) → ${fname}`);
+      setStatus(t('handeye.snapImageOnly', { name: fname }));
     }
 
     if (dir === datasetPath) {
@@ -308,14 +310,14 @@ export function HandEyeTab({ solvePattern, setSolvePattern }) {
   }, [autoCapture, autoCaptureRate, liveDevice, datasetPath]);
 
   const onRun = async () => {
-    if (!datasetPath) { setStatus('pick a dataset folder'); return; }
+    if (!datasetPath) { setStatus(t('handeye.pickDatasetFolder')); return; }
     if (trackerSource !== 'file') {
-      setStatus(`${trackerSource} live source not yet wired — pick JSON file source`);
+      setStatus(t('handeye.liveSourceNotWired', { source: trackerSource }));
       return;
     }
-    if (!posesPath) { setStatus('pick the tracker-poses JSON'); return; }
-    if (!camInt) { setStatus('load camera intrinsics YAML'); return; }
-    setBusy(true); setStatus('solving AX=XB…');
+    if (!posesPath) { setStatus(t('handeye.pickPosesJson')); return; }
+    if (!camInt) { setStatus(t('handeye.loadCamIntrinsics')); return; }
+    setBusy(true); setStatus(t('handeye.solvingAxxb'));
     try {
       const res = await api.calibrate('handeye', {
         method, kind, pattern: solvePattern,
@@ -326,13 +328,13 @@ export function HandEyeTab({ solvePattern, setSolvePattern }) {
       });
       setResult(res);
       setStatus(res.ok
-        ? `rot ${res.rms.toFixed(3)}° · trans ${res.final_cost.toFixed(2)} mm · ${res.message}`
-        : `failed: ${res.message}`);
-    } catch (e) { setStatus(`error: ${e.message}`); } finally { setBusy(false); }
+        ? t('handeye.rmsResult', { rot: res.rms.toFixed(3), trans: res.final_cost.toFixed(2), message: res.message })
+        : t('common.failed', { message: res.message }));
+    } catch (e) { setStatus(t('common.error', { error: e.message })); } finally { setBusy(false); }
   };
 
   const onSaveYaml = async () => {
-    if (!result?.ok) { setStatus('nothing to save — run calibration first'); return; }
+    if (!result?.ok) { setStatus(t('common.nothingToSave')); return; }
     const p = await pickSaveFile({ defaultPath: `handeye_${kind}.yaml` });
     if (!p) return;
     try {
@@ -340,8 +342,8 @@ export function HandEyeTab({ solvePattern, setSolvePattern }) {
         path: p, kind: 'handeye',
         result, board: boardPayload(), dataset_path: datasetPath || null,
       });
-      setStatus(`saved → ${p}`);
-    } catch (e) { setStatus(`save failed: ${e.message}`); }
+      setStatus(t('common.saved', { path: p }));
+    } catch (e) { setStatus(t('common.saveFailed', { error: e.message })); }
   };
 
   const onLoadYaml = async () => {
@@ -361,8 +363,8 @@ export function HandEyeTab({ solvePattern, setSolvePattern }) {
         final_cost: d.pos_rms ?? d.final_cost ?? 0,
         message: `loaded from ${p}`,
       });
-      setStatus(`loaded ← ${p}`);
-    } catch (e) { setStatus(`load failed: ${e.message}`); }
+      setStatus(t('common.loaded', { path: p }));
+    } catch (e) { setStatus(t('common.loadFailed', { error: e.message })); }
   };
 
   const Tmat = result?.T ?? [
@@ -431,60 +433,60 @@ export function HandEyeTab({ solvePattern, setSolvePattern }) {
     <div className="workspace">
       <div className="rail">
         <div className="rail-header">
-          <span>Hand-Eye · cam ↔ {trackerLabel}</span>
+          <span>{t('handeye.railTitlePrefix', { tracker: trackerLabel })}</span>
           <span className="mono" style={{color:'var(--text-4)'}}>AX=XB</span>
         </div>
         <div className="rail-scroll">
           <CameraSourcePanel source={cam} onLivePreview={() => setViewMode('live')}/>
           <Section
-            title="Tracker source"
+            title={t('handeye.trackerSource')}
             hint={
-              trackerSource === 'file'    ? (posesPath ? basename(posesPath) : 'pick json') :
-              trackerSource === 'oculus'  ? (oculusDevice || 'pick device') :
-              trackerSource === 'pico'    ? (picoDevice || 'pick device') :
-              trackerSource === 'ros2'    ? (trackerRos2Topic || 'pick topic') :
-                                            (steamvrSerial || 'pick tracker')
+              trackerSource === 'file'    ? (posesPath ? basename(posesPath) : t('handeye.pickJson')) :
+              trackerSource === 'oculus'  ? (oculusDevice || t('handeye.pickDevice')) :
+              trackerSource === 'pico'    ? (picoDevice || t('handeye.pickDevice')) :
+              trackerSource === 'ros2'    ? (trackerRos2Topic || t('handeye.pickTopic')) :
+                                            (steamvrSerial || t('handeye.pickTracker'))
             }
             right={connected ? null : <Seg value={trackerSource} onChange={setTrackerSource} options={
               TRACKER_SOURCES.map(s => ({ value: s.value, label: s.label.split(' ')[0].toLowerCase() }))
             }/>}
           >
-            <Field label="body">
+            <Field label={t('handeye.body')}>
               <select className="select" value={kind} disabled={connected}
                 onChange={e => setKind(e.target.value)}>
                 <option value="hmd">HMD</option>
-                <option value="ctrl">controller</option>
+                <option value="ctrl">{t('handeye.trackerController')}</option>
               </select>
             </Field>
             {trackerSource === 'oculus' && (
               <>
-                <Field label="device">
+                <Field label={t('handeye.device')}>
                   <select className="select" value={oculusDevice} disabled={connected}
                     onChange={e => setOculusDevice(e.target.value)}>
-                    <option value="">— none —</option>
+                    <option value="">{t('common.none')}</option>
                     <option value="quest3">Quest 3</option>
                     <option value="quest2">Quest 2</option>
                     <option value="questpro">Quest Pro</option>
                   </select>
                 </Field>
                 <div className="mono" style={{ fontSize: 10.5, color: 'var(--text-3)' }}>
-                  via Oculus Reader · adb pose stream
+                  {t('handeye.questHint')}
                 </div>
               </>
             )}
             {trackerSource === 'pico' && (
               <>
-                <Field label="device">
+                <Field label={t('handeye.device')}>
                   <select className="select" value={picoDevice} disabled={connected}
                     onChange={e => setPicoDevice(e.target.value)}>
-                    <option value="">— none —</option>
-                    <option value="pico_ctrl_l">controller L</option>
-                    <option value="pico_ctrl_r">controller R</option>
-                    <option value="pico_hmd">headset</option>
+                    <option value="">{t('common.none')}</option>
+                    <option value="pico_ctrl_l">{t('handeye.controllerL')}</option>
+                    <option value="pico_ctrl_r">{t('handeye.controllerR')}</option>
+                    <option value="pico_hmd">{t('handeye.headset')}</option>
                   </select>
                 </Field>
                 <div className="mono" style={{ fontSize: 10.5, color: 'var(--text-3)' }}>
-                  via XRoboToolkit PC Service
+                  {t('handeye.picoHint')}
                 </div>
               </>
             )}
@@ -495,30 +497,30 @@ export function HandEyeTab({ solvePattern, setSolvePattern }) {
             )}
             {trackerSource === 'steamvr' && (
               <>
-                <Field label="serial">
-                  <input className="input" value={steamvrSerial} placeholder="LHR-XXXXXXXX" disabled={connected}
+                <Field label={t('handeye.serial')}>
+                  <input className="input" value={steamvrSerial} placeholder={t('handeye.serialPlaceholder')} disabled={connected}
                     onChange={e => setSteamvrSerial(e.target.value)}/>
                 </Field>
                 <div className="mono" style={{ fontSize: 10.5, color: 'var(--text-3)' }}>
-                  via SteamVR pose publisher
+                  {t('handeye.steamvrHint')}
                 </div>
               </>
             )}
             {trackerSource === 'file' && (
               <>
-                <Field label="file">
-                  <input className="input" value={posesPath} placeholder="basename → 4x4 matrix"
+                <Field label={t('handeye.file')}>
+                  <input className="input" value={posesPath} placeholder={t('handeye.filePlaceholder')}
                     onChange={e => setPosesPath(e.target.value)}/>
                 </Field>
-                <button className="btn" onClick={onPickPoses}>📁 pick json</button>
+                <button className="btn" onClick={onPickPoses}>{t('handeye.pickJsonBtn')}</button>
               </>
             )}
             {(trackerSource === 'oculus' || trackerSource === 'pico' || trackerSource === 'steamvr') && (
               <>
                 <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:6 }}>
                   {!connected
-                    ? <button className="btn primary" onClick={onConnectTracker}>⚡ connect</button>
-                    : <button className="btn ghost" onClick={onDisconnectTracker}>⨯ disconnect</button>}
+                    ? <button className="btn primary" onClick={onConnectTracker}>{t('handeye.connect')}</button>
+                    : <button className="btn ghost" onClick={onDisconnectTracker}>{t('handeye.disconnect')}</button>}
                 </div>
                 {connected && (
                   <div className="mono" style={{ fontSize: 10.5,
@@ -529,35 +531,35 @@ export function HandEyeTab({ solvePattern, setSolvePattern }) {
               </>
             )}
           </Section>
-          <Section title="Dataset" hint={datasetFiles.length ? `${datasetFiles.length} images` : 'not loaded'}>
-            <Field label="folder">
-              <input className="input" value={datasetPath} placeholder="/path/to/frames/"
+          <Section title={t('handeye.dataset')} hint={datasetFiles.length ? t('common.images', { count: datasetFiles.length }) : t('common.notLoaded')}>
+            <Field label={t('common.folder')}>
+              <input className="input" value={datasetPath} placeholder={t('framePlaceholder.pathOrPlaceholder')}
                 onChange={e => setDatasetPath(e.target.value)}/>
             </Field>
             <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:6 }}>
-              <button className="btn" onClick={onPickDataset}>📁 pick</button>
+              <button className="btn" onClick={onPickDataset}>{t('handeye.pick')}</button>
               <button className="btn" disabled={!datasetPath}
-                onClick={() => datasetPath && openPath(datasetPath)}>↗ open</button>
-              <button className="btn ghost" onClick={() => { setDatasetPath(''); setDatasetFiles([]); }}>clear</button>
+                onClick={() => datasetPath && openPath(datasetPath)}>{t('handeye.open')}</button>
+              <button className="btn ghost" onClick={() => { setDatasetPath(''); setDatasetFiles([]); }}>{t('common.clear')}</button>
             </div>
             {recordedCount > 0 && (
               <div className="mono" style={{ fontSize: 10.5, color:'var(--text-3)' }}>
-                poses.json · {recordedCount} entries
+                {t('handeye.posesEntries', { count: recordedCount })}
               </div>
             )}
           </Section>
-          <Section title="Camera intrinsics" hint={camInt ? basename(camInt.path) : 'required'}>
-            <button className="btn" onClick={onLoadIntrinsics}>↓ load yaml {camInt ? '✓' : ''}</button>
+          <Section title={t('handeye.cameraIntrinsics')} hint={camInt ? basename(camInt.path) : t('handeye.required')}>
+            <button className="btn" onClick={onLoadIntrinsics}>{t('handeye.loadYamlCheck', { check: camInt ? '✓' : '' })}</button>
           </Section>
           <TargetPanel board={board} onBoard={setBoard}/>
-          <Section title="Hand-Eye method" hint={`${solvePattern.replace('_', '-')} · ${method}`}>
-            <Field label="pattern">
+          <Section title={t('handeye.method')} hint={`${solvePattern.replace('_', '-')} · ${method}`}>
+            <Field label={t('handeye.pattern')}>
               <Seg value={solvePattern} onChange={setSolvePattern} full options={[
-                {value:'eye_in_hand', label:'eye-in-hand'},
-                {value:'eye_to_hand', label:'eye-to-hand'},
+                {value:'eye_in_hand', label:t('handeye.eyeInHand')},
+                {value:'eye_to_hand', label:t('handeye.eyeToHand')},
               ]}/>
             </Field>
-            <Field label="method">
+            <Field label={t('handeye.methodLabel')}>
               <Seg value={method} onChange={setMethod} full options={[
                 {value:'tsai',label:'Tsai'},{value:'park',label:'Park'},
                 {value:'horaud',label:'Horaud'},{value:'daniilidis',label:'Dan.'},{value:'andreff',label:'Andreff'}
@@ -571,20 +573,20 @@ export function HandEyeTab({ solvePattern, setSolvePattern }) {
             coverage={coverage.percent} coverageCells={coverage.cells}/>
           {status && <div className="mono" style={{ fontSize: 10.5, color: 'var(--text-3)', padding: '0 2px' }}>{status}</div>}
         </div>
-        <SolverButton onSolve={onRun} busy={busy} label="Solve AX=XB"/>
+        <SolverButton onSolve={onRun} busy={busy} label={t('handeye.solveAxxb')}/>
       </div>
 
       <div className="viewport">
         <div className="vp-toolbar">
           <Seg value={viewMode} onChange={setViewMode} options={[
-            {value:'live',label:'live'},{value:'frame',label:'frame'},{value:'scene',label:'3D scene'}
+            {value:'live',label:t('handeye.viewLive')},{value:'frame',label:t('handeye.viewFrame')},{value:'scene',label:t('handeye.viewScene')}
           ]}/>
-          <Chk checked={showBoard} onChange={setShowBoard}>board</Chk>
+          <Chk checked={showBoard} onChange={setShowBoard}>{t('handeye.board')}</Chk>
           <div className="spacer"/>
           <div className="read">
             {result?.ok
-              ? <>{result.iterations > 0 && <>pairs <b>{result.iterations}</b> · </>}rot <b style={{color: trafficColor(rotKind)}}>{rotRms.toFixed(3)}°</b> · trans <b style={{color: trafficColor(transKind)}}>{transRms.toFixed(2)} mm</b></>
-              : <>awaiting solve</>}
+              ? <>{result.iterations > 0 && <>{t('handeye.pairs')} <b>{result.iterations}</b> · </>}rot <b style={{color: trafficColor(rotKind)}}>{rotRms.toFixed(3)}°</b> · trans <b style={{color: trafficColor(transKind)}}>{transRms.toFixed(2)} mm</b></>
+              : <>{t('handeye.awaitingSolve')}</>}
           </div>
         </div>
         <FrameStrip frames={frames} selected={selected}
@@ -593,7 +595,7 @@ export function HandEyeTab({ solvePattern, setSolvePattern }) {
           okBelow={HE_TRANS_OK} warnBelow={HE_TRANS_WARN}/>
         <div className="vp-body" style={{ gridTemplateColumns: '1fr 0.7fr', gap: 1, background: 'var(--view-border)' }}>
           <div className="vp-cell">
-            <span className="vp-label">scene · world = tracker-base</span>
+            <span className="vp-label">{t('handeye.sceneLabel')}</span>
             <Scene3D w={vpW*0.6} h={vpH}>
               {(cam) => {
                 const Tboard = makeT(-Math.PI/2, 0, 0, 0, 0, -0.15);
@@ -616,7 +618,7 @@ export function HandEyeTab({ solvePattern, setSolvePattern }) {
             </Scene3D>
           </div>
           <div className="vp-cell" style={{ background: 'var(--view-bg)', overflow:'hidden' }}>
-            <span className="vp-label">cam image{selectedPath ? ` · ${basename(selectedPath)}` : ''}</span>
+            <span className="vp-label">{selectedPath ? t('handeye.camImageNamed', { name: basename(selectedPath) }) : t('handeye.camImage')}</span>
             {viewMode === 'live' && liveDevice ? (
               autoCapture
                 ? <LiveDetectedFrame device={liveDevice} board={board}
@@ -630,7 +632,7 @@ export function HandEyeTab({ solvePattern, setSolvePattern }) {
               <div className="mono" style={{
                 display:'flex', alignItems:'center', justifyContent:'center',
                 width:'100%', height:'100%', color:'var(--text-4)',
-              }}>no frame · pick a camera or load a dataset</div>
+              }}>{t('handeye.noFramePick')}</div>
             )}
           </div>
         </div>
@@ -638,13 +640,13 @@ export function HandEyeTab({ solvePattern, setSolvePattern }) {
 
       <div className="rail">
         <div className="rail-header">
-          <span>Results · {xmatLabel}</span>
+          <span>{t('handeye.resultsPrefix', { label: xmatLabel })}</span>
           <span className="mono" style={{color: result?.ok ? overallColor : 'var(--text-4)'}}>
-            {result?.ok ? `● ${rotRms.toFixed(2)}° / ${transRms.toFixed(1)} mm` : busy ? '● solving' : '○ idle'}
+            {result?.ok ? `● ${rotRms.toFixed(2)}° / ${transRms.toFixed(1)} mm` : busy ? t('common.solvingDot') : t('common.idleDot')}
           </span>
         </div>
         <div className="rail-scroll">
-          <Section title="Hand-Eye transform">
+          <Section title={t('handeye.transform')}>
             <Matrix m={Tmat}/>
             <KV items={[
               ['t  (mm)', `[ ${tMm[0].toFixed(1)}, ${tMm[1].toFixed(1)}, ${tMm[2].toFixed(1)} ]`, ''],
@@ -654,27 +656,27 @@ export function HandEyeTab({ solvePattern, setSolvePattern }) {
           </Section>
           <ErrorPanel
             rms={rotRms} frames={frames.map(f => f.err)} histData={histData}
-            title="Rotation Error" unit="°"
+            title={t('handeye.rotationError')} unit="°"
             okBelow={HE_ROT_OK} warnBelow={HE_ROT_WARN}/>
           <ErrorPanel
             rms={transRms} frames={frames.map(f => f.err)} histData={histData}
-            title="Translation Error" unit="mm"
+            title={t('handeye.translationError')} unit="mm"
             okBelow={HE_TRANS_OK} warnBelow={HE_TRANS_WARN}/>
-          <Section title="Consistency" hint="world-board scatter">
+          <Section title={t('handeye.consistency')} hint={t('handeye.consistencyHint')}>
             <KV items={[
-              ['rot rms',   `${rotRms.toFixed(3)}°`,    result?.ok ? (rotKind === 'ok' ? 'pos' : rotKind) : ''],
-              ['trans rms', `${transRms.toFixed(2)} mm`, result?.ok ? (transKind === 'ok' ? 'pos' : transKind) : ''],
-              ['N pairs',   result?.iterations ? `${result.iterations}` : '—', ''],
+              [t('handeye.rotRms'),   `${rotRms.toFixed(3)}°`,    result?.ok ? (rotKind === 'ok' ? 'pos' : rotKind) : ''],
+              [t('handeye.transRms'), `${transRms.toFixed(2)} mm`, result?.ok ? (transKind === 'ok' ? 'pos' : transKind) : ''],
+              [t('handeye.nPairs'),   result?.iterations ? `${result.iterations}` : '—', ''],
             ]}/>
           </Section>
           <SolverPanel iters={result?.iterations || 0}
-            cost={transRms} costUnit="mm" costLabel="trans rms"
+            cost={transRms} costUnit="mm" costLabel={t('handeye.transRms')}
             cond={0}
-            algo={`cv2.calibrateHandEye · ${method}`}/>
+            algo={t('handeye.algo', { method })}/>
         </div>
         <div style={{ padding: 10, borderTop: '1px solid var(--border-soft)', background: 'var(--surface-2)', display: 'flex', gap: 6 }}>
-          <button className="btn" style={{flex:1}} onClick={onLoadYaml}>↓ load</button>
-          <button className="btn primary" style={{flex:1}} onClick={onSaveYaml} disabled={!result?.ok}>↑ save yaml</button>
+          <button className="btn" style={{flex:1}} onClick={onLoadYaml}>{t('common.load')}</button>
+          <button className="btn primary" style={{flex:1}} onClick={onSaveYaml} disabled={!result?.ok}>{t('common.saveYaml')}</button>
         </div>
       </div>
     </div>

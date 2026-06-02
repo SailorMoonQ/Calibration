@@ -1,4 +1,5 @@
 import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Section, Seg, Chk, Field, Matrix } from '../components/primitives.jsx';
 import { DetectedFrame } from '../components/DetectedFrame.jsx';
 import { RectifiedFrame } from '../components/RectifiedFrame.jsx';
@@ -18,6 +19,7 @@ import { api, pickFolder, pickSaveFile, pickOpenFile } from '../api/client.js';
 const ZERO_K = [[0,0,0,0],[0,0,0,0],[0,0,0,0],[0,0,0,1]];
 
 export function IntrinsicsTab() {
+  const { t } = useTranslation();
   const [board, setBoard] = useState(DEFAULT_CHESS_BOARD);
   const [autoCapture, setAuto] = useState(false);
   const [autoRate, setAutoRate] = useState(0.5);
@@ -33,7 +35,11 @@ export function IntrinsicsTab() {
   const [datasetFiles, setDatasetFiles] = useState([]);
   const [result, setResult] = useState(null);
   const [busy, setBusy] = useState(false);
-  const [status, setStatus] = useState('');
+  // status carries a message plus an explicit error flag, so the solver-status
+  // color is language-independent (no regex-matching the localized text).
+  const [status, setStatusMsg] = useState('');
+  const [statusErr, setStatusErr] = useState(false);
+  const setStatus = (msg, isErr = false) => { setStatusMsg(msg); setStatusErr(isErr); };
 
   const [viewMode, setViewMode] = useState('live');          // 'live' | 'frame'
   const [liveDetect, setLiveDetect] = useState(false);
@@ -90,10 +96,10 @@ export function IntrinsicsTab() {
     api.listDataset(datasetPath).then(r => {
       if (cancelled) return;
       setDatasetFiles(r.files);
-      setStatus(`${r.count} images in dataset`);
+      setStatus(t('common.imagesInDataset', { count: r.count }));
       setSelected(1);
       setResult(null);
-    }).catch(e => !cancelled && setStatus(`listing failed: ${e.message}`));
+    }).catch(e => !cancelled && setStatus(t('common.listingFailed', { error: e.message }), true));
     return () => { cancelled = true; };
   }, [datasetPath]);
 
@@ -134,7 +140,7 @@ export function IntrinsicsTab() {
 
   const onDrop = async () => {
     const path = datasetFiles[selectedFrame - 1];
-    if (!path) { setStatus('no frame selected to drop'); return; }
+    if (!path) { setStatus(t('common.noFrameSelected')); return; }
     const name = path.split('/').pop();
     try {
       const r = await api.deleteFrame(path);
@@ -143,8 +149,8 @@ export function IntrinsicsTab() {
       const newLen = files?.length ?? 0;
       setSelected(Math.min(Math.max(1, selectedFrame), Math.max(1, newLen)));
       if (newLen === 0) setViewMode('live');
-      setStatus(`dropped ${name} · ⌘Z to undo`);
-    } catch (e) { setStatus(`drop failed: ${e.message}`); }
+      setStatus(t('common.dropped', { name }));
+    } catch (e) { setStatus(t('common.dropFailed', { error: e.message }), true); }
   };
   const onAutoMeta = useCallback((meta) => {
     if (!autoCapture || !liveDevice || !datasetPath) return;
@@ -167,12 +173,12 @@ export function IntrinsicsTab() {
       try {
         const r = await api.snap(liveDevice, datasetPath);
         pushUndo({ kind: 'snap', path: r.path });
-        setStatus(`auto-snapped → ${r.path.split('/').pop()} (cell ${idx})`);
+        setStatus(t('common.autoSnapped', { name: r.path.split('/').pop(), cell: idx }));
         const files = await refreshDataset();
         if (files) setSelected(files.length);
       } catch (e) {
         snappedCellsRef.current.delete(idx);
-        setStatus(`auto-snap failed: ${e.message}`);
+        setStatus(t('common.autoSnapFailed', { error: e.message }), true);
       } finally {
         autoSnapInFlightRef.current = false;
       }
@@ -183,39 +189,39 @@ export function IntrinsicsTab() {
     let dir = datasetPath;
     if (!dir) {
       const picked = await pickFolder();
-      if (!picked) { setStatus('pick a session folder before snapping'); return; }
+      if (!picked) { setStatus(t('common.pickSessionFolder'), true); return; }
       setDatasetPath(picked);
       dir = picked;
     }
-    if (!liveDevice) { setStatus('pick a camera first'); return; }
+    if (!liveDevice) { setStatus(t('common.pickCamera'), true); return; }
     try {
       const r = await api.snap(liveDevice, dir);
       pushUndo({ kind: 'snap', path: r.path });
-      setStatus(`snapped → ${r.path.split('/').pop()} · ⌘Z to undo`);
+      setStatus(t('common.snapped', { name: r.path.split('/').pop() }));
       if (dir === datasetPath) {
         const files = await refreshDataset();
         if (files) { setSelected(files.length); setViewMode('frame'); }
       }
-    } catch (e) { setStatus(`snap failed: ${e.message}`); }
+    } catch (e) { setStatus(t('common.snapFailed', { error: e.message }), true); }
   };
 
   const onUndo = async () => {
     const stack = undoStackRef.current;
-    if (!stack.length) { setStatus('nothing to undo'); return; }
+    if (!stack.length) { setStatus(t('common.nothingToUndo')); return; }
     const entry = stack.pop();
     try {
       if (entry.kind === 'snap') {
         await api.deleteFrame(entry.path);
         await refreshDataset();
-        setStatus(`undid snap · ${entry.path.split('/').pop()}`);
+        setStatus(t('common.undidSnap', { name: entry.path.split('/').pop() }));
       } else if (entry.kind === 'drop') {
         await api.restoreFrame(entry.trashPath, entry.path);
         await refreshDataset();
-        setStatus(`undid drop · ${entry.path.split('/').pop()}`);
+        setStatus(t('common.undidDrop', { name: entry.path.split('/').pop() }));
       }
     } catch (e) {
       stack.push(entry);
-      setStatus(`undo failed: ${e.message}`);
+      setStatus(t('common.undoFailed', { error: e.message }), true);
     }
   };
 
@@ -266,7 +272,7 @@ export function IntrinsicsTab() {
   });
 
   const onSave = async () => {
-    if (!result?.ok) { setStatus('nothing to save — run calibration first'); return; }
+    if (!result?.ok) { setStatus(t('common.nothingToSave')); return; }
     const p = await pickSaveFile({ defaultPath: 'intrinsics.yaml' });
     if (!p) return;
     try {
@@ -275,8 +281,8 @@ export function IntrinsicsTab() {
         result, board: boardPayload(), dataset_path: datasetPath || null,
       });
       const fmt = p.toLowerCase().endsWith('.json') ? 'json' : 'yaml';
-      setStatus(`saved (${fmt}) → ${p}`);
-    } catch (e) { setStatus(`save failed: ${e.message}`); }
+      setStatus(t('common.savedFmt', { fmt, path: p }));
+    } catch (e) { setStatus(t('common.saveFailed', { error: e.message }), true); }
   };
 
   const onLoad = async () => {
@@ -298,17 +304,17 @@ export function IntrinsicsTab() {
         message: `loaded from ${p}`,
       });
       if (d.dataset_path && !datasetPath) setDatasetPath(d.dataset_path);
-      setStatus(`loaded ← ${p}`);
-    } catch (e) { setStatus(`load failed: ${e.message}`); }
+      setStatus(t('common.loaded', { path: p }));
+    } catch (e) { setStatus(t('common.loadFailed', { error: e.message }), true); }
   };
 
   const onRun = async () => {
     if (!datasetPath) {
-      setStatus('pick a dataset folder first');
+      setStatus(t('common.pickDatasetFolder'), true);
       return;
     }
     setBusy(true);
-    setStatus('detecting + solving…');
+    setStatus(t('intrinsics.detectingSolving'));
     try {
       const res = await api.calibrate('intrinsics', {
         board: boardPayload(),
@@ -317,10 +323,10 @@ export function IntrinsicsTab() {
       });
       setResult(res);
       setStatus(res.ok
-        ? `rms ${res.rms.toFixed(4)} px · ${res.message}`
-        : `failed: ${res.message}`);
+        ? t('intrinsics.rmsResult', { rms: res.rms.toFixed(4), message: res.message })
+        : t('common.failed', { message: res.message }), !res.ok);
     } catch (e) {
-      setStatus(`error: ${e.message}`);
+      setStatus(t('common.error', { error: e.message }), true);
     } finally {
       setBusy(false);
     }
@@ -342,7 +348,11 @@ export function IntrinsicsTab() {
   const rawCell = (
     <div className="vp-cell" key="raw">
       <span className="vp-label">
-        {showLive ? `live · ${liveDevice}${liveDetect ? ' · detect' : ''}` : 'raw'}
+        {showLive
+          ? (liveDetect
+              ? t('intrinsics.liveDetectLabel', { device: liveDevice })
+              : t('intrinsics.liveLabel', { device: liveDevice }))
+          : t('intrinsics.raw')}
       </span>
       {showLive ? (
         liveDetect
@@ -359,7 +369,7 @@ export function IntrinsicsTab() {
           overlay={showResid ? 'residuals' : 'none'}
           residuals={residualsByPath?.get(selectedPath)}/>
       ) : (
-        emptyCell('connect a camera or load a dataset')
+        emptyCell(t('intrinsics.connectOrLoad'))
       )}
       <div className="vp-corner-read">
         <div>fx <b>{K[0][0].toFixed(2)}</b>  fy <b>{K[1][1].toFixed(2)}</b></div>
@@ -380,17 +390,17 @@ export function IntrinsicsTab() {
       body = <RectifiedFrame path={selectedPath} K={result.K} D={D}
                 model="pinhole" alpha={alpha} method={method}/>;
     } else if (calibrated) {
-      body = emptyCell('connect a camera or select a frame to see the undistorted view');
+      body = emptyCell(t('intrinsics.connectOrSelectFrame'));
     } else {
-      body = emptyCell('run calibration to see the undistorted view');
+      body = emptyCell(t('intrinsics.runToUndistort'));
     }
     return (
       <div className="vp-cell" key="rect">
-        <span className="vp-label">{useLive ? `undistorted · live` : 'undistorted'}</span>
+        <span className="vp-label">{useLive ? t('intrinsics.undistortedLive') : t('intrinsics.undistorted')}</span>
         {body}
         <div className="vp-corner-read">
-          <div>method <b>{method === 'undistort' ? 'cv2.undistort' : 'initUndistortRectifyMap + remap'}</b></div>
-          <div>alpha <b>{alpha.toFixed(2)}</b></div>
+          <div>{t('intrinsics.method')} <b>{method === 'undistort' ? t('intrinsics.methodCvUndistort') : t('intrinsics.methodRemapFull')}</b></div>
+          <div>{t('intrinsics.alpha')} <b>{alpha.toFixed(2)}</b></div>
         </div>
       </div>
     );
@@ -400,32 +410,32 @@ export function IntrinsicsTab() {
     <div className="workspace">
       <div className="rail">
         <div className="rail-header">
-          <span>Pinhole Intrinsics</span>
+          <span>{t('intrinsics.railTitle')}</span>
           <span className="mono" style={{color: converged ? trafficColor(rmsKind) : 'var(--text-4)'}}>
-            {result?.ok ? `rms ${result.rms.toFixed(2)} px` : 'idle'}
+            {result?.ok ? t('common.rmsPx', { rms: result.rms.toFixed(2) }) : t('common.idle')}
           </span>
         </div>
         <div className="rail-scroll">
           <CameraSourcePanel source={cam} onLivePreview={() => setViewMode('live')}/>
-          <Section title="Dataset" hint={datasetFiles.length ? `${datasetFiles.length} images` : 'not loaded'}>
-            <Field label="folder">
-              <input className="input" value={datasetPath} placeholder="/path/to/frames/"
+          <Section title={t('intrinsics.dataset')} hint={datasetFiles.length ? t('common.images', { count: datasetFiles.length }) : t('common.notLoaded')}>
+            <Field label={t('common.folder')}>
+              <input className="input" value={datasetPath} placeholder={t('framePlaceholder.pathOrPlaceholder')}
                      onChange={e => setDatasetPath(e.target.value)}/>
             </Field>
             <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:6 }}>
-              <button className="btn" onClick={onPickFolder}>📁 pick folder</button>
-              <button className="btn ghost" onClick={() => { setDatasetPath(''); setDatasetFiles([]); setResult(null); setStatus(''); }}>clear</button>
+              <button className="btn" onClick={onPickFolder}>{t('common.pickFolder')}</button>
+              <button className="btn ghost" onClick={() => { setDatasetPath(''); setDatasetFiles([]); setResult(null); setStatus(''); }}>{t('common.clear')}</button>
             </div>
             {status && <div className="mono" style={{ fontSize: 10.5, color:'var(--text-3)', marginTop: 2 }}>{status}</div>}
           </Section>
           <TargetPanel board={board} onBoard={setBoard}/>
-          <Section title="Model" hint={model}>
+          <Section title={t('intrinsics.model')} hint={model}>
             <Seg value={model} onChange={setModel} full options={[
-              {value:'pinhole-k3',label:'k3'},{value:'pinhole-k5',label:'k5'},{value:'pinhole-rt',label:'rational'}
+              {value:'pinhole-k3',label:t('intrinsics.modelK3')},{value:'pinhole-k5',label:t('intrinsics.modelK5')},{value:'pinhole-rt',label:t('intrinsics.modelRational')}
             ]}/>
           </Section>
-          <Section title="Undistortion preview">
-            <Field label="alpha">
+          <Section title={t('intrinsics.undistortionPreview')}>
+            <Field label={t('intrinsics.alpha')}>
               <div className="slider-row">
                 <input type="range" min="0" max="100" value={Math.round(alpha * 100)}
                        onChange={e => setAlpha(+e.target.value / 100)}/>
@@ -445,7 +455,7 @@ export function IntrinsicsTab() {
           status={status}
           statusKind={
             !status ? undefined :
-            /^failed|error|cannot|did not|need ≥|too many|pick |snap failed|listing failed|save failed|load failed/i.test(status) ? 'err' :
+            statusErr ? 'err' :
             result?.ok ? 'ok' : 'warn'
           }/>
       </div>
@@ -453,23 +463,23 @@ export function IntrinsicsTab() {
       <div className="viewport">
         <div className="vp-toolbar">
           <Seg value={view} onChange={setView} options={[
-            {value:'split',label:'split'},{value:'raw',label:'raw'},{value:'rect',label:'rectified'},
+            {value:'split',label:t('intrinsics.viewSplit')},{value:'raw',label:t('intrinsics.viewRaw')},{value:'rect',label:t('intrinsics.viewRectified')},
           ]}/>
           {view !== 'raw' && (
             <Seg value={method} onChange={setMethod} options={[
-              {value:'remap',label:'remap'},{value:'undistort',label:'undistort'},
+              {value:'remap',label:t('intrinsics.methodRemap')},{value:'undistort',label:t('intrinsics.methodUndistort')},
             ]}/>
           )}
-          <Chk checked={showBoard} onChange={setShowBoard}>board</Chk>
-          <Chk checked={showOrigin} onChange={setShowOrigin}>origin</Chk>
-          <Chk checked={showResid} onChange={setShowResid}>residuals</Chk>
-          <Chk checked={liveDetect} onChange={setLiveDetect}>detect live</Chk>
+          <Chk checked={showBoard} onChange={setShowBoard}>{t('intrinsics.board')}</Chk>
+          <Chk checked={showOrigin} onChange={setShowOrigin}>{t('intrinsics.origin')}</Chk>
+          <Chk checked={showResid} onChange={setShowResid}>{t('intrinsics.residuals')}</Chk>
+          <Chk checked={liveDetect} onChange={setLiveDetect}>{t('intrinsics.detectLive')}</Chk>
           <div className="spacer"/>
           <div className="read">
-            {datasetFiles.length > 0 && <>frame <b>#{selectedFrame.toString().padStart(2,'0')}</b> · </>}
+            {datasetFiles.length > 0 && <>{t('intrinsics.frame')} <b>#{selectedFrame.toString().padStart(2,'0')}</b> · </>}
             {result?.ok
               ? <>rms <b style={{color: trafficColor(rmsKind)}}>{rms.toFixed(3)}</b> px</>
-              : busy ? <>solving…</> : <>not calibrated</>}
+              : busy ? <>{t('intrinsics.solvingShort')}</> : <>{t('intrinsics.notCalibrated')}</>}
           </div>
         </div>
         <FrameStrip frames={frames} selected={selectedFrame} onSelect={(id) => { setSelected(id); setViewMode('frame'); }} coverage={coverage.percent}/>
@@ -495,18 +505,18 @@ export function IntrinsicsTab() {
 
       <div className="rail">
         <div className="rail-header">
-          <span>Results</span>
+          <span>{t('intrinsics.results')}</span>
           <span className="mono" style={{color: converged ? trafficColor(rmsKind) : 'var(--text-4)'}}>
-            {converged ? `● ${rms.toFixed(3)} px` : busy ? '● solving' : '○ idle'}
+            {converged ? `● ${rms.toFixed(3)} px` : busy ? t('common.solvingDot') : t('common.idleDot')}
           </span>
         </div>
         <div className="rail-scroll">
           <ErrorPanel rms={rms} frames={sparkData} histData={histData}
             okBelow={PX_OK} warnBelow={PX_WARN}/>
-          <Section title="Intrinsic matrix K">
+          <Section title={t('intrinsics.intrinsicMatrix')}>
             <Matrix m={K}/>
           </Section>
-          <Section title="Distortion" hint="k₁ k₂ p₁ p₂ k₃…">
+          <Section title={t('intrinsics.distortion')} hint={t('intrinsics.distortionHint')}>
             <div className="mono" style={{ fontSize: 11.5, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '3px 12px' }}>
               {D.slice(0, 8).map((v, i) => (
                 <React.Fragment key={i}>
@@ -522,8 +532,8 @@ export function IntrinsicsTab() {
             cond={0}/>
         </div>
         <div style={{ padding: 10, borderTop: '1px solid var(--border-soft)', background: 'var(--surface-2)', display:'flex', gap: 6 }}>
-          <button className="btn" style={{flex:1}} onClick={onLoad}>↓ load</button>
-          <button className="btn primary" style={{flex:1}} onClick={onSave} disabled={!result?.ok}>↑ save</button>
+          <button className="btn" style={{flex:1}} onClick={onLoad}>{t('common.load')}</button>
+          <button className="btn primary" style={{flex:1}} onClick={onSave} disabled={!result?.ok}>{t('common.save')}</button>
         </div>
       </div>
     </div>
