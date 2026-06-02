@@ -14,6 +14,7 @@ import {
 } from '../components/panels.jsx';
 import { computeCoverage, cellIndexFor } from '../lib/coverage.js';
 import { DEFAULT_CHESS_BOARD } from '../lib/board.js';
+import { confirm } from '../components/confirm.jsx';
 import { api, pickFolder, pickSaveFile, pickOpenFile } from '../api/client.js';
 
 const ZERO_K = [[0,0,0,0],[0,0,0,0],[0,0,0,0],[0,0,0,1]];
@@ -142,7 +143,12 @@ export function IntrinsicsTab() {
   // Undoable as a single ⌘Z that restores them all.
   const onClear = async () => {
     if (!datasetPath || datasetFiles.length === 0) { setStatus(t('common.noImagesToRemove')); return; }
-    if (!window.confirm(t('common.confirmClear', { count: datasetFiles.length }))) return;
+    const ok = await confirm({
+      message: t('common.confirmClear', { count: datasetFiles.length }),
+      confirmLabel: t('common.delete'),
+      cancelLabel: t('common.cancel'),
+    });
+    if (!ok) return;
     try {
       const r = await api.clearDataset(datasetPath);
       if (r.moved?.length) {

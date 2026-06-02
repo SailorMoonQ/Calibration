@@ -52,6 +52,8 @@
     "dropFailed": "drop failed: {{error}}",
     "nothingToUndo": "nothing to undo",
     "noImagesToRemove": "no images to remove",
+    "cancel": "Cancel",
+    "delete": "Delete",
     "confirmClear": "Delete {{count}} images in this folder to trash?",
     "removedImages": "removed {{count}} images · ⌘Z to undo",
     "clearFailed": "clear failed: {{error}}",

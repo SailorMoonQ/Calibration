@@ -5,6 +5,7 @@ import { Topbar } from './components/Topbar.jsx';
 import { Tabs } from './components/Tabs.jsx';
 import { TWEAKS_DEFAULTS } from './components/TweaksPanel.jsx';
 import { LogStrip } from './components/panels.jsx';
+import { ConfirmHost } from './components/confirm.jsx';
 import { IntrinsicsTab } from './tabs/IntrinsicsTab.jsx';
 import { FisheyeTab } from './tabs/FisheyeTab.jsx';
 import { HandEyeTab } from './tabs/HandEyeTab.jsx';
@@ -73,6 +74,7 @@ export function App() {
         <Tabs tabs={tabs} value={active} onChange={setActive}/>
         <ActiveComp solvePattern={solvePattern} setSolvePattern={setSolvePattern}/>
         <LogStrip lines={[]}/>
+        <ConfirmHost/>
       </div>
     </TelemetryProvider>
   );

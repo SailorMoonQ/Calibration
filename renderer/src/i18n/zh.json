@@ -52,6 +52,8 @@
     "dropFailed": "删除失败：{{error}}",
     "nothingToUndo": "无可撤销",
     "noImagesToRemove": "没有可移除的图像",
+    "cancel": "取消",
+    "delete": "删除",
     "confirmClear": "将此文件夹中的 {{count}} 张图像移入回收站？",
     "removedImages": "已移除 {{count}} 张图像 · ⌘Z 撤销",
     "clearFailed": "清除失败：{{error}}",
