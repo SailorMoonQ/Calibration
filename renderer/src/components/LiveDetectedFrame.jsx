@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { streamWsUrl } from '../api/client.js';
 import { useReportCamera } from '../lib/telemetry.jsx';
 
@@ -28,6 +29,7 @@ export function LiveDetectedFrame({
   showCorners = true, showOrigin = true,
   onMeta,                 // optional: called each frame with the parsed meta
 }) {
+  const { t } = useTranslation();
   const [meta, setMeta] = useState(null);
   const [err, setErr] = useState(null);
   const [capFps, setCapFps] = useState(null);
@@ -214,7 +216,7 @@ export function LiveDetectedFrame({
     width: '100%', height: '100%', fontFamily: 'JetBrains Mono', fontSize: 11,
   };
   if (!device) {
-    return <div style={{ ...placeholderStyle, color: 'var(--view-text-2)' }}>pick a camera to start the live preview</div>;
+    return <div style={{ ...placeholderStyle, color: 'var(--view-text-2)' }}>{t('preview.pickCamera')}</div>;
   }
   if (err) {
     return <div style={{ ...placeholderStyle, color: 'var(--err)', padding: 16, textAlign: 'center' }}>{err}</div>;
@@ -237,13 +239,13 @@ export function LiveDetectedFrame({
         <div style={{
           position: 'absolute', inset: 0, ...placeholderStyle,
           color: 'var(--view-text-2)', pointerEvents: 'none',
-        }}>connecting…</div>
+        }}>{t('preview.connecting')}</div>
       )}
       <div className="vp-corner-read left">
-        <div>live <b style={{ color: fpsColor }}>{capFps != null ? capFps.toFixed(1) : '—'}</b> fps · tgt <b>{fps}</b></div>
+        <div>{t('preview.live')} <b style={{ color: fpsColor }}>{capFps != null ? capFps.toFixed(1) : '—'}</b> fps · {t('preview.tgt')} <b>{fps}</b></div>
         {w != null && h != null && <div>{w}×{h} · seq <b>{meta.seq}</b></div>}
         {detect && (
-          <div>detect <b style={{ color: detected ? 'var(--ok)' : 'var(--warn)' }}>{detected ? `${corners.length} corners` : '—'}</b></div>
+          <div>{t('preview.detect')} <b style={{ color: detected ? 'var(--ok)' : 'var(--warn)' }}>{detected ? t('preview.cornersN', { count: corners.length }) : '—'}</b></div>
         )}
       </div>
     </>

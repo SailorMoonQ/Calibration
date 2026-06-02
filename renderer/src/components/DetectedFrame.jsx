@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { api, frameUrl } from '../api/client.js';
 
 // Cache detection results per (path|board-key) so switching frames is instant on revisit.
@@ -14,6 +15,7 @@ export function DetectedFrame({
   residuals,                // optional [[x,y,ex,ey],...] — if present, used instead of live detection
   residualScale = 40,
 }) {
+  const { t } = useTranslation();
   const [img, setImg] = useState(null);
   const [det, setDet] = useState(null);
   const [err, setErr] = useState(null);
@@ -130,7 +132,7 @@ export function DetectedFrame({
           <rect x={w * 0.5 - 120} y={h * 0.5 - 18} width={240} height={36} fill="rgba(0,0,0,0.6)" stroke="var(--err)"/>
           <text x={w * 0.5} y={h * 0.5 + 6} fontSize={Math.max(14, Math.round(h / 40))}
                 fontFamily="JetBrains Mono" fill="var(--err)" textAnchor="middle">
-            no board detected
+            {t('preview.noBoardDetected')}
           </text>
         </g>
       )}
@@ -138,7 +140,7 @@ export function DetectedFrame({
         <g>
           <rect x={8} y={h - 32} width={320} height={24} fill="rgba(0,0,0,0.6)" stroke="var(--err)"/>
           <text x={14} y={h - 14} fontSize={Math.max(11, Math.round(h / 60))}
-                fontFamily="JetBrains Mono" fill="var(--err)">detect error: {err}</text>
+                fontFamily="JetBrains Mono" fill="var(--err)">{t('preview.detectError', { error: err })}</text>
         </g>
       )}
     </svg>

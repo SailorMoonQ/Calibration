@@ -1,5 +1,7 @@
-import { Pill } from './primitives.jsx';
+import { useTranslation } from 'react-i18next';
+import { Pill, Seg } from './primitives.jsx';
 import { useTelemetry } from '../lib/telemetry.jsx';
+import { setLang, normalizeLang } from '../i18n';
 
 // Map a /dev/videoN path to a short label. Anything else falls through.
 function camLabel(device) {
@@ -27,6 +29,7 @@ function dropStatus(pct) {
 }
 
 export function Topbar() {
+  const { t, i18n } = useTranslation();
   const { cameras, poses } = useTelemetry();
 
   const camPills = Object.entries(cameras)
@@ -40,7 +43,7 @@ export function Topbar() {
   const showSteamVR = poses && Array.isArray(poses.source) && poses.source.includes('steamvr');
   const steamPill = showSteamVR ? (
     <Pill key="steamvr" status={basesStatus(poses.bases ?? 0)}>
-      SteamVR · {poses.bases ?? 0} bases
+      SteamVR · {poses.bases ?? 0} {t('topbar.bases')}
     </Pill>
   ) : null;
 
@@ -49,14 +52,14 @@ export function Topbar() {
         .sort(([a], [b]) => a.localeCompare(b))
         .map(([name, { dropPct }]) => (
           <Pill key={`drop:${name}`} status={dropStatus(dropPct)}>
-            {name} drop {dropPct.toFixed(1)}%
+            {name} {t('topbar.drop')} {dropPct.toFixed(1)}%
           </Pill>
         ))
     : [];
 
   return (
     <div className="topbar">
-      <span className="brand"><span className="brand-mark"/>Calibration Workbench</span>
+      <span className="brand"><span className="brand-mark"/>{t('topbar.brand')}</span>
       <span className="divider"/>
       <div className="session">
         {camPills}
@@ -66,7 +69,11 @@ export function Topbar() {
       <span className="divider"/>
       <span className="session"><span className="path">~/projects/vr_rig/calib/session_0419.toml</span></span>
       <span className="spacer"/>
-      <button className="btn ghost icon" title="settings">⚙</button>
+      <Seg value={normalizeLang(i18n.language)} onChange={setLang} options={[
+        { value: 'en', label: 'EN' },
+        { value: 'zh', label: '中' },
+      ]}/>
+      <button className="btn ghost icon" title={t('topbar.settings')}>⚙</button>
     </div>
   );
 }

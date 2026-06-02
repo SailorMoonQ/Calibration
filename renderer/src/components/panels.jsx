@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Section, Seg, Field, Chk, KV, NumInput, Spark, Histogram } from './primitives.jsx';
 import { useTelemetry } from '../lib/telemetry.jsx';
 
@@ -17,6 +18,7 @@ function FrameThumb({ f }) {
 }
 
 export function FrameStrip({ frames, selected, onSelect, coverage, okBelow = 0.35, warnBelow = 0.6 }) {
+  const { t } = useTranslation();
   const activeRef = useRef(null);
   // Whenever the selection changes, slide the strip so the active thumb is centered.
   // `block: 'nearest'` keeps the page from also scrolling vertically.
@@ -35,8 +37,8 @@ export function FrameStrip({ frames, selected, onSelect, coverage, okBelow = 0.3
   return (
     <div className="framestrip">
       <div style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 110, fontSize: 10, color: 'var(--text-3)', fontFamily: 'JetBrains Mono' }}>
-        <div>frames  <b style={{color: 'var(--text)'}}>{frames.length}</b> / 40</div>
-        <div>coverage <b style={{color: 'var(--text)'}}>{coverage}%</b></div>
+        <div>{t('panels.frames')}  <b style={{color: 'var(--text)'}}>{frames.length}</b> / 40</div>
+        <div>{t('panels.coverage')} <b style={{color: 'var(--text)'}}>{coverage}%</b></div>
       </div>
       <div style={{ width: 1, height: 38, background: 'var(--border-soft)' }}/>
       {frames.map(f => {
@@ -58,7 +60,7 @@ export function FrameStrip({ frames, selected, onSelect, coverage, okBelow = 0.3
           </div>
         );
       })}
-      <button className="btn sm ghost" style={{ marginLeft: 4, flex: '0 0 auto' }}>+ add</button>
+      <button className="btn sm ghost" style={{ marginLeft: 4, flex: '0 0 auto' }}>{t('panels.add')}</button>
     </div>
   );
 }
@@ -117,43 +119,45 @@ function residualStats(data) {
 
 export function ErrorPanel({
   rms, frames, histData,
-  title = 'Reprojection Error',
+  title,
   unit = 'px',
   okBelow = 0.25,
   warnBelow = 0.5,
 }) {
+  const { t } = useTranslation();
   const kind = trafficKindForRms(rms, okBelow, warnBelow);
   const color = trafficColor(kind);
   const stats = residualStats(histData);
+  const titleText = title ?? t('panels.reprojectionError');
   return (
     <div>
-      <Section title={title} hint={unit}>
+      <Section title={titleText} hint={unit}>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', alignItems: 'baseline', gap: 10 }}>
           <div>
-            <div style={{ fontSize: 10.5, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>RMS over frames</div>
+            <div style={{ fontSize: 10.5, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{t('panels.rmsOverFrames')}</div>
             <div style={{ fontFamily: 'JetBrains Mono', fontSize: 24, fontWeight: 500, color, letterSpacing: '-0.02em' }}>{rms.toFixed(3)}<span style={{ fontSize: 11, color: 'var(--text-3)', marginLeft: 4 }}>{unit}</span></div>
           </div>
           {stats ? (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 4, fontFamily: 'JetBrains Mono', fontSize: 11, color: 'var(--text-2)', textAlign: 'right' }}>
-              <div>mean <b style={{color: 'var(--text)'}}>{stats.mean.toFixed(3)}</b></div>
-              <div>max  <b style={{color: 'var(--text)'}}>{stats.max.toFixed(3)}</b></div>
+              <div>{t('panels.mean')} <b style={{color: 'var(--text)'}}>{stats.mean.toFixed(3)}</b></div>
+              <div>{t('panels.max')}  <b style={{color: 'var(--text)'}}>{stats.max.toFixed(3)}</b></div>
               <div>σ    <b style={{color: 'var(--text)'}}>{stats.sigma.toFixed(3)}</b></div>
             </div>
           ) : (
             <div style={{ fontFamily: 'JetBrains Mono', fontSize: 11, color: 'var(--text-4)', textAlign: 'right' }}>
-              <div>no per-frame</div>
-              <div>data</div>
+              <div>{t('panels.noPerFrameLine1')}</div>
+              <div>{t('panels.noPerFrameLine2')}</div>
             </div>
           )}
         </div>
 
         <div className="chart-wrap" style={{ marginTop: 8 }}>
-          <div className="chart-title"><span>Per-frame RMS</span><b>{frames.length} frames</b></div>
+          <div className="chart-title"><span>{t('panels.perFrameRms')}</span><b>{t('panels.framesCount', { count: frames.length })}</b></div>
           <Spark data={frames} w={280} h={46} color={color} threshold={warnBelow}/>
         </div>
 
         <div className="chart-wrap" style={{ marginTop: 6 }}>
-          <div className="chart-title"><span>Residual distribution</span><b>{histData.length} corners</b></div>
+          <div className="chart-title"><span>{t('panels.residualDistribution')}</span><b>{t('panels.cornersCount', { count: histData.length })}</b></div>
           <Histogram data={histData} w={280} h={54} color={color} unit={unit}/>
         </div>
       </Section>
@@ -168,18 +172,19 @@ export function CaptureControls({
   onSnap, onDrop,
   coverage, coverageCells,
 }) {
+  const { t } = useTranslation();
   const rate = typeof autoRate === 'number' ? autoRate : 0.5;
   const fps = rate > 0 ? (1 / rate) : 0;
   return (
-    <Section title="Capture" hint="live feed">
+    <Section title={t('panels.capture')} hint={t('panels.liveFeed')}>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
         {onLive
-          ? <Chk checked={live} onChange={onLive}>live stream</Chk>
+          ? <Chk checked={live} onChange={onLive}>{t('panels.liveStream')}</Chk>
           : <div/>}
-        <Chk checked={autoCapture} onChange={onAuto}>auto-capture</Chk>
+        <Chk checked={autoCapture} onChange={onAuto}>{t('panels.autoCapture')}</Chk>
       </div>
       {autoCapture && onAutoRate && (
-        <Field label={`auto rate · ${rate.toFixed(1)}s (≈${fps.toFixed(1)} fps)`}>
+        <Field label={t('panels.autoRate', { rate: rate.toFixed(1), fps: fps.toFixed(1) })}>
           <div className="slider-row">
             <input type="range" min="20" max="300" step="10"
                    value={Math.round(rate * 100)}
@@ -189,31 +194,33 @@ export function CaptureControls({
         </Field>
       )}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
-        <button className="btn" onClick={onSnap}>⌁ snap frame</button>
-        <button className="btn danger" onClick={onDrop} disabled={!onDrop}>⌧ drop selected</button>
+        <button className="btn" onClick={onSnap}>{t('panels.snapFrame')}</button>
+        <button className="btn danger" onClick={onDrop} disabled={!onDrop}>{t('panels.dropSelected')}</button>
       </div>
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 4 }}>
         <CoverageGrid cells={coverageCells}/>
         <div style={{ fontSize: 11, color: 'var(--text-2)', lineHeight: 1.45 }}>
-          <div style={{ fontSize: 10.5, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>coverage</div>
+          <div style={{ fontSize: 10.5, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{t('panels.coverage')}</div>
           <div style={{ fontFamily: 'JetBrains Mono', fontSize: 16, fontWeight: 500, color: 'var(--text)' }}>{coverage}%</div>
-          <div style={{ fontSize: 10.5, color: 'var(--text-3)' }}>capture more<br/>in empty cells</div>
+          <div style={{ fontSize: 10.5, color: 'var(--text-3)' }}>{t('panels.captureMoreLine1')}<br/>{t('panels.captureMoreLine2')}</div>
         </div>
       </div>
     </Section>
   );
 }
 
-export function SolverButton({ onSolve, busy, label = "Run calibration", status, statusKind }) {
+export function SolverButton({ onSolve, busy, label, status, statusKind }) {
+  const { t } = useTranslation();
   // statusKind: 'err' | 'warn' | 'ok' | undefined — drives the color of the status line.
   const color =
     statusKind === 'err'  ? 'var(--err)'  :
     statusKind === 'warn' ? 'var(--warn)' :
     statusKind === 'ok'   ? 'var(--ok)'   : 'var(--text-3)';
+  const labelText = label ?? t('panels.runCalibration');
   return (
     <div style={{ padding: 10, borderTop: '1px solid var(--border-soft)', background: 'var(--surface-2)' }}>
       <button className="btn primary block lg" onClick={onSolve} disabled={busy}>
-        {busy ? '◉ solving…' : '▶ ' + label}
+        {busy ? t('panels.solving') : '▶ ' + labelText}
       </button>
       {status ? (
         <div className="mono" style={{ marginTop: 6, fontSize: 11, color, lineHeight: 1.35, wordBreak: 'break-word' }}>
@@ -221,21 +228,23 @@ export function SolverButton({ onSolve, busy, label = "Run calibration", status,
         </div>
       ) : (
         <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 6, fontSize: 10.5, color: 'var(--text-3)', fontFamily: 'JetBrains Mono' }}>
-          <span>⌘↵ run</span><span>⌘S export YAML</span>
+          <span>{t('panels.shortcutRun')}</span><span>{t('panels.shortcutExport')}</span>
         </div>
       )}
     </div>
   );
 }
 
-export function SolverPanel({ iters = 0, cost = 0, costUnit = '', costLabel = 'final cost', cond = 0, algo = '' }) {
+export function SolverPanel({ iters = 0, cost = 0, costUnit = '', costLabel, cond = 0, algo = '' }) {
+  const { t } = useTranslation();
   const costStr = `${cost.toFixed(4)}${costUnit ? ' ' + costUnit : ''}`;
+  const costLabelText = costLabel ?? t('panels.finalCost');
   return (
-    <Section title="Solver" hint={algo}>
+    <Section title={t('panels.solver')} hint={algo}>
       <KV items={[
-        ['iterations', iters ? iters : '—', ''],
-        [costLabel, costStr, ''],
-        ['condition κ', cond > 0 ? cond.toFixed(1) : '—', cond > 1000 ? 'warn' : ''],
+        [t('panels.iterations'), iters ? iters : '—', ''],
+        [costLabelText, costStr, ''],
+        [t('panels.conditionKappa'), cond > 0 ? cond.toFixed(1) : '—', cond > 1000 ? 'warn' : ''],
       ]}/>
     </Section>
   );
@@ -293,27 +302,28 @@ export function SourcePanel({ live, onLive, device, onDevice, bagPath, onBagPath
 }
 
 export function TargetPanel({ board, onBoard }) {
+  const { t } = useTranslation();
   return (
-    <Section title="Calibration target">
-      <Field label="type">
+    <Section title={t('panels.calibrationTarget')}>
+      <Field label={t('panels.type')}>
         <Seg value={board.type} onChange={v => onBoard({...board, type: v})} full
-             options={[{value:'chess', label:'chess'}, {value:'charuco', label:'charuco'}]}/>
+             options={[{value:'chess', label:t('panels.chess')}, {value:'charuco', label:t('panels.charuco')}]}/>
       </Field>
-      <Field label="cols × rows">
+      <Field label={t('panels.colsRows')}>
         <div className="pair">
           <input className="input num" type="number" value={board.cols} onChange={e => onBoard({...board, cols: +e.target.value})}/>
           <input className="input num" type="number" value={board.rows} onChange={e => onBoard({...board, rows: +e.target.value})}/>
         </div>
       </Field>
-      <Field label="square">
+      <Field label={t('panels.square')}>
         <NumInput value={board.sq} step={0.001} onChange={v => onBoard({...board, sq: v})} suffix="m"/>
       </Field>
       {board.type === 'charuco' && (
-        <Field label="marker">
+        <Field label={t('panels.marker')}>
           <NumInput value={board.marker || 0.018} step={0.001} onChange={v => onBoard({...board, marker: v})} suffix="m"/>
         </Field>
       )}
-      <Field label="dict">
+      <Field label={t('panels.dict')}>
         <select className="select"><option>DICT_4X4_50</option><option>DICT_5X5_100</option><option>DICT_6X6_250</option></select>
       </Field>
     </Section>
@@ -324,6 +334,7 @@ export function TargetPanel({ board, onBoard }) {
 // rather than hardcoding. Falls back to "—" while no source is connected so
 // the footer doesn't lie about activity.
 export function LogStrip({ lines = [] }) {
+  const { t } = useTranslation();
   const { cameras, poses } = useTelemetry();
   const camFps = (() => {
     const entries = Object.values(cameras || {});
@@ -336,15 +347,15 @@ export function LogStrip({ lines = [] }) {
   const trackerN = poses?.bases ?? null;
   return (
     <div className="footer">
-      <span><b>ready</b></span>
+      <span><b>{t('footer.ready')}</b></span>
       {lines[0] && (<><span className="sep">│</span><span>{lines[0]}</span></>)}
       <span style={{ flex: 1, color: 'var(--text-4)', overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>
         {lines[1] || ''}
       </span>
       <span className="sep">│</span>
-      <span>cam <b>{camFps != null ? `${camFps.toFixed(1)} fps` : '—'}</b></span>
+      <span>{t('footer.cam')} <b>{camFps != null ? `${camFps.toFixed(1)} fps` : '—'}</b></span>
       <span className="sep">│</span>
-      <span>tracker <b>{trackerSrc ? `${trackerSrc}${trackerN ? ` · ${trackerN}` : ''}` : '—'}</b></span>
+      <span>{t('footer.tracker')} <b>{trackerSrc ? `${trackerSrc}${trackerN ? ` · ${trackerN}` : ''}` : '—'}</b></span>
     </div>
   );
 }

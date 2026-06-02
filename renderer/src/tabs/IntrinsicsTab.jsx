@@ -101,6 +101,7 @@ export function IntrinsicsTab() {
   // without re-attaching the listener on every render.
   const onSnapRef = useRef(null);
   const onUndoRef = useRef(null);
+  const onDropRef = useRef(null);
   const datasetCountRef = useRef(0);
   useEffect(() => { datasetCountRef.current = datasetFiles.length; }, [datasetFiles.length]);
 
@@ -221,6 +222,7 @@ export function IntrinsicsTab() {
   // Keep refs pointed at the latest closures so the keydown handler always sees fresh.
   useEffect(() => { onSnapRef.current = onSnap; });
   useEffect(() => { onUndoRef.current = onUndo; });
+  useEffect(() => { onDropRef.current = onDrop; });
 
   useEffect(() => {
     const onKey = (e) => {
@@ -245,6 +247,9 @@ export function IntrinsicsTab() {
       } else if ((e.ctrlKey || e.metaKey) && !e.shiftKey && (e.key === 'z' || e.key === 'Z')) {
         e.preventDefault();
         onUndoRef.current?.();
+      } else if (e.key === 'Delete' || e.key === 'Backspace') {
+        e.preventDefault();
+        onDropRef.current?.();
       }
     };
     window.addEventListener('keydown', onKey);

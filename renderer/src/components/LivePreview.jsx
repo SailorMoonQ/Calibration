@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { api, streamWsUrl } from '../api/client.js';
 import { useReportCamera } from '../lib/telemetry.jsx';
 
@@ -20,6 +21,7 @@ function parseFrame(buf) {
 }
 
 export function LivePreview({ device, fps = 30, quality = 70 }) {
+  const { t } = useTranslation();
   const [info, setInfo] = useState(null);
   const [hasFrame, setHasFrame] = useState(false);
   const canvasRef = useRef(null);
@@ -103,7 +105,7 @@ export function LivePreview({ device, fps = 30, quality = 70 }) {
         display: 'flex', alignItems: 'center', justifyContent: 'center',
         width: '100%', height: '100%', color: 'var(--view-text-2)',
         fontFamily: 'JetBrains Mono', fontSize: 11,
-      }}>pick a camera to start the live preview</div>
+      }}>{t('preview.pickCamera')}</div>
     );
   }
 
@@ -124,10 +126,10 @@ export function LivePreview({ device, fps = 30, quality = 70 }) {
           display: 'flex', alignItems: 'center', justifyContent: 'center',
           color: 'var(--view-text-2)', fontFamily: 'JetBrains Mono', fontSize: 11,
           pointerEvents: 'none',
-        }}>connecting…</div>
+        }}>{t('preview.connecting')}</div>
       )}
       <div className="vp-corner-read left">
-        <div>capture <b style={{ color: fpsColor }}>{capFps != null ? capFps.toFixed(1) : '—'}</b> fps · target <b>{fps}</b></div>
+        <div>{t('preview.capture')} <b style={{ color: fpsColor }}>{capFps != null ? capFps.toFixed(1) : '—'}</b> fps · {t('preview.target')} <b>{fps}</b></div>
         {info?.width != null && <div>{info.width}×{info.height}</div>}
         {info?.fps_advertised ? <div>drv {info.fps_advertised.toFixed(1)} fps</div> : null}
       </div>

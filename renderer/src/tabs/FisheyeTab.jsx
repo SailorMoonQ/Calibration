@@ -119,6 +119,7 @@ export function FisheyeTab() {
   // closures without re-attaching the listener on every render.
   const onSnapRef = useRef(null);
   const onUndoRef = useRef(null);
+  const onDropRef = useRef(null);
   const datasetCountRef = useRef(0);
   useEffect(() => { datasetCountRef.current = datasetFiles.length; }, [datasetFiles.length]);
 
@@ -239,6 +240,9 @@ export function FisheyeTab() {
       } else if ((e.ctrlKey || e.metaKey) && !e.shiftKey && (e.key === 'z' || e.key === 'Z')) {
         e.preventDefault();
         onUndoRef.current?.();
+      } else if (e.key === 'Delete' || e.key === 'Backspace') {
+        e.preventDefault();
+        onDropRef.current?.();
       }
     };
     window.addEventListener('keydown', onKey);
@@ -270,6 +274,7 @@ export function FisheyeTab() {
   // always invokes the up-to-date functions (which close over liveDevice / datasetPath).
   useEffect(() => { onSnapRef.current = onSnap; });
   useEffect(() => { onUndoRef.current = onUndo; });
+  useEffect(() => { onDropRef.current = onDrop; });
 
   const onRun = async () => {
     if (!datasetPath) { setStatus('pick a dataset folder first'); return; }
