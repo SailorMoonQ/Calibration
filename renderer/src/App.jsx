@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { TelemetryProvider } from './lib/telemetry.jsx';
 import { Topbar } from './components/Topbar.jsx';
 import { Tabs } from './components/Tabs.jsx';
-import { TweaksPanel, TWEAKS_DEFAULTS } from './components/TweaksPanel.jsx';
+import { TWEAKS_DEFAULTS } from './components/TweaksPanel.jsx';
 import { LogStrip } from './components/panels.jsx';
 import { IntrinsicsTab } from './tabs/IntrinsicsTab.jsx';
 import { FisheyeTab } from './tabs/FisheyeTab.jsx';
@@ -65,11 +65,14 @@ export function App() {
   return (
     <TelemetryProvider>
       <div className="app">
-        <Topbar/>
+        <Topbar
+          tweaks={tweaks} setTweaks={setTweaks}
+          settingsOpen={tweaksVisible}
+          onToggleSettings={() => setTweaksVisible(v => !v)}
+          onCloseSettings={() => setTweaksVisible(false)}/>
         <Tabs tabs={tabs} value={active} onChange={setActive}/>
         <ActiveComp solvePattern={solvePattern} setSolvePattern={setSolvePattern}/>
         <LogStrip lines={[]}/>
-        <TweaksPanel visible={tweaksVisible} tweaks={tweaks} setTweaks={setTweaks} onClose={() => setTweaksVisible(false)}/>
       </div>
     </TelemetryProvider>
   );

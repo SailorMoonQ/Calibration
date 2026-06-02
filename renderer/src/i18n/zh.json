@@ -3,7 +3,10 @@
     "brand": "Calibration Workbench",
     "settings": "设置",
     "bases": "基站",
-    "drop": "丢帧"
+    "drop": "丢帧",
+    "minimize": "最小化",
+    "maximize": "最大化",
+    "close": "关闭"
   },
   "tabs": {
     "intrinsics": { "label": "针孔", "sub": "内参" },

@@ -3,7 +3,10 @@
     "brand": "Calibration Workbench",
     "settings": "settings",
     "bases": "bases",
-    "drop": "drop"
+    "drop": "drop",
+    "minimize": "minimize",
+    "maximize": "maximize",
+    "close": "close"
   },
   "tabs": {
     "intrinsics": { "label": "Pinhole", "sub": "intrinsics" },

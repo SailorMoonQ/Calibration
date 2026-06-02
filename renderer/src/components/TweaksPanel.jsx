@@ -2,7 +2,7 @@ import { useTranslation } from 'react-i18next';
 import { Field, Seg } from './primitives.jsx';
 
 export const TWEAKS_DEFAULTS = {
-  theme: 'light',
+  theme: 'dark',
   density: 'comfortable',
   accentHue: 295,
 };

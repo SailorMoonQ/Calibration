@@ -1,5 +1,7 @@
+import { useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Pill, Seg } from './primitives.jsx';
+import { TweaksPanel } from './TweaksPanel.jsx';
 import { useTelemetry } from '../lib/telemetry.jsx';
 import { setLang, normalizeLang } from '../i18n';
 
@@ -28,9 +30,22 @@ function dropStatus(pct) {
   return 'bad';
 }
 
-export function Topbar() {
+const win = (action) => () => window.calib?.win?.[action]?.();
+
+export function Topbar({ tweaks, setTweaks, settingsOpen, onToggleSettings, onCloseSettings }) {
   const { t, i18n } = useTranslation();
   const { cameras, poses } = useTelemetry();
+  const settingsRef = useRef(null);
+
+  // Close the settings dropdown on an outside click while it's open.
+  useEffect(() => {
+    if (!settingsOpen) return;
+    const onDown = (e) => {
+      if (settingsRef.current && !settingsRef.current.contains(e.target)) onCloseSettings?.();
+    };
+    document.addEventListener('mousedown', onDown);
+    return () => document.removeEventListener('mousedown', onDown);
+  }, [settingsOpen, onCloseSettings]);
 
   const camPills = Object.entries(cameras)
     .sort(([a], [b]) => a.localeCompare(b))
@@ -73,7 +88,16 @@ export function Topbar() {
         { value: 'en', label: 'EN' },
         { value: 'zh', label: '中' },
       ]}/>
-      <button className="btn ghost icon" title={t('topbar.settings')}>⚙</button>
+      <div className="settings-anchor" ref={settingsRef}>
+        <button className={"btn ghost icon" + (settingsOpen ? ' on' : '')}
+                title={t('topbar.settings')} onClick={onToggleSettings}>⚙</button>
+        <TweaksPanel visible={settingsOpen} tweaks={tweaks} setTweaks={setTweaks} onClose={onCloseSettings}/>
+      </div>
+      <span className="win-controls">
+        <button className="btn ghost icon win-btn" title={t('topbar.minimize')} onClick={win('minimize')}>﹣</button>
+        <button className="btn ghost icon win-btn" title={t('topbar.maximize')} onClick={win('toggleMaximize')}>▢</button>
+        <button className="btn ghost icon win-btn win-close" title={t('topbar.close')} onClick={win('close')}>✕</button>
+      </span>
     </div>
   );
 }
