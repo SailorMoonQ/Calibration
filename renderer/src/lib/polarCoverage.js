@@ -90,6 +90,25 @@ export function pickGuidanceCell(counts, rings = RINGS, sectors = SECTORS) {
   return counts[best] === 0 ? best : null;
 }
 
+// Board tilt proxy (degrees), with no need for intrinsics. From the four outer
+// corners of the chessboard quad we measure how far its interior angles deviate
+// from 90°: a fronto-parallel board projects to a near-rectangle (≈0°), while a
+// tilted board's perspective skews the angles. Used to enforce *orientation*
+// diversity (not just position) during capture. Returns null if corners are short.
+export function boardTiltDeg(corners, cols, rows) {
+  const n = cols * rows;
+  if (!corners || corners.length < n) return null;
+  const quad = [corners[0], corners[cols - 1], corners[n - 1], corners[cols * (rows - 1)]];
+  const ang = (p, c, q) => {
+    const v1x = p[0] - c[0], v1y = p[1] - c[1], v2x = q[0] - c[0], v2y = q[1] - c[1];
+    const d = (v1x * v2x + v1y * v2y) / ((Math.hypot(v1x, v1y) || 1) * (Math.hypot(v2x, v2y) || 1));
+    return (Math.acos(Math.max(-1, Math.min(1, d))) * 180) / Math.PI;
+  };
+  let s = 0;
+  for (let i = 0; i < 4; i++) s += Math.abs(ang(quad[(i + 3) % 4], quad[i], quad[(i + 1) % 4]) - 90);
+  return s / 4;
+}
+
 // Detect the fisheye image circle from a frame's pixels (RGBA Uint8ClampedArray).
 // Uses the ANGULAR-AVERAGED radial brightness profile: at each radius we average
 // luminance over many angles, then take the radius where the profile first falls

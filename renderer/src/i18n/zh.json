@@ -25,6 +25,11 @@
     "compact": "紧凑",
     "comfy": "宽松",
     "accentHue": "强调色相",
+    "voice": "语音",
+    "voiceCommands": "语音指令（拍照 / 标定）",
+    "voicePrompts": "语音提示播报",
+    "voiceLang": "语音语言",
+    "voiceUnsupported": "当前环境不支持语音识别",
     "reset": "重置"
   },
   "footer": {
@@ -240,9 +245,11 @@
     "autoCapture": "自动采集",
     "auto_noBoard": "未见标定板",
     "auto_enough": "该区域已采够",
+    "auto_tilt": "换个倾斜角度",
     "auto_blurry": "太模糊，请稳住",
     "auto_hold": "稳住…",
     "auto_capturing": "采集中…",
+    "voiceError": "语音识别错误：{{error}}",
     "noCalibrationYet": "尚未标定",
     "rawDistorted": "原始 · 畸变",
     "liveLabel": "实时 · {{device}}",

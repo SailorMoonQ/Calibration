@@ -12,7 +12,8 @@ import {
   CaptureControls, SolverButton, SolverPanel,
   trafficKindForRms, trafficColor,
 } from '../components/panels.jsx';
-import { binPolar, pickGuidanceCell, totalPolarCells, polarCellAt, RINGS, SECTORS } from '../lib/polarCoverage.js';
+import { binPolar, pickGuidanceCell, totalPolarCells, polarCellAt, boardTiltDeg, RINGS, SECTORS } from '../lib/polarCoverage.js';
+import { speak, createVoiceRecognizer } from '../lib/voice.js';
 
 // A snapped board only counts as covering a (polar) cell when at least this many
 // of its corners land in that cell — so a board merely clipping a cell's edge
@@ -20,19 +21,21 @@ import { binPolar, pickGuidanceCell, totalPolarCells, polarCellAt, RINGS, SECTOR
 const CAPTURE_MIN_CORNERS = 3;
 
 // Hands-free auto-capture tuning. The board auto-snaps only when it is sharp,
-// held still, and sitting in an under-sampled polar cell — and only after a
-// short dwell, so you can sweep the board around and let it capture itself.
-const TARGET_PER_CELL = 2;     // stop auto-snapping a cell once it has this many
+// held still, and sitting in an under-sampled polar cell at a fresh tilt — and
+// only after a short dwell, so you can sweep the board around and let it capture
+// itself.
+const TARGET_PER_CELL = 3;     // stop auto-snapping a cell once it has this many ("事不过三")
 const DWELL_MS = 500;          // must hold the good pose this long before it fires
 const SHARP_REL = 0.55;        // reject if blurrier than this fraction of the session-best
 const SHARP_ABS = 60;          // absolute Laplacian-variance floor
+const TILT_MIN_DIFF = 10;      // a 2nd/3rd capture in a cell must differ in tilt by ≥ this (deg)
 import { DEFAULT_CHESS_BOARD } from '../lib/board.js';
 import { confirm } from '../components/confirm.jsx';
 import { api, pickFolder, pickSaveFile, pickOpenFile } from '../api/client.js';
 
 const ZERO_K = [[0,0,0,0],[0,0,0,0],[0,0,0,0],[0,0,0,1]];
 
-export function FisheyeTab() {
+export function FisheyeTab({ tweaks }) {
   const { t } = useTranslation();
   const [board, setBoard] = useState(DEFAULT_CHESS_BOARD);
   const [model, setModel] = useState('equidistant');
@@ -217,6 +220,7 @@ export function FisheyeTab() {
   const onSnapRef = useRef(null);
   const onUndoRef = useRef(null);
   const onDropRef = useRef(null);
+  const onRunRef = useRef(null);
   const datasetCountRef = useRef(0);
   useEffect(() => { datasetCountRef.current = datasetFiles.length; }, [datasetFiles.length]);
 
@@ -239,13 +243,35 @@ export function FisheyeTab() {
   const prevCornersRef = useRef(null);    // last frame's corners (for motion)
   const dwellStartRef = useRef(0);        // when the current good pose began
   const maxSharpRef = useRef(0);          // session-best sharpness (adaptive blur gate)
-  const [autoHud, setAutoHud] = useState(null);  // { reason, dwell:0..1 } for the on-frame badge
+  // Per-cell list of captured board tilts (deg) — drives orientation diversity:
+  // a 2nd/3rd capture in a cell only counts if its tilt is fresh.
+  const cellTiltsRef = useRef(Array.from({ length: totalPolarCells() }, () => []));
+  const [autoHud, setAutoHud] = useState(null);  // { reason, dwell:0..1, tilt } for the on-frame badge
   useEffect(() => {
     setPolarCounts(new Array(totalPolarCells()).fill(0));
+    cellTiltsRef.current = Array.from({ length: totalPolarCells() }, () => []);
     prevCornersRef.current = null;
     dwellStartRef.current = 0;
     maxSharpRef.current = 0;
   }, [datasetPath]);
+
+  // Board geometry in a ref so the per-frame handler reads current cols/rows
+  // without being recreated when the board panel changes.
+  const boardRef = useRef(board);
+  useEffect(() => { boardRef.current = board; }, [board]);
+
+  // Voice prompts (Edge-TTS clips). Gated by settings; the per-snap "captured"
+  // cue is rate-limited so rapid auto-captures don't stutter the audio.
+  const voiceLang = tweaks?.voiceLang || 'zh-CN';
+  const voicePrompts = !!tweaks?.voicePrompts;
+  const lastSpokeRef = useRef({});
+  const say = useCallback((name, minGapMs = 0) => {
+    if (!voicePrompts) return;
+    const now = performance.now();
+    if (minGapMs && now - (lastSpokeRef.current[name] || 0) < minGapMs) return;
+    lastSpokeRef.current[name] = now;
+    speak(name, { lang: voiceLang });
+  }, [voicePrompts, voiceLang]);
 
   // Keep the binning circle and live counts in refs so the per-frame auto-capture
   // handler reads the freshest values without being recreated every detection.
@@ -263,8 +289,22 @@ export function FisheyeTab() {
     const c = covCircleRef.current;
     if (!meta?.corners?.length || !c) return;
     const perCell = binPolar(meta.corners, c);
-    setPolarCounts(prev => prev.map((n, i) => n + (perCell[i] >= CAPTURE_MIN_CORNERS ? 1 : 0)));
-  }, []);
+    const b = boardRef.current;
+    const tilt = boardTiltDeg(meta.corners, b.cols, b.rows);
+    // record this capture's tilt in every cell it covered, for orientation diversity
+    if (tilt != null) {
+      perCell.forEach((cnt, i) => { if (cnt >= CAPTURE_MIN_CORNERS) cellTiltsRef.current[i].push(tilt); });
+    }
+    setPolarCounts(prev => {
+      const next = prev.map((n, i) => n + (perCell[i] >= CAPTURE_MIN_CORNERS ? 1 : 0));
+      // Spoken cues: a short "captured", and "coverage complete" the moment the
+      // last cell crosses from empty to covered.
+      say('captured', 600);
+      const wasFull = prev.every(n => n > 0);
+      if (!wasFull && next.every(n => n > 0)) say('allCovered');
+      return next;
+    });
+  }, [say]);
 
   const onAutoMeta = useCallback((meta) => {
     // Always stash the freshest meta so a manual snap can bin its corners,
@@ -303,19 +343,29 @@ export function FisheyeTab() {
     const sharpOk = sharp == null
       || sharp >= Math.max(SHARP_ABS, maxSharpRef.current * SHARP_REL);
 
-    // 3) Novelty: the cell the board centroid sits in is still under-sampled.
+    // 3) Novelty: the cell the board centroid sits in is still under-sampled,
+    //    AND — once a cell has a capture — the board is at a *fresh tilt*, so we
+    //    accumulate orientation diversity instead of three look-alike poses.
     const circle = covCircleRef.current;
     let sx = 0, sy = 0;
     for (const c of corners) { sx += c[0]; sy += c[1]; }
     const cell = circle ? polarCellAt(sx / corners.length, sy / corners.length, circle) : null;
     const counts = polarCountsRef.current;
-    const novel = cell != null && (counts[cell] ?? 0) < TARGET_PER_CELL;
+    const b = boardRef.current;
+    const tilt = boardTiltDeg(corners, b.cols, b.rows);
+    const cellCount = cell != null ? (counts[cell] ?? 0) : TARGET_PER_CELL;
+    const tilts = cell != null ? cellTiltsRef.current[cell] : [];
+    const tiltFresh = tilt == null || tilts.length === 0
+      || tilts.every(prevTilt => Math.abs(prevTilt - tilt) >= TILT_MIN_DIFF);
+    const underTarget = cell != null && cellCount < TARGET_PER_CELL;
+    const novel = underTarget && (cellCount === 0 || tiltFresh);
 
     // 4) Debounce after a snap, and never overlap an in-flight snap.
     const debounced = now - lastAutoSnapRef.current >= Math.max(400, autoRate * 1000);
 
     let reason;
-    if (!novel) reason = 'enough';        // this region already has enough
+    if (cell != null && cellCount >= TARGET_PER_CELL) reason = 'enough';
+    else if (underTarget && !tiltFresh) reason = 'tilt';   // need a different angle here
     else if (!sharpOk) reason = 'blurry';
     else if (!still) reason = 'hold';
     else reason = 'capturing';
@@ -323,14 +373,15 @@ export function FisheyeTab() {
     const ready = novel && sharpOk && still && debounced && !autoSnapInFlightRef.current;
     if (!ready) {
       if (reason !== 'capturing') dwellStartRef.current = 0;
-      setAutoHud({ reason, dwell: 0 });
+      if (reason === 'tilt') say('tiltHint', 4000);
+      setAutoHud({ reason, dwell: 0, tilt });
       return;
     }
 
     // 5) Dwell: hold the good pose for DWELL_MS before firing.
     if (dwellStartRef.current === 0) dwellStartRef.current = now;
     const held = now - dwellStartRef.current;
-    setAutoHud({ reason: 'capturing', dwell: Math.min(1, held / DWELL_MS) });
+    setAutoHud({ reason: 'capturing', dwell: Math.min(1, held / DWELL_MS), tilt });
     if (held < DWELL_MS) return;
 
     autoSnapInFlightRef.current = true;
@@ -350,7 +401,7 @@ export function FisheyeTab() {
         autoSnapInFlightRef.current = false;
       }
     })();
-  }, [autoCapture, liveDevice, datasetPath, autoRate]);
+  }, [autoCapture, liveDevice, datasetPath, autoRate, say, markCellsFromSnap]);
 
   const onDrop = async () => {
     if (!selectedPath) { setStatus(t('common.noFrameSelected')); return; }
@@ -453,10 +504,40 @@ export function FisheyeTab() {
   useEffect(() => { onSnapRef.current = onSnap; });
   useEffect(() => { onUndoRef.current = onUndo; });
   useEffect(() => { onDropRef.current = onDrop; });
+  useEffect(() => { onRunRef.current = onRun; });
+
+  // Voice commands (browser SpeechRecognition). Active only while the setting is
+  // on and a camera is live. Keywords map to the same actions as the buttons.
+  const voiceCommands = !!tweaks?.voiceCommands;
+  useEffect(() => {
+    if (!voiceCommands || !liveDevice) return;
+    const rec = createVoiceRecognizer({
+      lang: voiceLang,
+      onCommand: (action) => {
+        if (action === 'snap') onSnapRef.current?.();
+        else if (action === 'solve') onRunRef.current?.();
+        else if (action === 'undo') onUndoRef.current?.();
+        else if (action === 'drop') onDropRef.current?.();
+      },
+      onState: (s) => {
+        if (s === 'listening') say('listening', 3000);
+        else if (s.startsWith('error:')) {
+          const err = s.slice(6);
+          // 'no-speech' / 'aborted' fire constantly and are benign — don't nag.
+          if (err !== 'no-speech' && err !== 'aborted') {
+            setStatus(t('fisheye.voiceError', { error: err }), true);
+          }
+        }
+      },
+    });
+    if (!rec.supported) { setStatus(t('tweaks.voiceUnsupported'), true); return; }
+    rec.start();
+    return () => rec.stop();
+  }, [voiceCommands, liveDevice, voiceLang, say, t]);
 
   const onRun = async () => {
     if (!datasetPath) { setStatus(t('common.pickDatasetFolder'), true); return; }
-    setBusy(true); setStatus(t('fisheye.solving'));
+    setBusy(true); setStatus(t('fisheye.solving')); say('solveStart');
     try {
       const res = await api.calibrate('fisheye', {
         board: boardPayload(),
@@ -465,7 +546,8 @@ export function FisheyeTab() {
       });
       setResult(res);
       setStatus(res.ok ? t('fisheye.rmsResult', { rms: res.rms.toFixed(4), message: res.message }) : t('common.failed', { message: res.message }), !res.ok);
-    } catch (e) { setStatus(t('common.error', { error: e.message }), true); } finally { setBusy(false); }
+      say(res.ok ? 'solveOk' : 'solveFail');
+    } catch (e) { setStatus(t('common.error', { error: e.message }), true); say('solveFail'); } finally { setBusy(false); }
   };
 
   const onSave = async () => {
@@ -585,7 +667,9 @@ export function FisheyeTab() {
             padding: '5px 10px', display: 'flex', flexDirection: 'column', gap: 4, minWidth: 140,
             fontFamily: 'JetBrains Mono', fontSize: 11, color, boxShadow: '0 2px 10px rgba(0,0,0,0.4)',
           }}>
-            <div>⦿ {t('fisheye.autoCapture')} · {t(`fisheye.auto_${r}`)}</div>
+            <div>⦿ {t('fisheye.autoCapture')} · {t(`fisheye.auto_${r}`)}
+              {typeof autoHud.tilt === 'number' && <span style={{ color: 'var(--text-3)' }}>  ∠{autoHud.tilt.toFixed(0)}°</span>}
+            </div>
             <div style={{ height: 3, background: 'var(--surface-3)', borderRadius: 2, overflow: 'hidden' }}>
               <div style={{ height: '100%', width: `${Math.round((autoHud.dwell || 0) * 100)}%`, background: 'var(--ok)', transition: 'width 80ms linear' }}/>
             </div>

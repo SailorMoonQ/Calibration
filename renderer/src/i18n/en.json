@@ -25,6 +25,11 @@
     "compact": "compact",
     "comfy": "comfy",
     "accentHue": "accent hue",
+    "voice": "voice",
+    "voiceCommands": "voice commands (snap / calibrate)",
+    "voicePrompts": "spoken prompts",
+    "voiceLang": "voice language",
+    "voiceUnsupported": "speech recognition not available in this build",
     "reset": "reset"
   },
   "footer": {
@@ -240,9 +245,11 @@
     "autoCapture": "auto-capture",
     "auto_noBoard": "no board in view",
     "auto_enough": "region already covered",
+    "auto_tilt": "tilt to a new angle",
     "auto_blurry": "too blurry — hold steady",
     "auto_hold": "hold still…",
     "auto_capturing": "capturing…",
+    "voiceError": "speech recognition error: {{error}}",
     "noCalibrationYet": "no calibration yet",
     "rawDistorted": "raw · distorted",
     "liveLabel": "live · {{device}}",
