@@ -234,6 +234,8 @@
     "board": "靶标",
     "residuals": "残差",
     "detectLive": "实时检测",
+    "coverageGrid": "覆盖栅格",
+    "footprint": "检测足迹",
     "noCalibrationYet": "尚未标定",
     "rawDistorted": "原始 · 畸变",
     "liveLabel": "实时 · {{device}}",

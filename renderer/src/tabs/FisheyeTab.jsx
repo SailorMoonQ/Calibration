@@ -12,7 +12,7 @@ import {
   CaptureControls, SolverButton, SolverPanel,
   trafficKindForRms, trafficColor,
 } from '../components/panels.jsx';
-import { computeCoverage, cellIndexFor } from '../lib/coverage.js';
+import { computeCoverage, cellIndexFor, mergeCornersIntoCells, COVERAGE_COLS, COVERAGE_ROWS } from '../lib/coverage.js';
 import { DEFAULT_CHESS_BOARD } from '../lib/board.js';
 import { confirm } from '../components/confirm.jsx';
 import { api, pickFolder, pickSaveFile, pickOpenFile } from '../api/client.js';
@@ -32,6 +32,17 @@ export function FisheyeTab() {
   const [liveDetect, setLiveDetect] = useState(false);
   const [autoCapture, setAutoCapture] = useState(false);
   const [autoRate, setAutoRate] = useState(0.5);  // seconds between auto-snaps
+  const [showCovGrid, setShowCovGrid] = useState(true);   // coverage栅格叠加在画面上
+  const [showFootprint, setShowFootprint] = useState(false); // 检测可达足迹热力
+
+  // Live capture coverage — grows as the user snaps frames, before any solve.
+  // A cell turns on once a snapped frame put a detected corner in it. Reset per
+  // dataset (= per capture session). After a solve we switch to the residual-
+  // derived coverage (which also carries per-cell quality).
+  const [liveCells, setLiveCells] = useState(() => new Array(COVERAGE_COLS * COVERAGE_ROWS).fill(false));
+  // Newest detection meta from the live stream, so a manual snap can bin the
+  // corners it just saved into liveCells (snap itself returns no corners).
+  const latestMetaRef = useRef(null);
 
   // When onLoad sets datasetPath from a loaded calibration, the dataset-listing effect
   // would normally clear the just-loaded result. This ref tells the effect "skip the
@@ -68,13 +79,21 @@ export function FisheyeTab() {
     return m;
   }, [result]);
 
-  // Coverage: bin every detected corner into the 8×5 grid. Uses streamInfo for
-  // the live image_size when no calibration has run yet (otherwise result.image_size).
+  // Coverage. Two sources, picked by phase:
+  //   • after a solve → bin the per-frame residuals into the 8×5 grid, which
+  //     also yields per-cell quality (mean reprojection error) for colouring.
+  //   • during capture (no solve yet) → the live `liveCells` accumulator, so the
+  //     grid fills in real time as the user snaps instead of staying empty.
   const coverage = useMemo(() => {
-    const imgSize = result?.image_size
-      || (streamInfo?.open ? [streamInfo.width, streamInfo.height] : null);
-    return computeCoverage(result?.per_frame_residuals, imgSize);
-  }, [result, streamInfo]);
+    if (result?.per_frame_residuals?.length) {
+      const imgSize = result.image_size
+        || (streamInfo?.open ? [streamInfo.width, streamInfo.height] : null);
+      return computeCoverage(result.per_frame_residuals, imgSize);
+    }
+    const filled = liveCells.reduce((n, on) => n + (on ? 1 : 0), 0);
+    const total = liveCells.length;
+    return { cells: liveCells, counts: null, meanErr: null, filled, total, percent: Math.round((filled / total) * 100) };
+  }, [result, streamInfo, liveCells]);
 
   const frames = useMemo(() => datasetFiles.map((p, i) => ({
     id: i + 1, err: errByPath?.get(p) ?? 0, tx: 0, ty: 0, rot: 0,
@@ -171,9 +190,23 @@ export function FisheyeTab() {
   const snappedCellsRef = useRef(new Set());
   const lastAutoSnapRef = useRef(0);
   const autoSnapInFlightRef = useRef(false);
-  useEffect(() => { snappedCellsRef.current = new Set(); }, [datasetPath]);
+  useEffect(() => {
+    snappedCellsRef.current = new Set();
+    setLiveCells(new Array(COVERAGE_COLS * COVERAGE_ROWS).fill(false));
+  }, [datasetPath]);
+
+  // Fold the corners of the just-snapped frame into the live coverage grid.
+  // Uses the freshest live-detection meta (snap returns only a file path).
+  const markCellsFromSnap = useCallback(() => {
+    const meta = latestMetaRef.current;
+    if (!meta?.corners?.length || !meta?.image_size) return;
+    setLiveCells(prev => mergeCornersIntoCells(prev, meta.corners, meta.image_size));
+  }, []);
 
   const onAutoMeta = useCallback((meta) => {
+    // Always stash the freshest meta so a manual snap can bin its corners,
+    // even when auto-capture is off.
+    latestMetaRef.current = meta;
     if (!autoCapture || !liveDevice || !datasetPath) return;
     const corners = meta?.corners;
     const size = meta?.image_size;
@@ -196,6 +229,7 @@ export function FisheyeTab() {
       try {
         const r = await api.snap(liveDevice, datasetPath);
         pushUndo({ kind: 'snap', path: r.path });
+        markCellsFromSnap();
         setStatus(t('common.autoSnapped', { name: r.path.split('/').pop(), cell: idx }));
         const files = await refreshDataset();
         if (files) setSelected(files.length);
@@ -295,6 +329,7 @@ export function FisheyeTab() {
     try {
       const r = await api.snap(liveDevice, dir);
       pushUndo({ kind: 'snap', path: r.path });
+      markCellsFromSnap();
       setStatus(t('common.snapped', { name: r.path.split('/').pop() }));
       if (dir === datasetPath) {
         // Refresh the listing but keep the live view in the cell — the user is mid-capture
@@ -411,7 +446,11 @@ export function FisheyeTab() {
         liveDetect
           ? <LiveDetectedFrame device={liveDevice} board={board}
                 showCorners={showBoard} showOrigin={true}
-                onMeta={onAutoMeta}/>
+                onMeta={onAutoMeta}
+                coverageCells={coverage.cells}
+                covCols={COVERAGE_COLS} covRows={COVERAGE_ROWS}
+                showCoverageGrid={showCovGrid}
+                showFootprint={showFootprint}/>
           : <LivePreview device={liveDevice}/>
       ) : datasetFiles.length > 0 && selectedPath ? (
         <DetectedFrame
@@ -523,7 +562,8 @@ export function FisheyeTab() {
             autoRate={autoRate}
             onAutoRate={setAutoRate}
             onSnap={onSnap} onDrop={onDrop}
-            coverage={coverage.percent} coverageCells={coverage.cells}/>
+            coverage={coverage.percent} coverageCells={coverage.cells}
+            coverageMeanErr={coverage.meanErr} okBelow={PX_OK} warnBelow={PX_WARN}/>
         </div>
         <SolverButton onSolve={onRun} busy={busy}
           status={status}
@@ -551,6 +591,8 @@ export function FisheyeTab() {
           <Chk checked={showBoard} onChange={setShowBoard}>{t('fisheye.board')}</Chk>
           <Chk checked={showResid} onChange={setShowResid}>{t('fisheye.residuals')}</Chk>
           <Chk checked={liveDetect} onChange={setLiveDetect}>{t('fisheye.detectLive')}</Chk>
+          <Chk checked={showCovGrid} onChange={(v) => { setShowCovGrid(v); if (v) setLiveDetect(true); }}>{t('fisheye.coverageGrid')}</Chk>
+          <Chk checked={showFootprint} onChange={(v) => { setShowFootprint(v); if (v) setLiveDetect(true); }}>{t('fisheye.footprint')}</Chk>
           <div className="spacer"/>
           <div className="read">
             {streamInfo?.open && (

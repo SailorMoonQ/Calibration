@@ -234,6 +234,8 @@
     "board": "board",
     "residuals": "residuals",
     "detectLive": "detect live",
+    "coverageGrid": "coverage grid",
+    "footprint": "footprint",
     "noCalibrationYet": "no calibration yet",
     "rawDistorted": "raw · distorted",
     "liveLabel": "live · {{device}}",

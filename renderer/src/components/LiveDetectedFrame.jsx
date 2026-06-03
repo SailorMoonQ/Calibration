@@ -23,11 +23,22 @@ function parseFrame(buf) {
 
 const CORNER_COLOR = 'oklch(0.75 0.17 40)';
 
+// Detection-footprint heat is accumulated on a finer grid than the coverage
+// cells so the "where can this lens actually be detected" region reads as a
+// smooth blob rather than 8×5 blocks.
+const FP_COLS = 40, FP_ROWS = 25;
+
 export function LiveDetectedFrame({
   device, board,
   fps = 10, quality = 70, detect = true,
   showCorners = true, showOrigin = true,
   onMeta,                 // optional: called each frame with the parsed meta
+  // Coverage overlay drawn directly on the frame (image-pixel coords, so it
+  // stays aligned through object-fit letterboxing):
+  coverageCells = null,   // bool[covCols*covRows] — which cells are already captured
+  covCols = 8, covRows = 5,
+  showCoverageGrid = false,
+  showFootprint = false,  // accumulate + draw the detection-reachable heat
 }) {
   const { t } = useTranslation();
   const [meta, setMeta] = useState(null);
@@ -44,6 +55,15 @@ export function LiveDetectedFrame({
   const onMetaRef = useRef(onMeta);
   useEffect(() => { onMetaRef.current = onMeta; }, [onMeta]);
 
+  // Overlay config in a ref so the draw closure (set up once per stream) always
+  // reads the freshest toggles/cells without re-binding the websocket.
+  const covRef = useRef(null);
+  useEffect(() => {
+    covRef.current = { cells: coverageCells, cols: covCols, rows: covRows, showGrid: showCoverageGrid, showFootprint };
+  }, [coverageCells, covCols, covRows, showCoverageGrid, showFootprint]);
+  // Persistent detection-footprint accumulator (reset when the stream restarts).
+  const footprintRef = useRef(new Float32Array(FP_COLS * FP_ROWS));
+
   // board key for effect deps
   const bType  = board?.type ?? 'chess';
   const bCols  = board?.cols ?? 9;
@@ -57,6 +77,7 @@ export function LiveDetectedFrame({
     let pending = null;          // { bitmap, meta } awaiting paint
     let rafId = null;
     tickRef.current = { recent: [], last: 0 };
+    footprintRef.current = new Float32Array(FP_COLS * FP_ROWS);
 
     // Resolve theme colors once; canvas can't read CSS variables directly.
     // We re-read on each draw via getComputedStyle so the live preview tracks
@@ -86,8 +107,69 @@ export function LiveDetectedFrame({
       next.bitmap.close();
 
       const corners = next.meta.corners ?? [];
-      if (!corners.length) return;
       const cornerR = Math.max(2, Math.round(Math.min(w, h) / 300));
+      const cov = covRef.current;
+
+      // ── Detection-footprint heat ──────────────────────────────────────────
+      // Every detected corner bumps its fine-grid cell; the accumulated field is
+      // painted as a green wash. Regions the lens can never resolve a corner in
+      // (typically the fisheye periphery) stay dark — that's the answer to
+      // "which areas can actually be scanned".
+      if (cov?.showFootprint) {
+        const fp = footprintRef.current;
+        for (const [x, y] of corners) {
+          const ci = Math.min(FP_COLS - 1, Math.max(0, Math.floor((x / w) * FP_COLS)));
+          const ri = Math.min(FP_ROWS - 1, Math.max(0, Math.floor((y / h) * FP_ROWS)));
+          const k = ri * FP_COLS + ci;
+          fp[k] = Math.min(1, fp[k] + 0.2);
+        }
+        const cw = w / FP_COLS, ch = h / FP_ROWS;
+        for (let k = 0; k < fp.length; k++) {
+          const v = fp[k];
+          if (v <= 0.02) continue;
+          const ci = k % FP_COLS, ri = (k / FP_COLS) | 0;
+          ctx.fillStyle = `oklch(0.72 0.15 165 / ${(0.05 + v * 0.3).toFixed(3)})`;
+          ctx.fillRect(ci * cw, ri * ch, cw + 0.5, ch + 0.5);
+        }
+      }
+
+      // ── Coverage grid ─────────────────────────────────────────────────────
+      // Captured cells fill green, empty cells outline red, and the cell the
+      // board currently sits in pulses amber — so the user can steer the target
+      // into the gaps without ever looking away from the live frame.
+      if (cov?.showGrid && cov.cells) {
+        const cols = cov.cols, rows = cov.rows;
+        const gw = w / cols, gh = h / rows;
+        let curCell = -1;
+        if (corners.length) {
+          let sx = 0, sy = 0;
+          for (const [x, y] of corners) { sx += x; sy += y; }
+          const cx = sx / corners.length, cy = sy / corners.length;
+          const ci = Math.min(cols - 1, Math.max(0, Math.floor((cx / w) * cols)));
+          const ri = Math.min(rows - 1, Math.max(0, Math.floor((cy / h) * rows)));
+          curCell = ri * cols + ci;
+        }
+        ctx.lineWidth = Math.max(1, cornerR * 0.25);
+        for (let k = 0; k < cols * rows; k++) {
+          const ci = k % cols, ri = (k / cols) | 0;
+          const x0 = ci * gw, y0 = ri * gh;
+          const on = cov.cells[k];
+          if (on) {
+            ctx.fillStyle = 'oklch(0.72 0.16 150 / 0.16)';
+            ctx.fillRect(x0, y0, gw, gh);
+          }
+          ctx.strokeStyle = on ? 'oklch(0.78 0.15 150 / 0.55)' : 'oklch(0.7 0.13 30 / 0.4)';
+          ctx.strokeRect(x0 + 0.5, y0 + 0.5, gw - 1, gh - 1);
+        }
+        if (curCell >= 0) {
+          const ci = curCell % cols, ri = (curCell / cols) | 0;
+          ctx.strokeStyle = 'oklch(0.85 0.18 90 / 0.95)';
+          ctx.lineWidth = Math.max(2, cornerR * 0.55);
+          ctx.strokeRect(ci * gw + 1.5, ri * gh + 1.5, gw - 3, gh - 3);
+        }
+      }
+
+      if (!corners.length) return;
 
       if (showCorners) {
         ctx.strokeStyle = CORNER_COLOR;
