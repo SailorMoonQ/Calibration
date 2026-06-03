@@ -1330,6 +1330,7 @@ async def stream_ws(
 
             corners: list[list[float]] = []
             ids = None
+            sharpness = None
             if detect:
                 gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
                 # Live preview uses the fast approximate detector (downscaled, no
@@ -1340,6 +1341,17 @@ async def stream_ws(
                 if res is not None:
                     corners_arr, _obj = res
                     corners = corners_arr.tolist()
+                    # Sharpness = variance of the Laplacian over the board ROI.
+                    # Drives the auto-capture blur gate on the client (it rejects
+                    # motion-blurred poses). Computed only on the small board crop,
+                    # only when a board is present — cheap. Live-only; never the solver.
+                    pts = corners_arr
+                    x0, y0 = pts.min(0); x1, y1 = pts.max(0)
+                    xa, ya = max(0, int(x0) - 8), max(0, int(y0) - 8)
+                    xb, yb = min(w, int(x1) + 8), min(h, int(y1) + 8)
+                    if xb > xa and yb > ya:
+                        roi = gray[ya:yb, xa:xb]
+                        sharpness = float(cv2.Laplacian(roi, cv2.CV_64F).var())
 
             ok, buf = await asyncio.to_thread(
                 cv2.imencode, ".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, int(quality)]
@@ -1351,6 +1363,7 @@ async def stream_ws(
                 "seq": int(seq), "ts": time.time(),
                 "image_size": [int(w), int(h)],
                 "corners": corners, "ids": ids,
+                "sharpness": sharpness,
             }
             header = json.dumps(meta).encode("utf-8")
             payload = struct.pack("<I", len(header)) + header + buf.tobytes()

@@ -12,13 +12,20 @@ import {
   CaptureControls, SolverButton, SolverPanel,
   trafficKindForRms, trafficColor,
 } from '../components/panels.jsx';
-import { cellIndexFor } from '../lib/coverage.js';
 import { binPolar, pickGuidanceCell, totalPolarCells, polarCellAt, RINGS, SECTORS } from '../lib/polarCoverage.js';
 
 // A snapped board only counts as covering a (polar) cell when at least this many
 // of its corners land in that cell — so a board merely clipping a cell's edge
 // (or the live board sweeping past without a capture) does not turn it green.
 const CAPTURE_MIN_CORNERS = 3;
+
+// Hands-free auto-capture tuning. The board auto-snaps only when it is sharp,
+// held still, and sitting in an under-sampled polar cell — and only after a
+// short dwell, so you can sweep the board around and let it capture itself.
+const TARGET_PER_CELL = 2;     // stop auto-snapping a cell once it has this many
+const DWELL_MS = 500;          // must hold the good pose this long before it fires
+const SHARP_REL = 0.55;        // reject if blurrier than this fraction of the session-best
+const SHARP_ABS = 60;          // absolute Laplacian-variance floor
 import { DEFAULT_CHESS_BOARD } from '../lib/board.js';
 import { confirm } from '../components/confirm.jsx';
 import { api, pickFolder, pickSaveFile, pickOpenFile } from '../api/client.js';
@@ -224,22 +231,28 @@ export function FisheyeTab() {
     if (stack.length > UNDO_LIMIT) stack.shift();
   };
 
-  // Auto-capture state. We track which coverage cells have already been "claimed"
-  // by a snap this session so the auto-snapper only fires when the user moves the
-  // board into an empty cell, instead of spamming the dataset with redundant frames.
-  // The set resets when the dataset folder changes (new session).
-  const snappedCellsRef = useRef(new Set());
+  // Smart auto-capture state. Rather than "new cell → snap", we gate on
+  // sharpness + stillness + polar-novelty + a dwell timer, so the board can be
+  // swept around hands-free and the app captures the good poses by itself.
   const lastAutoSnapRef = useRef(0);
   const autoSnapInFlightRef = useRef(false);
+  const prevCornersRef = useRef(null);    // last frame's corners (for motion)
+  const dwellStartRef = useRef(0);        // when the current good pose began
+  const maxSharpRef = useRef(0);          // session-best sharpness (adaptive blur gate)
+  const [autoHud, setAutoHud] = useState(null);  // { reason, dwell:0..1 } for the on-frame badge
   useEffect(() => {
-    snappedCellsRef.current = new Set();
     setPolarCounts(new Array(totalPolarCells()).fill(0));
+    prevCornersRef.current = null;
+    dwellStartRef.current = 0;
+    maxSharpRef.current = 0;
   }, [datasetPath]);
 
-  // Keep the binning circle in a ref so the snap handlers (stored in refs) read
-  // the freshest one without being recreated every detection.
+  // Keep the binning circle and live counts in refs so the per-frame auto-capture
+  // handler reads the freshest values without being recreated every detection.
   const covCircleRef = useRef(null);
   useEffect(() => { covCircleRef.current = covCircle; }, [covCircle]);
+  const polarCountsRef = useRef(polarCounts);
+  useEffect(() => { polarCountsRef.current = polarCounts; }, [polarCounts]);
 
   // Tally the just-snapped frame into the live polar coverage. Only cells the
   // board actually filled (≥ CAPTURE_MIN_CORNERS corners) are incremented, so
@@ -257,35 +270,81 @@ export function FisheyeTab() {
     // Always stash the freshest meta so a manual snap can bin its corners,
     // even when auto-capture is off.
     latestMetaRef.current = meta;
-    if (!autoCapture || !liveDevice || !datasetPath) return;
     const corners = meta?.corners;
     const size = meta?.image_size;
-    if (!corners || corners.length < 4 || !size) return;
+
+    if (!autoCapture || !liveDevice || !datasetPath) { dwellStartRef.current = 0; return; }
     const now = performance.now();
-    if (now - lastAutoSnapRef.current < autoRate * 1000) return;  // user-tuned debounce
-    if (autoSnapInFlightRef.current) return;
-    // Centroid of detected corners → cell index.
+
+    // No full board in view → nothing to do; reset the dwell.
+    if (!corners || corners.length < 4 || !size) {
+      prevCornersRef.current = null; dwellStartRef.current = 0;
+      setAutoHud({ reason: 'noBoard', dwell: 0 });
+      return;
+    }
+
+    // 1) Motion: mean per-corner displacement vs the previous frame.
+    const prev = prevCornersRef.current;
+    let motion = Infinity;
+    if (prev && prev.length === corners.length) {
+      let s = 0;
+      for (let i = 0; i < corners.length; i++) {
+        s += Math.hypot(corners[i][0] - prev[i][0], corners[i][1] - prev[i][1]);
+      }
+      motion = s / corners.length;
+    }
+    prevCornersRef.current = corners;
+    const motionThresh = Math.max(2, size[0] * 0.004);  // ≈ 3.8 px @ 960 wide
+    const still = motion < motionThresh;
+
+    // 2) Sharpness: adaptive — must be within SHARP_REL of the session best.
+    const sharp = typeof meta.sharpness === 'number' ? meta.sharpness : null;
+    if (sharp != null) maxSharpRef.current = Math.max(maxSharpRef.current, sharp);
+    const sharpOk = sharp == null
+      || sharp >= Math.max(SHARP_ABS, maxSharpRef.current * SHARP_REL);
+
+    // 3) Novelty: the cell the board centroid sits in is still under-sampled.
+    const circle = covCircleRef.current;
     let sx = 0, sy = 0;
     for (const c of corners) { sx += c[0]; sy += c[1]; }
-    const cx = sx / corners.length, cy = sy / corners.length;
-    const idx = cellIndexFor(cx, cy, size);
-    if (idx == null) return;
-    if (snappedCellsRef.current.has(idx)) return;
-    // Commit early so we don't double-fire while the snap roundtrip is in flight.
+    const cell = circle ? polarCellAt(sx / corners.length, sy / corners.length, circle) : null;
+    const counts = polarCountsRef.current;
+    const novel = cell != null && (counts[cell] ?? 0) < TARGET_PER_CELL;
+
+    // 4) Debounce after a snap, and never overlap an in-flight snap.
+    const debounced = now - lastAutoSnapRef.current >= Math.max(400, autoRate * 1000);
+
+    let reason;
+    if (!novel) reason = 'enough';        // this region already has enough
+    else if (!sharpOk) reason = 'blurry';
+    else if (!still) reason = 'hold';
+    else reason = 'capturing';
+
+    const ready = novel && sharpOk && still && debounced && !autoSnapInFlightRef.current;
+    if (!ready) {
+      if (reason !== 'capturing') dwellStartRef.current = 0;
+      setAutoHud({ reason, dwell: 0 });
+      return;
+    }
+
+    // 5) Dwell: hold the good pose for DWELL_MS before firing.
+    if (dwellStartRef.current === 0) dwellStartRef.current = now;
+    const held = now - dwellStartRef.current;
+    setAutoHud({ reason: 'capturing', dwell: Math.min(1, held / DWELL_MS) });
+    if (held < DWELL_MS) return;
+
     autoSnapInFlightRef.current = true;
     lastAutoSnapRef.current = now;
-    snappedCellsRef.current.add(idx);
+    dwellStartRef.current = 0;
     (async () => {
       try {
         const r = await api.snap(liveDevice, datasetPath);
         pushUndo({ kind: 'snap', path: r.path });
         markCellsFromSnap();
-        setStatus(t('common.autoSnapped', { name: r.path.split('/').pop(), cell: idx }));
+        setStatus(t('common.autoSnapped', { name: r.path.split('/').pop(), cell: cell ?? 0 }));
         const files = await refreshDataset();
         if (files) setSelected(files.length);
       } catch (e) {
-        // Roll back the cell so the user can retry that pose.
-        snappedCellsRef.current.delete(idx);
         setStatus(t('common.autoSnapFailed', { error: e.message }), true);
       } finally {
         autoSnapInFlightRef.current = false;
@@ -516,6 +575,23 @@ export function FisheyeTab() {
       ) : (
         emptyCell(t('fisheye.connectOrLoad'))
       )}
+      {showLive && liveDetect && autoCapture && autoHud && (() => {
+        const r = autoHud.reason;
+        const color = r === 'capturing' ? 'var(--ok)' : r === 'blurry' || r === 'noBoard' ? 'var(--warn)' : 'var(--text-2)';
+        return (
+          <div style={{
+            position: 'absolute', top: 10, left: '50%', transform: 'translateX(-50%)',
+            background: 'var(--surface-1)', border: `1px solid ${color}`, borderRadius: 6,
+            padding: '5px 10px', display: 'flex', flexDirection: 'column', gap: 4, minWidth: 140,
+            fontFamily: 'JetBrains Mono', fontSize: 11, color, boxShadow: '0 2px 10px rgba(0,0,0,0.4)',
+          }}>
+            <div>⦿ {t('fisheye.autoCapture')} · {t(`fisheye.auto_${r}`)}</div>
+            <div style={{ height: 3, background: 'var(--surface-3)', borderRadius: 2, overflow: 'hidden' }}>
+              <div style={{ height: '100%', width: `${Math.round((autoHud.dwell || 0) * 100)}%`, background: 'var(--ok)', transition: 'width 80ms linear' }}/>
+            </div>
+          </div>
+        );
+      })()}
       <div className="vp-corner-read">
         <div>fx <b>{K44[0][0].toFixed(2)}</b>  fy <b>{K44[1][1].toFixed(2)}</b></div>
         <div>cx <b>{K44[0][2].toFixed(2)}</b>  cy <b>{K44[1][2].toFixed(2)}</b></div>
@@ -611,6 +687,7 @@ export function FisheyeTab() {
               // liveDetect on alongside it. Leaving liveDetect off would render
               // the toggle silently inert.
               if (v) setLiveDetect(true);
+              else { setAutoHud(null); dwellStartRef.current = 0; }
             }}
             autoRate={autoRate}
             onAutoRate={setAutoRate}
