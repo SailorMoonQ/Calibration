@@ -28,7 +28,6 @@
     "voice": "voice",
     "voiceCommands": "voice commands (snap / calibrate)",
     "voicePrompts": "spoken prompts",
-    "voiceLang": "voice language",
     "voiceUnsupported": "speech recognition not available in this build",
     "reset": "reset"
   },

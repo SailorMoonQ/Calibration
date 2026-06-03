@@ -1,49 +1,38 @@
-// Voice I/O for the calibration capture loop — entirely optional, gated by the
-// settings in the ⚙ menu:
+// Voice I/O for the calibration capture loop — Chinese only, entirely optional,
+// gated by the ⚙ settings:
 //   • Voice PROMPTS  — pre-synthesised (Microsoft Edge neural TTS) spoken cues
-//     played at capture/solve moments. Bundled as static audio, so they work
-//     offline once installed.
+//     played at capture/solve moments and as directional guidance ("向左一点").
+//     Bundled as static audio, so they work offline once installed.
 //   • Voice COMMANDS — hands-free control via the browser SpeechRecognition API
-//     (Chromium's built-in engine; needs network). Recognises a few keywords and
-//     maps them to actions, so you can snap/solve without touching the keyboard.
+//     (Chromium's built-in engine; needs network). Recognises a few keywords.
 //
 // Neither path touches the calibration solver.
 
-// Static prompt clips, per language. Vite fingerprints these and rewrites the
-// URLs to respect the app's relative base, so they resolve in the packaged app.
-import zhCaptured from '../assets/voice/zh/captured.mp3';
-import zhAllCovered from '../assets/voice/zh/allCovered.mp3';
-import zhSolveStart from '../assets/voice/zh/solveStart.mp3';
-import zhSolveOk from '../assets/voice/zh/solveOk.mp3';
-import zhSolveFail from '../assets/voice/zh/solveFail.mp3';
-import zhTiltHint from '../assets/voice/zh/tiltHint.mp3';
-import zhListening from '../assets/voice/zh/listening.mp3';
-import enCaptured from '../assets/voice/en/captured.mp3';
-import enAllCovered from '../assets/voice/en/allCovered.mp3';
-import enSolveStart from '../assets/voice/en/solveStart.mp3';
-import enSolveOk from '../assets/voice/en/solveOk.mp3';
-import enSolveFail from '../assets/voice/en/solveFail.mp3';
-import enTiltHint from '../assets/voice/en/tiltHint.mp3';
-import enListening from '../assets/voice/en/listening.mp3';
+import captured from '../assets/voice/zh/captured.mp3';
+import allCovered from '../assets/voice/zh/allCovered.mp3';
+import solveStart from '../assets/voice/zh/solveStart.mp3';
+import solveOk from '../assets/voice/zh/solveOk.mp3';
+import solveFail from '../assets/voice/zh/solveFail.mp3';
+import tiltHint from '../assets/voice/zh/tiltHint.mp3';
+import listening from '../assets/voice/zh/listening.mp3';
+import moveLeft from '../assets/voice/zh/moveLeft.mp3';
+import moveRight from '../assets/voice/zh/moveRight.mp3';
+import moveUp from '../assets/voice/zh/moveUp.mp3';
+import moveDown from '../assets/voice/zh/moveDown.mp3';
+import moveOut from '../assets/voice/zh/moveOut.mp3';
+import onTarget from '../assets/voice/zh/onTarget.mp3';
 
 const CLIPS = {
-  'zh-CN': {
-    captured: zhCaptured, allCovered: zhAllCovered, solveStart: zhSolveStart,
-    solveOk: zhSolveOk, solveFail: zhSolveFail, tiltHint: zhTiltHint, listening: zhListening,
-  },
-  'en-US': {
-    captured: enCaptured, allCovered: enAllCovered, solveStart: enSolveStart,
-    solveOk: enSolveOk, solveFail: enSolveFail, tiltHint: enTiltHint, listening: enListening,
-  },
+  captured, allCovered, solveStart, solveOk, solveFail, tiltHint, listening,
+  moveLeft, moveRight, moveUp, moveDown, moveOut, onTarget,
 };
 
 // One shared <audio> element; prompts are short and shouldn't overlap, so a new
-// prompt cuts off the previous one rather than stacking. Some clips (e.g. the
-// per-snap "captured") are rate-limited by the caller, not here.
+// prompt cuts off the previous one rather than stacking. Rate-limiting is the
+// caller's job.
 let audioEl = null;
-export function speak(name, { lang = 'zh-CN' } = {}) {
-  const set = CLIPS[lang] || CLIPS['zh-CN'];
-  const src = set[name];
+export function speak(name) {
+  const src = CLIPS[name];
   if (!src) return;
   try {
     if (!audioEl) audioEl = new Audio();
@@ -54,22 +43,14 @@ export function speak(name, { lang = 'zh-CN' } = {}) {
   } catch { /* ignore */ }
 }
 
-// Keyword → action maps. Matched as substrings against the (lowercased)
-// transcript so "拍照" fires on "拍一下照" too, and "calibrate it" → solve.
-const KEYWORDS = {
-  'zh-CN': [
-    { action: 'snap',  words: ['拍照', '拍照片', '采集', '抓拍', '拍一张', '拍'] },
-    { action: 'solve', words: ['标定', '开始标定', '计算'] },
-    { action: 'undo',  words: ['撤销', '撤回'] },
-    { action: 'drop',  words: ['删除', '删掉', '丢弃'] },
-  ],
-  'en-US': [
-    { action: 'snap',  words: ['capture', 'snap', 'shoot', 'take'] },
-    { action: 'solve', words: ['calibrate', 'solve', 'compute'] },
-    { action: 'undo',  words: ['undo'] },
-    { action: 'drop',  words: ['delete', 'drop', 'discard'] },
-  ],
-};
+// Keyword → action map (Chinese). Matched as substrings against the transcript
+// so "拍一下照" still fires "拍照".
+const KEYWORDS = [
+  { action: 'snap',  words: ['拍照', '拍照片', '采集', '抓拍', '拍一张', '拍'] },
+  { action: 'solve', words: ['标定', '开始标定', '计算'] },
+  { action: 'undo',  words: ['撤销', '撤回'] },
+  { action: 'drop',  words: ['删除', '删掉', '丢弃'] },
+];
 
 export function voiceSupported() {
   return typeof window !== 'undefined'
@@ -79,12 +60,11 @@ export function voiceSupported() {
 // Build a keyword recognizer. Returns { start, stop, supported }. `onCommand` is
 // called with an action string ('snap' | 'solve' | 'undo' | 'drop'). `onState`
 // reports lifecycle ('listening' | 'stopped' | 'error:<reason>') for the UI.
-export function createVoiceRecognizer({ lang = 'zh-CN', onCommand, onState } = {}) {
+export function createVoiceRecognizer({ onCommand, onState } = {}) {
   const Ctor = typeof window !== 'undefined'
     && (window.SpeechRecognition || window.webkitSpeechRecognition);
   if (!Ctor) return { start() {}, stop() {}, supported: false };
 
-  const maps = KEYWORDS[lang] || KEYWORDS['zh-CN'];
   let rec = null;
   let running = false;
   let stopping = false;
@@ -92,22 +72,21 @@ export function createVoiceRecognizer({ lang = 'zh-CN', onCommand, onState } = {
 
   const match = (text) => {
     const s = text.toLowerCase();
-    for (const { action, words } of maps) {
-      if (words.some(w => s.includes(w.toLowerCase()))) return action;
+    for (const { action, words } of KEYWORDS) {
+      if (words.some(w => s.includes(w))) return action;
     }
     return null;
   };
 
   const build = () => {
     const r = new Ctor();
-    r.lang = lang;
+    r.lang = 'zh-CN';
     r.continuous = true;
     r.interimResults = true;
     r.maxAlternatives = 1;
     r.onresult = (ev) => {
       for (let i = ev.resultIndex; i < ev.results.length; i++) {
-        const res = ev.results[i];
-        const txt = res[0]?.transcript || '';
+        const txt = ev.results[i][0]?.transcript || '';
         const action = match(txt);
         if (!action) continue;
         const now = Date.now();
@@ -120,7 +99,7 @@ export function createVoiceRecognizer({ lang = 'zh-CN', onCommand, onState } = {
     r.onerror = (e) => { onState?.(`error:${e.error || 'unknown'}`); };
     r.onend = () => {
       // Chromium ends continuous recognition periodically; restart unless asked to stop.
-      if (running && !stopping) { try { r.start(); } catch { /* will retry on next end */ } }
+      if (running && !stopping) { try { r.start(); } catch { /* retry on next end */ } }
       else onState?.('stopped');
     };
     return r;

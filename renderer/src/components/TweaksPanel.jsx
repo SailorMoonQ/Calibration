@@ -6,9 +6,8 @@ export const TWEAKS_DEFAULTS = {
   theme: 'dark',
   density: 'comfortable',
   accentHue: 295,
-  voiceCommands: false,   // hands-free voice control (browser SpeechRecognition)
-  voicePrompts: false,    // spoken cues (Edge-TTS clips)
-  voiceLang: 'zh-CN',     // recognition + prompt language
+  voiceCommands: false,   // hands-free voice control (browser SpeechRecognition, zh)
+  voicePrompts: false,    // spoken cues (Edge-TTS clips, zh)
 };
 
 export function TweaksPanel({ visible, tweaks, setTweaks, onClose }) {
@@ -43,11 +42,6 @@ export function TweaksPanel({ visible, tweaks, setTweaks, onClose }) {
         <Chk checked={tweaks.voicePrompts} onChange={v => setTweaks({ ...tweaks, voicePrompts: v })}>
           {t('tweaks.voicePrompts')}
         </Chk>
-        <Field label={t('tweaks.voiceLang')}>
-          <Seg value={tweaks.voiceLang} onChange={v => setTweaks({ ...tweaks, voiceLang: v })} full options={[
-            { value: 'zh-CN', label: '中文' }, { value: 'en-US', label: 'English' },
-          ]}/>
-        </Field>
         {tweaks.voiceCommands && !voiceSupported() && (
           <div style={{ fontSize: 10.5, color: 'var(--warn)', marginTop: 2 }}>{t('tweaks.voiceUnsupported')}</div>
         )}

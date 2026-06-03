@@ -12,7 +12,7 @@ import {
   CaptureControls, SolverButton, SolverPanel,
   trafficKindForRms, trafficColor,
 } from '../components/panels.jsx';
-import { binPolar, pickGuidanceCell, totalPolarCells, polarCellAt, boardTiltDeg, RINGS, SECTORS } from '../lib/polarCoverage.js';
+import { binPolar, pickGuidanceCell, totalPolarCells, polarCellAt, polarCellGeometry, boardTiltDeg, RINGS, SECTORS } from '../lib/polarCoverage.js';
 import { speak, createVoiceRecognizer } from '../lib/voice.js';
 
 // A snapped board only counts as covering a (polar) cell when at least this many
@@ -260,18 +260,18 @@ export function FisheyeTab({ tweaks }) {
   const boardRef = useRef(board);
   useEffect(() => { boardRef.current = board; }, [board]);
 
-  // Voice prompts (Edge-TTS clips). Gated by settings; the per-snap "captured"
-  // cue is rate-limited so rapid auto-captures don't stutter the audio.
-  const voiceLang = tweaks?.voiceLang || 'zh-CN';
+  // Voice prompts (Edge-TTS clips, Chinese). Gated by settings; the per-snap
+  // "captured" cue is rate-limited so rapid auto-captures don't stutter the audio.
   const voicePrompts = !!tweaks?.voicePrompts;
   const lastSpokeRef = useRef({});
+  const lastDirSpeakRef = useRef(0);  // global gate for directional cues
   const say = useCallback((name, minGapMs = 0) => {
     if (!voicePrompts) return;
     const now = performance.now();
     if (minGapMs && now - (lastSpokeRef.current[name] || 0) < minGapMs) return;
     lastSpokeRef.current[name] = now;
-    speak(name, { lang: voiceLang });
-  }, [voicePrompts, voiceLang]);
+    speak(name);
+  }, [voicePrompts]);
 
   // Keep the binning circle and live counts in refs so the per-frame auto-capture
   // handler reads the freshest values without being recreated every detection.
@@ -279,6 +279,8 @@ export function FisheyeTab({ tweaks }) {
   useEffect(() => { covCircleRef.current = covCircle; }, [covCircle]);
   const polarCountsRef = useRef(polarCounts);
   useEffect(() => { polarCountsRef.current = polarCounts; }, [polarCounts]);
+  const guidanceRef = useRef(null);   // the cell to steer the board toward (for spoken directions)
+  useEffect(() => { guidanceRef.current = coverage.guidance; }, [coverage.guidance]);
 
   // Tally the just-snapped frame into the live polar coverage. Only cells the
   // board actually filled (≥ CAPTURE_MIN_CORNERS corners) are incremented, so
@@ -374,6 +376,25 @@ export function FisheyeTab({ tweaks }) {
     if (!ready) {
       if (reason !== 'capturing') dwellStartRef.current = 0;
       if (reason === 'tilt') say('tiltHint', 4000);
+      // Spoken directional guidance: when the board sits on an already-full cell,
+      // steer it toward the emptiest cell ("向左一点 / 往外圈移一点").
+      if (reason === 'enough' && guidanceRef.current != null && circle) {
+        const now2 = performance.now();
+        if (now2 - lastDirSpeakRef.current > 2800) {
+          const g = polarCellGeometry(circle).find(x => x.index === guidanceRef.current);
+          if (g) {
+            lastDirSpeakRef.current = now2;
+            const curX = sx / corners.length, curY = sy / corners.length;
+            const dx = g.x - curX, dy = g.y - curY;
+            // If the target is a far-out ring and we're near the centre, say "move outward".
+            const curR = Math.hypot(curX - circle.cx, curY - circle.cy);
+            const gR = Math.hypot(g.x - circle.cx, g.y - circle.cy);
+            if (gR - curR > circle.r * 0.33) say('moveOut');
+            else if (Math.abs(dx) > Math.abs(dy)) say(dx > 0 ? 'moveRight' : 'moveLeft');
+            else say(dy > 0 ? 'moveDown' : 'moveUp');
+          }
+        }
+      }
       setAutoHud({ reason, dwell: 0, tilt });
       return;
     }
@@ -512,7 +533,6 @@ export function FisheyeTab({ tweaks }) {
   useEffect(() => {
     if (!voiceCommands || !liveDevice) return;
     const rec = createVoiceRecognizer({
-      lang: voiceLang,
       onCommand: (action) => {
         if (action === 'snap') onSnapRef.current?.();
         else if (action === 'solve') onRunRef.current?.();
@@ -533,7 +553,7 @@ export function FisheyeTab({ tweaks }) {
     if (!rec.supported) { setStatus(t('tweaks.voiceUnsupported'), true); return; }
     rec.start();
     return () => rec.stop();
-  }, [voiceCommands, liveDevice, voiceLang, say, t]);
+  }, [voiceCommands, liveDevice, say, t]);
 
   const onRun = async () => {
     if (!datasetPath) { setStatus(t('common.pickDatasetFolder'), true); return; }

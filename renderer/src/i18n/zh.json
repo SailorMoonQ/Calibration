@@ -28,7 +28,6 @@
     "voice": "语音",
     "voiceCommands": "语音指令（拍照 / 标定）",
     "voicePrompts": "语音提示播报",
-    "voiceLang": "语音语言",
     "voiceUnsupported": "当前环境不支持语音识别",
     "reset": "重置"
   },
