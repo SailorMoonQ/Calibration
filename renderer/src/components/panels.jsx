@@ -69,9 +69,11 @@ export function FrameStrip({ frames, selected, onSelect, coverage, okBelow = 0.3
 // present, captured cells are coloured by quality (green/amber/red) against the
 // okBelow/warnBelow thresholds instead of the flat accent tint. During capture
 // (meanErr null) it falls back to the simple captured/empty fill.
-export function CoverageGrid({ cells, meanErr = null, okBelow = 0.25, warnBelow = 0.5, w = 110, h = 72 }) {
+export function CoverageGrid({ cells, meanErr = null, mask = null, okBelow = 0.25, warnBelow = 0.5, w = 110, h = 72 }) {
   const cols = 8, rows = 5;
   const cellFill = (on, idx) => {
+    // Outside the fisheye FOV — never coverable, so render as N/A, not "missing".
+    if (mask && !mask[idx]) return { fill: 'var(--text-4)', opacity: 0.18, na: true };
     if (!on) return { fill: 'transparent', opacity: 1 };
     const e = meanErr?.[idx];
     if (e == null) return { fill: 'var(--accent)', opacity: 0.45 };
@@ -83,14 +85,14 @@ export function CoverageGrid({ cells, meanErr = null, okBelow = 0.25, warnBelow 
       <rect width={w} height={h} fill="var(--surface-2)" stroke="var(--border-soft)"/>
       {Array.from({length: cols * rows}).map((_, idx) => {
         const i = idx % cols, j = Math.floor(idx / cols);
-        const { fill, opacity } = cellFill(cells[idx], idx);
+        const { fill, opacity, na } = cellFill(cells[idx], idx);
         return (
           <rect key={idx}
                 x={i * w/cols + 1} y={j * h/rows + 1}
                 width={w/cols - 2} height={h/rows - 2}
                 fill={fill}
                 opacity={opacity}
-                stroke="var(--border)" strokeWidth="0.5"/>
+                stroke={na ? 'transparent' : 'var(--border)'} strokeWidth="0.5"/>
         );
       })}
     </svg>
@@ -181,7 +183,7 @@ export function CaptureControls({
   autoCapture, onAuto,
   autoRate, onAutoRate,
   onSnap, onDrop,
-  coverage, coverageCells, coverageMeanErr = null, okBelow, warnBelow,
+  coverage, coverageCells, coverageMeanErr = null, coverageMask = null, okBelow, warnBelow,
 }) {
   const { t } = useTranslation();
   const rate = typeof autoRate === 'number' ? autoRate : 0.5;
@@ -209,7 +211,7 @@ export function CaptureControls({
         <button className="btn danger" onClick={onDrop} disabled={!onDrop}>{t('panels.dropSelected')}</button>
       </div>
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 4 }}>
-        <CoverageGrid cells={coverageCells} meanErr={coverageMeanErr} okBelow={okBelow} warnBelow={warnBelow}/>
+        <CoverageGrid cells={coverageCells} meanErr={coverageMeanErr} mask={coverageMask} okBelow={okBelow} warnBelow={warnBelow}/>
         <div style={{ fontSize: 11, color: 'var(--text-2)', lineHeight: 1.45 }}>
           <div style={{ fontSize: 10.5, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{t('panels.coverage')}</div>
           <div style={{ fontFamily: 'JetBrains Mono', fontSize: 16, fontWeight: 500, color: 'var(--text)' }}>{coverage}%</div>

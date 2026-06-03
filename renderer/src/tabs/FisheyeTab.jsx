@@ -12,7 +12,12 @@ import {
   CaptureControls, SolverButton, SolverPanel,
   trafficKindForRms, trafficColor,
 } from '../components/panels.jsx';
-import { computeCoverage, cellIndexFor, mergeCornersIntoCells, COVERAGE_COLS, COVERAGE_ROWS } from '../lib/coverage.js';
+import { computeCoverage, cellIndexFor, cellCornerCounts, fovCellMask, COVERAGE_COLS, COVERAGE_ROWS } from '../lib/coverage.js';
+
+// A snapped board only counts as covering a cell when at least this many of its
+// corners land in that cell — so a board merely clipping a cell's edge (or the
+// live board sweeping past without a capture) does not turn it green.
+const CAPTURE_MIN_CORNERS = 3;
 import { DEFAULT_CHESS_BOARD } from '../lib/board.js';
 import { confirm } from '../components/confirm.jsx';
 import { api, pickFolder, pickSaveFile, pickOpenFile } from '../api/client.js';
@@ -35,13 +40,14 @@ export function FisheyeTab() {
   const [showCovGrid, setShowCovGrid] = useState(true);   // coverage栅格叠加在画面上
   const [showFootprint, setShowFootprint] = useState(false); // 检测可达足迹热力
 
-  // Live capture coverage — grows as the user snaps frames, before any solve.
-  // A cell turns on once a snapped frame put a detected corner in it. Reset per
-  // dataset (= per capture session). After a solve we switch to the residual-
-  // derived coverage (which also carries per-cell quality).
-  const [liveCells, setLiveCells] = useState(() => new Array(COVERAGE_COLS * COVERAGE_ROWS).fill(false));
+  // Live capture coverage — grows only as the user SNAPS frames, before any
+  // solve. `liveCounts[i]` = how many captured frames put a board into cell i
+  // (≥ CAPTURE_MIN_CORNERS corners there). Reset per dataset (= per capture
+  // session). After a solve we switch to the residual-derived coverage (which
+  // also carries per-cell quality).
+  const [liveCounts, setLiveCounts] = useState(() => new Array(COVERAGE_COLS * COVERAGE_ROWS).fill(0));
   // Newest detection meta from the live stream, so a manual snap can bin the
-  // corners it just saved into liveCells (snap itself returns no corners).
+  // corners it just saved into liveCounts (snap itself returns no corners).
   const latestMetaRef = useRef(null);
 
   // When onLoad sets datasetPath from a loaded calibration, the dataset-listing effect
@@ -79,21 +85,34 @@ export function FisheyeTab() {
     return m;
   }, [result]);
 
+  // Field-of-view mask: cells outside the fisheye image circle (the four frame
+  // corners, etc.) can never hold a board, so they're excluded from coverage
+  // and drawn as N/A instead of "missing".
+  const imgSizeForCov = result?.image_size
+    || (streamInfo?.open ? [streamInfo.width, streamInfo.height] : null);
+  const fovMask = useMemo(
+    () => fovCellMask(imgSizeForCov, COVERAGE_COLS, COVERAGE_ROWS),
+    [imgSizeForCov?.[0], imgSizeForCov?.[1]]
+  );
+
   // Coverage. Two sources, picked by phase:
   //   • after a solve → bin the per-frame residuals into the 8×5 grid, which
   //     also yields per-cell quality (mean reprojection error) for colouring.
-  //   • during capture (no solve yet) → the live `liveCells` accumulator, so the
-  //     grid fills in real time as the user snaps instead of staying empty.
+  //   • during capture (no solve yet) → the live `liveCounts` capture tally, so
+  //     the grid fills in real time as the user snaps instead of staying empty.
+  // Both honour the FOV mask so % is over coverable cells only.
   const coverage = useMemo(() => {
     if (result?.per_frame_residuals?.length) {
-      const imgSize = result.image_size
-        || (streamInfo?.open ? [streamInfo.width, streamInfo.height] : null);
-      return computeCoverage(result.per_frame_residuals, imgSize);
+      return computeCoverage(result.per_frame_residuals, imgSizeForCov, { mask: fovMask });
     }
-    const filled = liveCells.reduce((n, on) => n + (on ? 1 : 0), 0);
-    const total = liveCells.length;
-    return { cells: liveCells, counts: null, meanErr: null, filled, total, percent: Math.round((filled / total) * 100) };
-  }, [result, streamInfo, liveCells]);
+    const cells = liveCounts.map((c, i) => c > 0 && fovMask[i]);
+    const validTotal = fovMask.reduce((n, v) => n + (v ? 1 : 0), 0) || liveCounts.length;
+    const filled = cells.reduce((n, on) => n + (on ? 1 : 0), 0);
+    return {
+      cells, counts: liveCounts, meanErr: null, mask: fovMask,
+      filled, total: validTotal, percent: Math.round((filled / validTotal) * 100),
+    };
+  }, [result, imgSizeForCov?.[0], imgSizeForCov?.[1], liveCounts, fovMask]);
 
   const frames = useMemo(() => datasetFiles.map((p, i) => ({
     id: i + 1, err: errByPath?.get(p) ?? 0, tx: 0, ty: 0, rot: 0,
@@ -192,15 +211,18 @@ export function FisheyeTab() {
   const autoSnapInFlightRef = useRef(false);
   useEffect(() => {
     snappedCellsRef.current = new Set();
-    setLiveCells(new Array(COVERAGE_COLS * COVERAGE_ROWS).fill(false));
+    setLiveCounts(new Array(COVERAGE_COLS * COVERAGE_ROWS).fill(0));
   }, [datasetPath]);
 
-  // Fold the corners of the just-snapped frame into the live coverage grid.
+  // Tally the just-snapped frame into the live coverage counts. Only cells the
+  // board actually filled (≥ CAPTURE_MIN_CORNERS corners) are incremented, so
+  // coverage reflects deliberate captures — not the live board sweeping past.
   // Uses the freshest live-detection meta (snap returns only a file path).
   const markCellsFromSnap = useCallback(() => {
     const meta = latestMetaRef.current;
     if (!meta?.corners?.length || !meta?.image_size) return;
-    setLiveCells(prev => mergeCornersIntoCells(prev, meta.corners, meta.image_size));
+    const perCell = cellCornerCounts(meta.corners, meta.image_size);
+    setLiveCounts(prev => prev.map((c, i) => c + (perCell[i] >= CAPTURE_MIN_CORNERS ? 1 : 0)));
   }, []);
 
   const onAutoMeta = useCallback((meta) => {
@@ -448,6 +470,8 @@ export function FisheyeTab() {
                 showCorners={showBoard} showOrigin={true}
                 onMeta={onAutoMeta}
                 coverageCells={coverage.cells}
+                coverageCounts={coverage.counts}
+                fovMask={fovMask}
                 covCols={COVERAGE_COLS} covRows={COVERAGE_ROWS}
                 showCoverageGrid={showCovGrid}
                 showFootprint={showFootprint}/>
@@ -563,7 +587,8 @@ export function FisheyeTab() {
             onAutoRate={setAutoRate}
             onSnap={onSnap} onDrop={onDrop}
             coverage={coverage.percent} coverageCells={coverage.cells}
-            coverageMeanErr={coverage.meanErr} okBelow={PX_OK} warnBelow={PX_WARN}/>
+            coverageMeanErr={coverage.meanErr} coverageMask={coverage.mask}
+            okBelow={PX_OK} warnBelow={PX_WARN}/>
         </div>
         <SolverButton onSolve={onRun} busy={busy}
           status={status}

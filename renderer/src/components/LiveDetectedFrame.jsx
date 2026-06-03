@@ -36,6 +36,8 @@ export function LiveDetectedFrame({
   // Coverage overlay drawn directly on the frame (image-pixel coords, so it
   // stays aligned through object-fit letterboxing):
   coverageCells = null,   // bool[covCols*covRows] — which cells are already captured
+  coverageCounts = null,  // int[]  — how many captures landed in each cell (depth of green)
+  fovMask = null,         // bool[] — false = cell outside fisheye FOV (drawn N/A, not red)
   covCols = 8, covRows = 5,
   showCoverageGrid = false,
   showFootprint = false,  // accumulate + draw the detection-reachable heat
@@ -59,8 +61,11 @@ export function LiveDetectedFrame({
   // reads the freshest toggles/cells without re-binding the websocket.
   const covRef = useRef(null);
   useEffect(() => {
-    covRef.current = { cells: coverageCells, cols: covCols, rows: covRows, showGrid: showCoverageGrid, showFootprint };
-  }, [coverageCells, covCols, covRows, showCoverageGrid, showFootprint]);
+    covRef.current = {
+      cells: coverageCells, counts: coverageCounts, fovMask,
+      cols: covCols, rows: covRows, showGrid: showCoverageGrid, showFootprint,
+    };
+  }, [coverageCells, coverageCounts, fovMask, covCols, covRows, showCoverageGrid, showFootprint]);
   // Persistent detection-footprint accumulator (reset when the stream restarts).
   const footprintRef = useRef(new Float32Array(FP_COLS * FP_ROWS));
 
@@ -134,28 +139,59 @@ export function LiveDetectedFrame({
       }
 
       // ── Coverage grid ─────────────────────────────────────────────────────
-      // Captured cells fill green, empty cells outline red, and the cell the
-      // board currently sits in pulses amber — so the user can steer the target
-      // into the gaps without ever looking away from the live frame.
+      // Per cell:
+      //   • outside FOV (fisheye corners) → dim diagonal hatch, "N/A", not red.
+      //   • captured → green, deepening with the number of captures.
+      //   • coverable but empty → red outline.
+      //   • the cell the live board currently sits in → amber pulse.
+      // The FOV ellipse is outlined so the user sees exactly which region counts.
       if (cov?.showGrid && cov.cells) {
         const cols = cov.cols, rows = cov.rows;
+        const mask = cov.fovMask;
+        const counts = cov.counts;
         const gw = w / cols, gh = h / rows;
+
+        // The live board's current cell — but only flag it when the board
+        // genuinely fills a cell (a clear majority of corners), so just sweeping
+        // the board across the frame doesn't imply coverage.
         let curCell = -1;
         if (corners.length) {
-          let sx = 0, sy = 0;
-          for (const [x, y] of corners) { sx += x; sy += y; }
-          const cx = sx / corners.length, cy = sy / corners.length;
-          const ci = Math.min(cols - 1, Math.max(0, Math.floor((cx / w) * cols)));
-          const ri = Math.min(rows - 1, Math.max(0, Math.floor((cy / h) * rows)));
-          curCell = ri * cols + ci;
+          const per = new Array(cols * rows).fill(0);
+          for (const [x, y] of corners) {
+            const ci = Math.min(cols - 1, Math.max(0, Math.floor((x / w) * cols)));
+            const ri = Math.min(rows - 1, Math.max(0, Math.floor((y / h) * rows)));
+            per[ri * cols + ci] += 1;
+          }
+          let best = -1, bestN = 0;
+          for (let k = 0; k < per.length; k++) if (per[k] > bestN) { bestN = per[k]; best = k; }
+          if (bestN >= 3) curCell = best;
         }
+
         ctx.lineWidth = Math.max(1, cornerR * 0.25);
         for (let k = 0; k < cols * rows; k++) {
           const ci = k % cols, ri = (k / cols) | 0;
           const x0 = ci * gw, y0 = ri * gh;
+          const inFov = !mask || mask[k];
+          if (!inFov) {
+            // N/A cell: faint hatch so it reads as "not applicable", not "missing".
+            ctx.fillStyle = 'oklch(0.5 0 0 / 0.28)';
+            ctx.fillRect(x0, y0, gw, gh);
+            ctx.strokeStyle = 'oklch(0.6 0 0 / 0.25)';
+            ctx.beginPath();
+            for (let d = -gh; d < gw; d += Math.max(6, gw / 6)) {
+              ctx.moveTo(x0 + Math.max(0, d), y0 + Math.max(0, -d));
+              ctx.lineTo(x0 + Math.min(gw, d + gh), y0 + Math.min(gh, gh - d));
+            }
+            ctx.stroke();
+            ctx.strokeStyle = 'oklch(0.6 0 0 / 0.3)';
+            ctx.strokeRect(x0 + 0.5, y0 + 0.5, gw - 1, gh - 1);
+            continue;
+          }
           const on = cov.cells[k];
           if (on) {
-            ctx.fillStyle = 'oklch(0.72 0.16 150 / 0.16)';
+            const n = counts ? counts[k] : 1;
+            const a = Math.min(0.42, 0.16 + (n - 1) * 0.1);   // deeper green with more captures
+            ctx.fillStyle = `oklch(0.72 0.16 150 / ${a.toFixed(3)})`;
             ctx.fillRect(x0, y0, gw, gh);
           }
           ctx.strokeStyle = on ? 'oklch(0.78 0.15 150 / 0.55)' : 'oklch(0.7 0.13 30 / 0.4)';
@@ -167,6 +203,13 @@ export function LiveDetectedFrame({
           ctx.lineWidth = Math.max(2, cornerR * 0.55);
           ctx.strokeRect(ci * gw + 1.5, ri * gh + 1.5, gw - 3, gh - 3);
         }
+
+        // FOV ellipse boundary (inscribed, touching the edge midpoints).
+        ctx.strokeStyle = 'oklch(0.8 0.05 220 / 0.35)';
+        ctx.lineWidth = Math.max(1, cornerR * 0.3);
+        ctx.beginPath();
+        ctx.ellipse(w / 2, h / 2, w / 2, h / 2, 0, 0, Math.PI * 2);
+        ctx.stroke();
       }
 
       if (!corners.length) return;
