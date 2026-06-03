@@ -84,6 +84,25 @@ def detect_chessboard(gray: np.ndarray, cols: int, rows: int) -> np.ndarray | No
     return corners.reshape(-1, 2).astype(np.float32)
 
 
+def detect_chessboard_live(gray: np.ndarray, cols: int, rows: int, max_dim: int = 640) -> np.ndarray | None:
+    """FAST, approximate chessboard detection for the LIVE PREVIEW only.
+
+    Downscales the frame to `max_dim` and skips the EXHAUSTIVE search + ACCURACY
+    sub-pixel refine that `detect_chessboard` (the calibration path) uses, so the
+    on-screen overlay keeps up at video rate. The returned corners are coarse and
+    are NEVER used by the solver — calibration always re-detects from the saved
+    full-resolution images via `detect_chessboard`. This function does not touch
+    that path.
+    """
+    h, w = gray.shape[:2]
+    scale = min(1.0, max_dim / float(max(h, w)))
+    small = cv2.resize(gray, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA) if scale < 1.0 else gray
+    found, corners = cv2.findChessboardCornersSB(small, (cols, rows), cv2.CALIB_CB_NORMALIZE_IMAGE)
+    if not found:
+        return None
+    return (corners.reshape(-1, 2).astype(np.float32) / scale)
+
+
 def detect_charuco(gray: np.ndarray, board: Board) -> tuple[np.ndarray, np.ndarray] | None:
     if board.marker is None:
         raise ValueError("charuco board requires `marker` size")
@@ -112,6 +131,18 @@ def detect_board(gray: np.ndarray, board: Board) -> tuple[np.ndarray, np.ndarray
     if board.type == "charuco":
         return detect_charuco(gray, board)
     raise ValueError(f"unknown board type: {board.type}")
+
+
+def detect_board_live(gray: np.ndarray, board: Board) -> tuple[np.ndarray, np.ndarray] | None:
+    """Like `detect_board`, but uses the fast approximate chessboard detector for
+    live-preview overlays. Charuco already detects partially/quickly, so it falls
+    through to the normal path. Never feeds the solver."""
+    if board.type == "chess":
+        corners = detect_chessboard_live(gray, board.cols, board.rows)
+        if corners is None:
+            return None
+        return corners, chess_object_points(board.cols, board.rows, board.square)
+    return detect_board(gray, board)
 
 
 def detect_many(paths: Iterable[str], board: Board) -> tuple[list[Detection], list[str]]:

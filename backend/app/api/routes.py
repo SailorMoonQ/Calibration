@@ -1332,7 +1332,11 @@ async def stream_ws(
             ids = None
             if detect:
                 gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-                res = await asyncio.to_thread(_io.detect_board, gray, board)
+                # Live preview uses the fast approximate detector (downscaled, no
+                # exhaustive search) to keep the overlay at video rate. The solver
+                # never sees these corners — it re-detects from saved full-res
+                # images, so calibration accuracy is unaffected.
+                res = await asyncio.to_thread(_io.detect_board_live, gray, board)
                 if res is not None:
                     corners_arr, _obj = res
                     corners = corners_arr.tolist()

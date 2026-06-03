@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { streamWsUrl } from '../api/client.js';
 import { useReportCamera } from '../lib/telemetry.jsx';
+import { detectCircleFromImageData, polarCellGeometry, polarCellAt } from '../lib/polarCoverage.js';
 
 // JPEG-per-message WebSocket → canvas via createImageBitmap. Same plumbing as
 // LivePreview, plus we draw corner markers and the board origin axes on top of
@@ -41,6 +42,14 @@ export function LiveDetectedFrame({
   covCols = 8, covRows = 5,
   showCoverageGrid = false,
   showFootprint = false,  // accumulate + draw the detection-reachable heat
+  // Polar ("dartboard") coverage for circular fisheye — rings × sectors over the
+  // auto-detected image circle. Only the fisheye tab passes these.
+  showPolarGrid = false,
+  polarCells = null,      // bool[]  — captured polar cells
+  polarCounts = null,     // int[]   — captures per polar cell (depth of green)
+  polarGuidance = null,   // int|null — cell index to steer the board toward next
+  rings = 3, sectors = 8,
+  onCircle,               // optional: called with {cx,cy,r} when the circle is detected
 }) {
   const { t } = useTranslation();
   const [meta, setMeta] = useState(null);
@@ -64,10 +73,16 @@ export function LiveDetectedFrame({
     covRef.current = {
       cells: coverageCells, counts: coverageCounts, fovMask,
       cols: covCols, rows: covRows, showGrid: showCoverageGrid, showFootprint,
+      showPolar: showPolarGrid, polarCells, polarCounts, polarGuidance, rings, sectors,
     };
-  }, [coverageCells, coverageCounts, fovMask, covCols, covRows, showCoverageGrid, showFootprint]);
+  }, [coverageCells, coverageCounts, fovMask, covCols, covRows, showCoverageGrid, showFootprint,
+      showPolarGrid, polarCells, polarCounts, polarGuidance, rings, sectors]);
   // Persistent detection-footprint accumulator (reset when the stream restarts).
   const footprintRef = useRef(new Float32Array(FP_COLS * FP_ROWS));
+  // Cached fisheye image circle ({circle,at,sizeKey}); detection is throttled.
+  const circleRef = useRef(null);
+  const onCircleRef = useRef(onCircle);
+  useEffect(() => { onCircleRef.current = onCircle; }, [onCircle]);
 
   // board key for effect deps
   const bType  = board?.type ?? 'chess';
@@ -83,6 +98,7 @@ export function LiveDetectedFrame({
     let rafId = null;
     tickRef.current = { recent: [], last: 0 };
     footprintRef.current = new Float32Array(FP_COLS * FP_ROWS);
+    circleRef.current = null;
 
     // Resolve theme colors once; canvas can't read CSS variables directly.
     // We re-read on each draw via getComputedStyle so the live preview tracks
@@ -114,6 +130,28 @@ export function LiveDetectedFrame({
       const corners = next.meta.corners ?? [];
       const cornerR = Math.max(2, Math.round(Math.min(w, h) / 300));
       const cov = covRef.current;
+
+      // ── Auto-detect the fisheye image circle (throttled, from the clean frame
+      // BEFORE any overlay is painted) ──────────────────────────────────────
+      if (cov?.showPolar) {
+        const sizeKey = `${w}x${h}`;
+        const now = performance.now();
+        let cc = circleRef.current;
+        const needDetect = !cc || cc.sizeKey !== sizeKey
+          || (cc.circle == null && now - cc.at > 1200);   // keep retrying until found
+        if (needDetect) {
+          let circle = null;
+          try {
+            const img = ctx.getImageData(0, 0, w, h);
+            circle = detectCircleFromImageData(img.data, w, h);
+          } catch { /* tainted/again later */ }
+          cc = { circle, at: now, sizeKey };
+          circleRef.current = cc;
+          if (circle && onCircleRef.current) {
+            try { onCircleRef.current(circle); } catch { /* swallow */ }
+          }
+        }
+      }
 
       // ── Detection-footprint heat ──────────────────────────────────────────
       // Every detected corner bumps its fine-grid cell; the accumulated field is
@@ -210,6 +248,88 @@ export function LiveDetectedFrame({
         ctx.beginPath();
         ctx.ellipse(w / 2, h / 2, w / 2, h / 2, 0, 0, Math.PI * 2);
         ctx.stroke();
+      }
+
+      // ── Polar dartboard coverage (circular fisheye) ───────────────────────
+      // Rings × sectors over the auto-detected image circle: captured cells fill
+      // green (deeper = more captures), empty cells faint red, the amber target
+      // marks where to move the board next, blue outlines where it is now.
+      if (cov?.showPolar && circleRef.current?.circle) {
+        const circle = circleRef.current.circle;
+        const cells = cov.polarCells, pcounts = cov.polarCounts;
+        const geo = polarCellGeometry(circle, cov.rings, cov.sectors);
+
+        let cur = null;
+        if (corners.length) {
+          let sx = 0, sy = 0;
+          for (const [x, y] of corners) { sx += x; sy += y; }
+          cur = polarCellAt(sx / corners.length, sy / corners.length, circle, cov.rings, cov.sectors);
+        }
+
+        const wedge = (g) => {
+          ctx.beginPath();
+          if (g.r0 <= 0.001) { ctx.arc(circle.cx, circle.cy, g.r1, 0, Math.PI * 2); }
+          else {
+            ctx.arc(circle.cx, circle.cy, g.r1, g.a0, g.a1);
+            ctx.arc(circle.cx, circle.cy, g.r0, g.a1, g.a0, true);
+            ctx.closePath();
+          }
+        };
+
+        for (const g of geo) {
+          const on = cells ? cells[g.index] : false;
+          wedge(g);
+          if (on) {
+            const n = pcounts ? pcounts[g.index] : 1;
+            const a = Math.min(0.4, 0.15 + (n - 1) * 0.1);
+            ctx.fillStyle = `oklch(0.72 0.16 150 / ${a.toFixed(3)})`;
+          } else {
+            ctx.fillStyle = 'oklch(0.7 0.13 30 / 0.1)';
+          }
+          ctx.fill();
+        }
+
+        // dartboard structure: ring arcs + sector spokes
+        ctx.strokeStyle = 'oklch(0.85 0.03 230 / 0.4)';
+        ctx.lineWidth = Math.max(1, cornerR * 0.3);
+        for (let ring = 1; ring <= cov.rings; ring++) {
+          ctx.beginPath();
+          ctx.arc(circle.cx, circle.cy, (circle.r * ring) / cov.rings, 0, Math.PI * 2);
+          ctx.stroke();
+        }
+        for (let s = 0; s < cov.sectors; s++) {
+          const ang = (s / cov.sectors) * Math.PI * 2;
+          const r0 = circle.r / cov.rings;
+          ctx.beginPath();
+          ctx.moveTo(circle.cx + Math.cos(ang) * r0, circle.cy + Math.sin(ang) * r0);
+          ctx.lineTo(circle.cx + Math.cos(ang) * circle.r, circle.cy + Math.sin(ang) * circle.r);
+          ctx.stroke();
+        }
+
+        // guidance: pulse the emptiest cell + a target dot at its centroid
+        if (cov.polarGuidance != null) {
+          const g = geo.find(x => x.index === cov.polarGuidance);
+          if (g) {
+            wedge(g);
+            ctx.fillStyle = 'oklch(0.85 0.18 90 / 0.2)';
+            ctx.fill();
+            ctx.strokeStyle = 'oklch(0.9 0.18 90 / 0.95)';
+            ctx.lineWidth = Math.max(2, cornerR * 0.5);
+            wedge(g); ctx.stroke();
+            ctx.fillStyle = 'oklch(0.92 0.18 90 / 0.95)';
+            ctx.beginPath(); ctx.arc(g.x, g.y, cornerR * 1.9, 0, Math.PI * 2); ctx.fill();
+          }
+        }
+
+        // where the board is right now (blue)
+        if (cur != null && cur >= 0) {
+          const g = geo.find(x => x.index === cur);
+          if (g) {
+            ctx.strokeStyle = 'oklch(0.8 0.16 235 / 0.95)';
+            ctx.lineWidth = Math.max(2, cornerR * 0.6);
+            wedge(g); ctx.stroke();
+          }
+        }
       }
 
       if (!corners.length) return;

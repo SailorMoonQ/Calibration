@@ -12,11 +12,12 @@ import {
   CaptureControls, SolverButton, SolverPanel,
   trafficKindForRms, trafficColor,
 } from '../components/panels.jsx';
-import { computeCoverage, cellIndexFor, cellCornerCounts, fovCellMask, COVERAGE_COLS, COVERAGE_ROWS } from '../lib/coverage.js';
+import { cellIndexFor } from '../lib/coverage.js';
+import { binPolar, pickGuidanceCell, totalPolarCells, polarCellAt, RINGS, SECTORS } from '../lib/polarCoverage.js';
 
-// A snapped board only counts as covering a cell when at least this many of its
-// corners land in that cell — so a board merely clipping a cell's edge (or the
-// live board sweeping past without a capture) does not turn it green.
+// A snapped board only counts as covering a (polar) cell when at least this many
+// of its corners land in that cell — so a board merely clipping a cell's edge
+// (or the live board sweeping past without a capture) does not turn it green.
 const CAPTURE_MIN_CORNERS = 3;
 import { DEFAULT_CHESS_BOARD } from '../lib/board.js';
 import { confirm } from '../components/confirm.jsx';
@@ -37,17 +38,19 @@ export function FisheyeTab() {
   const [liveDetect, setLiveDetect] = useState(false);
   const [autoCapture, setAutoCapture] = useState(false);
   const [autoRate, setAutoRate] = useState(0.5);  // seconds between auto-snaps
-  const [showCovGrid, setShowCovGrid] = useState(true);   // coverage栅格叠加在画面上
+  const [showPolar, setShowPolar] = useState(true);       // 极坐标靶盘叠加在画面上
   const [showFootprint, setShowFootprint] = useState(false); // 检测可达足迹热力
 
+  // Auto-detected fisheye image circle {cx,cy,r}, reported by LiveDetectedFrame.
+  // Drives the polar dartboard, capture binning, and the FOV boundary.
+  const [circle, setCircle] = useState(null);
   // Live capture coverage — grows only as the user SNAPS frames, before any
-  // solve. `liveCounts[i]` = how many captured frames put a board into cell i
-  // (≥ CAPTURE_MIN_CORNERS corners there). Reset per dataset (= per capture
-  // session). After a solve we switch to the residual-derived coverage (which
-  // also carries per-cell quality).
-  const [liveCounts, setLiveCounts] = useState(() => new Array(COVERAGE_COLS * COVERAGE_ROWS).fill(0));
+  // solve. `polarCounts[i]` = how many captured frames put a board into polar
+  // cell i (≥ CAPTURE_MIN_CORNERS corners there). Reset per dataset (= per
+  // capture session). After a solve we switch to residual-derived coverage.
+  const [polarCounts, setPolarCounts] = useState(() => new Array(totalPolarCells()).fill(0));
   // Newest detection meta from the live stream, so a manual snap can bin the
-  // corners it just saved into liveCounts (snap itself returns no corners).
+  // corners it just saved into polarCounts (snap itself returns no corners).
   const latestMetaRef = useRef(null);
 
   // When onLoad sets datasetPath from a loaded calibration, the dataset-listing effect
@@ -85,34 +88,53 @@ export function FisheyeTab() {
     return m;
   }, [result]);
 
-  // Field-of-view mask: cells outside the fisheye image circle (the four frame
-  // corners, etc.) can never hold a board, so they're excluded from coverage
-  // and drawn as N/A instead of "missing".
   const imgSizeForCov = result?.image_size
     || (streamInfo?.open ? [streamInfo.width, streamInfo.height] : null);
-  const fovMask = useMemo(
-    () => fovCellMask(imgSizeForCov, COVERAGE_COLS, COVERAGE_ROWS),
-    [imgSizeForCov?.[0], imgSizeForCov?.[1]]
-  );
 
-  // Coverage. Two sources, picked by phase:
-  //   • after a solve → bin the per-frame residuals into the 8×5 grid, which
+  // The circle the polar grid is binned against. Prefer the auto-detected one;
+  // fall back to a centred geometric circle (radius ≈ the image half-height,
+  // matching the inscribed fisheye disk) until detection lands.
+  const covCircle = useMemo(() => {
+    if (circle) return circle;
+    if (!imgSizeForCov) return null;
+    const [w, h] = imgSizeForCov;
+    if (!w || !h) return null;
+    return { cx: w / 2, cy: h / 2, r: (Math.min(w, h) / 2) * 1.06 };
+  }, [circle, imgSizeForCov?.[0], imgSizeForCov?.[1]]);
+
+  // Polar coverage. Two sources, picked by phase:
+  //   • after a solve → bin the per-frame residuals into rings×sectors, which
   //     also yields per-cell quality (mean reprojection error) for colouring.
-  //   • during capture (no solve yet) → the live `liveCounts` capture tally, so
-  //     the grid fills in real time as the user snaps instead of staying empty.
-  // Both honour the FOV mask so % is over coverable cells only.
+  //   • during capture → the live `polarCounts` capture tally, so the dartboard
+  //     fills in real time as the user snaps. `guidance` flags the emptiest cell.
   const coverage = useMemo(() => {
-    if (result?.per_frame_residuals?.length) {
-      return computeCoverage(result.per_frame_residuals, imgSizeForCov, { mask: fovMask });
+    const total = totalPolarCells();
+    if (result?.per_frame_residuals?.length && covCircle) {
+      const counts = new Array(total).fill(0);
+      const errSum = new Array(total).fill(0);
+      for (const frame of result.per_frame_residuals) {
+        if (!frame) continue;
+        for (const c of frame) {
+          const idx = polarCellAt(c[0], c[1], covCircle);
+          if (idx == null) continue;
+          counts[idx] += 1;
+          const ex = c[2], ey = c[3];
+          if (Number.isFinite(ex) && Number.isFinite(ey)) errSum[idx] += Math.hypot(ex, ey);
+        }
+      }
+      const cells = counts.map(n => n > 0);
+      const meanErr = counts.map((n, i) => (n > 0 ? errSum[i] / n : null));
+      const filled = cells.reduce((n, on) => n + (on ? 1 : 0), 0);
+      return { cells, counts, meanErr, guidance: null, filled, total, percent: Math.round((filled / total) * 100) };
     }
-    const cells = liveCounts.map((c, i) => c > 0 && fovMask[i]);
-    const validTotal = fovMask.reduce((n, v) => n + (v ? 1 : 0), 0) || liveCounts.length;
+    const cells = polarCounts.map(c => c > 0);
     const filled = cells.reduce((n, on) => n + (on ? 1 : 0), 0);
     return {
-      cells, counts: liveCounts, meanErr: null, mask: fovMask,
-      filled, total: validTotal, percent: Math.round((filled / validTotal) * 100),
+      cells, counts: polarCounts, meanErr: null,
+      guidance: pickGuidanceCell(polarCounts),
+      filled, total, percent: Math.round((filled / total) * 100),
     };
-  }, [result, imgSizeForCov?.[0], imgSizeForCov?.[1], liveCounts, fovMask]);
+  }, [result, covCircle, polarCounts]);
 
   const frames = useMemo(() => datasetFiles.map((p, i) => ({
     id: i + 1, err: errByPath?.get(p) ?? 0, tx: 0, ty: 0, rot: 0,
@@ -211,18 +233,24 @@ export function FisheyeTab() {
   const autoSnapInFlightRef = useRef(false);
   useEffect(() => {
     snappedCellsRef.current = new Set();
-    setLiveCounts(new Array(COVERAGE_COLS * COVERAGE_ROWS).fill(0));
+    setPolarCounts(new Array(totalPolarCells()).fill(0));
   }, [datasetPath]);
 
-  // Tally the just-snapped frame into the live coverage counts. Only cells the
+  // Keep the binning circle in a ref so the snap handlers (stored in refs) read
+  // the freshest one without being recreated every detection.
+  const covCircleRef = useRef(null);
+  useEffect(() => { covCircleRef.current = covCircle; }, [covCircle]);
+
+  // Tally the just-snapped frame into the live polar coverage. Only cells the
   // board actually filled (≥ CAPTURE_MIN_CORNERS corners) are incremented, so
   // coverage reflects deliberate captures — not the live board sweeping past.
   // Uses the freshest live-detection meta (snap returns only a file path).
   const markCellsFromSnap = useCallback(() => {
     const meta = latestMetaRef.current;
-    if (!meta?.corners?.length || !meta?.image_size) return;
-    const perCell = cellCornerCounts(meta.corners, meta.image_size);
-    setLiveCounts(prev => prev.map((c, i) => c + (perCell[i] >= CAPTURE_MIN_CORNERS ? 1 : 0)));
+    const c = covCircleRef.current;
+    if (!meta?.corners?.length || !c) return;
+    const perCell = binPolar(meta.corners, c);
+    setPolarCounts(prev => prev.map((n, i) => n + (perCell[i] >= CAPTURE_MIN_CORNERS ? 1 : 0)));
   }, []);
 
   const onAutoMeta = useCallback((meta) => {
@@ -469,11 +497,12 @@ export function FisheyeTab() {
           ? <LiveDetectedFrame device={liveDevice} board={board}
                 showCorners={showBoard} showOrigin={true}
                 onMeta={onAutoMeta}
-                coverageCells={coverage.cells}
-                coverageCounts={coverage.counts}
-                fovMask={fovMask}
-                covCols={COVERAGE_COLS} covRows={COVERAGE_ROWS}
-                showCoverageGrid={showCovGrid}
+                onCircle={setCircle}
+                showPolarGrid={showPolar}
+                polarCells={coverage.cells}
+                polarCounts={coverage.counts}
+                polarGuidance={coverage.guidance}
+                rings={RINGS} sectors={SECTORS}
                 showFootprint={showFootprint}/>
           : <LivePreview device={liveDevice}/>
       ) : datasetFiles.length > 0 && selectedPath ? (
@@ -586,8 +615,9 @@ export function FisheyeTab() {
             autoRate={autoRate}
             onAutoRate={setAutoRate}
             onSnap={onSnap} onDrop={onDrop}
-            coverage={coverage.percent} coverageCells={coverage.cells}
-            coverageMeanErr={coverage.meanErr} coverageMask={coverage.mask}
+            coverage={coverage.percent}
+            polar={{ cells: coverage.cells, counts: coverage.counts, meanErr: coverage.meanErr,
+                     guidance: coverage.guidance, rings: RINGS, sectors: SECTORS }}
             okBelow={PX_OK} warnBelow={PX_WARN}/>
         </div>
         <SolverButton onSolve={onRun} busy={busy}
@@ -616,7 +646,7 @@ export function FisheyeTab() {
           <Chk checked={showBoard} onChange={setShowBoard}>{t('fisheye.board')}</Chk>
           <Chk checked={showResid} onChange={setShowResid}>{t('fisheye.residuals')}</Chk>
           <Chk checked={liveDetect} onChange={setLiveDetect}>{t('fisheye.detectLive')}</Chk>
-          <Chk checked={showCovGrid} onChange={(v) => { setShowCovGrid(v); if (v) setLiveDetect(true); }}>{t('fisheye.coverageGrid')}</Chk>
+          <Chk checked={showPolar} onChange={(v) => { setShowPolar(v); if (v) setLiveDetect(true); }}>{t('fisheye.coverageGrid')}</Chk>
           <Chk checked={showFootprint} onChange={(v) => { setShowFootprint(v); if (v) setLiveDetect(true); }}>{t('fisheye.footprint')}</Chk>
           <div className="spacer"/>
           <div className="read">
