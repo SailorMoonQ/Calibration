@@ -24,16 +24,28 @@ const CAPTURE_MIN_CORNERS = 3;
 // held still, and sitting in an under-sampled polar cell at a fresh tilt — and
 // only after a short dwell, so you can sweep the board around and let it capture
 // itself.
-const TARGET_PER_CELL = 3;     // stop auto-snapping a cell once it has this many ("事不过三")
+const TARGET_PER_CELL = 5;     // stop auto-snapping a cell once it has this many
 const DWELL_MS = 500;          // must hold the good pose this long before it fires
-const SHARP_REL = 0.55;        // reject if blurrier than this fraction of the session-best
-const SHARP_ABS = 60;          // absolute Laplacian-variance floor
-const TILT_MIN_DIFF = 10;      // a 2nd/3rd capture in a cell must differ in tilt by ≥ this (deg)
+const SHARP_REL = 0.40;        // reject if blurrier than this fraction of the session-best
+const SHARP_ABS = 40;          // absolute Laplacian-variance floor
+const TILT_MIN_DIFF = 4;       // a follow-up capture in a cell must differ in tilt by ≥ this (deg)
 import { DEFAULT_CHESS_BOARD } from '../lib/board.js';
 import { confirm } from '../components/confirm.jsx';
 import { api, pickFolder, pickSaveFile, pickOpenFile } from '../api/client.js';
 
 const ZERO_K = [[0,0,0,0],[0,0,0,0],[0,0,0,0],[0,0,0,1]];
+
+// Camera mount inferred from a ROS2 image source like
+// "ros2:/camera/head/color/image_rect_compressed" → "head". When present, saving
+// writes straight into the robot's shared camera_intrix.yaml under that mount.
+const CAMERA_SLOT_RE = /\/camera\/(head|left|right|back)\//;
+function cameraSlotFromSource(...sources) {
+  for (const s of sources) {
+    const m = CAMERA_SLOT_RE.exec(s || '');
+    if (m) return m[1];
+  }
+  return null;
+}
 
 export function FisheyeTab({ tweaks }) {
   const { t } = useTranslation();
@@ -266,13 +278,22 @@ export function FisheyeTab({ tweaks }) {
   // "captured" cue is rate-limited so rapid auto-captures don't stutter the audio.
   const voicePrompts = !!tweaks?.voicePrompts;
   const lastSpokeRef = useRef({});
+  const voiceErrRef = useRef('');
   const say = useCallback((name, minGapMs = 0) => {
     if (!voicePrompts) return;
     const now = performance.now();
     if (minGapMs && now - (lastSpokeRef.current[name] || 0) < minGapMs) return;
     lastSpokeRef.current[name] = now;
-    speak(name);
-  }, [voicePrompts]);
+    speak(name).catch((e) => {
+      // Surface a blocked/failed playback to the foreground status bar instead of
+      // swallowing it. De-duped by message so a persistent block (e.g. autoplay)
+      // doesn't overwrite the bar on every cue.
+      const msg = e?.message || e?.name || 'play blocked';
+      if (msg === voiceErrRef.current) return;
+      voiceErrRef.current = msg;
+      setStatus(t('fisheye.voicePlayFailed', { name, error: msg }), true);
+    });
+  }, [voicePrompts, t]);
 
   // Directional-guidance state machine (see steerVoice). mirrorRef lets the
   // spoken left/right match a mirrored display.
@@ -405,8 +426,14 @@ export function FisheyeTab({ tweaks }) {
     const tilt = boardTiltDeg(corners, b.cols, b.rows);
     const cellCount = cell != null ? (counts[cell] ?? 0) : TARGET_PER_CELL;
     const tilts = cell != null ? cellTiltsRef.current[cell] : [];
-    const tiltFresh = tilt == null || tilts.length === 0
-      || tilts.every(prevTilt => Math.abs(prevTilt - tilt) >= TILT_MIN_DIFF);
+    // Freshness is judged against the MOST RECENT capture in this cell, not every
+    // prior one. Comparing to all past tilts means that once you've swept the board
+    // through a range of angles, every new angle lands within TILT_MIN_DIFF of *some*
+    // earlier capture and the gate locks up ("换个倾斜角度" forever) even as you tilt
+    // hard. Against just the last shot, an obvious tilt change always reads as fresh.
+    const lastTilt = tilts.length ? tilts[tilts.length - 1] : null;
+    const tiltFresh = tilt == null || lastTilt == null
+      || Math.abs(lastTilt - tilt) >= TILT_MIN_DIFF;
     const underTarget = cell != null && cellCount < TARGET_PER_CELL;
     const novel = underTarget && (cellCount === 0 || tiltFresh);
 
@@ -611,15 +638,32 @@ export function FisheyeTab({ tweaks }) {
 
   const onSave = async () => {
     if (!result?.ok) { setStatus(t('common.nothingToSave')); return; }
+    // Extra layer (not a replacement): when the source is a ROS2 camera, the mount
+    // (head/left/right/back) lives in the topic, so also merge this solve into the
+    // robot's shared camera_intrix.yaml — other mounts + their sn untouched, old
+    // file backed up. The original pick-a-file YAML export below is unchanged.
+    const slot = cameraSlotFromSource(liveDevice, datasetPath);
+    let extra = '', extraErr = false;
+    if (slot) {
+      try {
+        const r = await api.exportCameraIntrix({ slot, K: result.K, D: result.D ?? [] });
+        extra = ' · ' + t('fisheye.wroteCameraIntrix', { slot, path: r.path });
+      } catch (e) {
+        extra = ' · ' + t('fisheye.cameraIntrixFailed', { error: e.message });
+        extraErr = true;
+      }
+    }
     const p = await pickSaveFile({ defaultPath: 'fisheye.yaml' });
-    if (!p) return;
+    // Dialog cancelled — the camera_intrix write (if any) already happened, so
+    // surface that rather than dropping the feedback silently.
+    if (!p) { if (extra) setStatus(extra.slice(3), extraErr); return; }
     try {
       await api.saveCalibration({
         path: p, kind: 'fisheye',
         result, board: boardPayload(), dataset_path: datasetPath || null,
       });
       const fmt = p.toLowerCase().endsWith('.json') ? 'json' : 'yaml';
-      setStatus(t('common.savedFmt', { fmt, path: p }));
+      setStatus(t('common.savedFmt', { fmt, path: p }) + extra);
     } catch (e) { setStatus(t('common.saveFailed', { error: e.message }), true); }
   };
 
@@ -702,6 +746,7 @@ export function FisheyeTab({ tweaks }) {
                 polarCells={coverage.cells}
                 polarCounts={coverage.counts}
                 polarGuidance={coverage.guidance}
+                polarTarget={TARGET_PER_CELL}
                 rings={RINGS} sectors={SECTORS}
                 showFootprint={showFootprint}
                 mirror={mirror}/>
@@ -713,8 +758,7 @@ export function FisheyeTab({ tweaks }) {
           showCorners={showBoard}
           showOrigin={true}
           overlay={showResid ? 'residuals' : 'none'}
-          residuals={residualsByPath?.get(selectedPath)}
-          mirror={mirror}/>
+          residuals={residualsByPath?.get(selectedPath)}/>
       ) : (
         emptyCell(t('fisheye.connectOrLoad'))
       )}
@@ -753,10 +797,10 @@ export function FisheyeTab({ tweaks }) {
     let body;
     if (useLive) {
       body = <RectifiedLivePreview device={liveDevice} K={Kraw} D={D}
-                balance={balance} fovScale={fovScale} method={m} mirror={mirror}/>;
+                balance={balance} fovScale={fovScale} method={m}/>;
     } else if (canRectifyFrame) {
       body = <RectifiedFrame path={selectedPath} K={Kraw} D={D}
-                balance={balance} fovScale={fovScale} method={m} mirror={mirror}/>;
+                balance={balance} fovScale={fovScale} method={m}/>;
     } else if (calibrated) {
       body = emptyCell(t('fisheye.connectOrSelectFrame'));
     } else {

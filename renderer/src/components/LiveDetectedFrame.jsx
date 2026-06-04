@@ -48,6 +48,7 @@ export function LiveDetectedFrame({
   polarCells = null,      // bool[]  — captured polar cells
   polarCounts = null,     // int[]   — captures per polar cell (depth of green)
   polarGuidance = null,   // int|null — cell index to steer the board toward next
+  polarTarget = 5,        // captures-per-cell that counts as "采够" → persistent deep green
   rings = 3, sectors = 8,
   onCircle,               // optional: called with {cx,cy,r} when the circle is detected
   mirror = false,         // display-only horizontal flip (does not affect saved frames)
@@ -74,10 +75,10 @@ export function LiveDetectedFrame({
     covRef.current = {
       cells: coverageCells, counts: coverageCounts, fovMask,
       cols: covCols, rows: covRows, showGrid: showCoverageGrid, showFootprint,
-      showPolar: showPolarGrid, polarCells, polarCounts, polarGuidance, rings, sectors,
+      showPolar: showPolarGrid, polarCells, polarCounts, polarGuidance, target: polarTarget, rings, sectors,
     };
   }, [coverageCells, coverageCounts, fovMask, covCols, covRows, showCoverageGrid, showFootprint,
-      showPolarGrid, polarCells, polarCounts, polarGuidance, rings, sectors]);
+      showPolarGrid, polarCells, polarCounts, polarGuidance, polarTarget, rings, sectors]);
   // Persistent detection-footprint accumulator (reset when the stream restarts).
   const footprintRef = useRef(new Float32Array(FP_COLS * FP_ROWS));
   // Cached fisheye image circle ({circle,at,sizeKey}); detection is throttled.
@@ -277,12 +278,15 @@ export function LiveDetectedFrame({
           }
         };
 
+        const target = cov.target || 5;
         for (const g of geo) {
-          const on = cells ? cells[g.index] : false;
+          const n = pcounts ? (pcounts[g.index] || 0) : (cells && cells[g.index] ? 1 : 0);
           wedge(g);
-          if (on) {
-            const n = pcounts ? pcounts[g.index] : 1;
-            const a = Math.min(0.4, 0.15 + (n - 1) * 0.1);
+          if (n >= target) {
+            // 采够 — persistent deep green so a finished sector reads as done at a glance.
+            ctx.fillStyle = 'oklch(0.52 0.17 150 / 0.62)';
+          } else if (n > 0) {
+            const a = Math.min(0.4, 0.15 + (n - 1) * 0.1);   // deepening with captures
             ctx.fillStyle = `oklch(0.72 0.16 150 / ${a.toFixed(3)})`;
           } else {
             ctx.fillStyle = 'oklch(0.7 0.13 30 / 0.1)';

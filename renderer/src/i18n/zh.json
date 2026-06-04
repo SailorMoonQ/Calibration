@@ -269,7 +269,10 @@
     "algo": "cv2.fisheye · Levenberg-Marquardt",
     "solving": "鱼眼求解中…",
     "rmsResult": "rms {{rms}} px · {{message}}",
-    "loadedDetail": "已加载（{{fmt}}）← {{name}} · rms {{rms}} · fx {{fx}}"
+    "loadedDetail": "已加载（{{fmt}}）← {{name}} · rms {{rms}} · fx {{fx}}",
+    "wroteCameraIntrix": "已写入 [{{slot}}] → {{path}}",
+    "cameraIntrixFailed": "写入 camera_intrix 失败：{{error}}",
+    "voicePlayFailed": "语音播放被拦截（{{name}}）：{{error}}"
   },
   "handeye": {
     "railTitlePrefix": "手眼 · 相机 ↔ {{tracker}}",

@@ -625,6 +625,23 @@ async def calibration_save(payload: CalibrationSavePayload) -> dict:
     return {"ok": True, "path": str(path)}
 
 
+@router.post("/calibration/export_camera_intrix")
+async def calibration_export_camera_intrix(body: dict) -> dict:
+    """Merge a fisheye solve into the robot's shared camera_intrix.yaml, keyed by
+    camera mount (head/left/right/back). Backs up the existing file first."""
+    slot = body.get("slot")
+    K = body.get("K")
+    D = body.get("D") or []
+    path = body.get("path")
+    if not slot:
+        raise HTTPException(status_code=400, detail="missing camera slot")
+    try:
+        res = yaml_io.export_camera_intrinsics(slot, K, D, path=path)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"ok": True, **res}
+
+
 @router.post("/calibration/load", response_model=CalibrationLoadResponse)
 async def calibration_load(body: dict) -> CalibrationLoadResponse:
     path = body.get("path")
@@ -1313,6 +1330,10 @@ async def stream_ws(
         min_interval = 1.0 / max(1, fps)
         last_seq = -1
         last_sent = 0.0
+        # Last frame's board centroid (px) — lets the live detector skip the doomed
+        # downscaled pass and go straight to full-res once the board is working the
+        # FOV periphery (where the fisheye compresses it past what 640px can resolve).
+        last_centroid: tuple[float, float] | None = None
 
         while True:
             # wait for a fresh frame (sequence-based wakeup keeps latency low)
@@ -1337,10 +1358,18 @@ async def stream_ws(
                 # exhaustive search) to keep the overlay at video rate. The solver
                 # never sees these corners — it re-detects from saved full-res
                 # images, so calibration accuracy is unaffected.
-                res = await asyncio.to_thread(_io.detect_board_live, gray, board)
+                # When the board sat near the FOV edge last frame, ask for the
+                # full-res pass directly — the downscaled pass almost always misses
+                # there, which is exactly why peripheral poses can't auto-capture.
+                hi_res = False
+                if last_centroid is not None:
+                    rr = np.hypot(last_centroid[0] - w / 2.0, last_centroid[1] - h / 2.0)
+                    hi_res = rr > 0.5 * (min(w, h) / 2.0)
+                res = await asyncio.to_thread(_io.detect_board_live, gray, board, hi_res=hi_res)
                 if res is not None:
                     corners_arr, _obj = res
                     corners = corners_arr.tolist()
+                    last_centroid = (float(corners_arr[:, 0].mean()), float(corners_arr[:, 1].mean()))
                     # Sharpness = variance of the Laplacian over the board ROI.
                     # Drives the auto-capture blur gate on the client (it rejects
                     # motion-blurred poses). Computed only on the small board crop,
@@ -1352,6 +1381,8 @@ async def stream_ws(
                     if xb > xa and yb > ya:
                         roi = gray[ya:yb, xa:xb]
                         sharpness = float(cv2.Laplacian(roi, cv2.CV_64F).var())
+                else:
+                    last_centroid = None
 
             ok, buf = await asyncio.to_thread(
                 cv2.imencode, ".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, int(quality)]

@@ -29,18 +29,21 @@ const CLIPS = {
 
 // One shared <audio> element; prompts are short and shouldn't overlap, so a new
 // prompt cuts off the previous one rather than stacking. Rate-limiting is the
-// caller's job.
+// caller's job. Returns a Promise that rejects if playback is blocked (autoplay
+// policy, missing output device, …) so the caller can surface the failure instead
+// of it vanishing silently — historically the silent .catch() here is exactly why
+// "no sound" was impossible to diagnose.
 let audioEl = null;
 export function speak(name) {
   const src = CLIPS[name];
-  if (!src) return;
+  if (!src) return Promise.reject(new Error(`unknown clip: ${name}`));
   try {
     if (!audioEl) audioEl = new Audio();
     audioEl.src = src;
     audioEl.currentTime = 0;
     const p = audioEl.play();
-    if (p && p.catch) p.catch(() => { /* autoplay/permission — ignore */ });
-  } catch { /* ignore */ }
+    return (p && p.then) ? p : Promise.resolve();
+  } catch (e) { return Promise.reject(e); }
 }
 
 // Keyword → action map (Chinese). Matched as substrings against the transcript

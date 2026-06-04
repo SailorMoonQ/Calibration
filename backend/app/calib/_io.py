@@ -84,23 +84,39 @@ def detect_chessboard(gray: np.ndarray, cols: int, rows: int) -> np.ndarray | No
     return corners.reshape(-1, 2).astype(np.float32)
 
 
-def detect_chessboard_live(gray: np.ndarray, cols: int, rows: int, max_dim: int = 640) -> np.ndarray | None:
-    """FAST, approximate chessboard detection for the LIVE PREVIEW only.
-
-    Downscales the frame to `max_dim` and skips the EXHAUSTIVE search + ACCURACY
-    sub-pixel refine that `detect_chessboard` (the calibration path) uses, so the
-    on-screen overlay keeps up at video rate. The returned corners are coarse and
-    are NEVER used by the solver — calibration always re-detects from the saved
-    full-resolution images via `detect_chessboard`. This function does not touch
-    that path.
-    """
+def _find_sb_live(gray: np.ndarray, cols: int, rows: int, max_dim: int) -> np.ndarray | None:
+    """Single fast SB detection at a capped resolution; corners rescaled to full
+    image coordinates. NORMALIZE only — no EXHAUSTIVE/ACCURACY (that's the solver path)."""
     h, w = gray.shape[:2]
     scale = min(1.0, max_dim / float(max(h, w)))
     small = cv2.resize(gray, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA) if scale < 1.0 else gray
     found, corners = cv2.findChessboardCornersSB(small, (cols, rows), cv2.CALIB_CB_NORMALIZE_IMAGE)
     if not found:
         return None
-    return (corners.reshape(-1, 2).astype(np.float32) / scale)
+    return corners.reshape(-1, 2).astype(np.float32) / scale
+
+
+def detect_chessboard_live(
+    gray: np.ndarray, cols: int, rows: int,
+    max_dim: int = 640, full_dim: int = 960, hi_res: bool = False,
+) -> np.ndarray | None:
+    """FAST, approximate chessboard detection for the LIVE PREVIEW only.
+
+    Adaptive resolution by board position (the caller passes `hi_res=True` when the
+    board was last seen near the fisheye FOV periphery):
+      • central / unknown → detect on a `max_dim`-downscaled frame (cheap, keeps the
+        overlay at video rate). A MISS is NOT retried at full-res: the common state
+        is "no board in frame", and paying a full-res pass on every empty frame is
+        what tanked the live frame rate.
+      • peripheral (`hi_res`) → go straight to `full_dim`: at the fisheye edge the
+        board is compressed/distorted and the downscale almost always misses it, so
+        the fast pass would just be wasted work.
+
+    The returned corners are coarse and are NEVER used by the solver — calibration
+    always re-detects from the saved full-resolution images via `detect_chessboard`.
+    This function does not touch that path.
+    """
+    return _find_sb_live(gray, cols, rows, full_dim if hi_res else max_dim)
 
 
 def detect_charuco(gray: np.ndarray, board: Board) -> tuple[np.ndarray, np.ndarray] | None:
@@ -133,12 +149,14 @@ def detect_board(gray: np.ndarray, board: Board) -> tuple[np.ndarray, np.ndarray
     raise ValueError(f"unknown board type: {board.type}")
 
 
-def detect_board_live(gray: np.ndarray, board: Board) -> tuple[np.ndarray, np.ndarray] | None:
+def detect_board_live(gray: np.ndarray, board: Board, *, hi_res: bool = False) -> tuple[np.ndarray, np.ndarray] | None:
     """Like `detect_board`, but uses the fast approximate chessboard detector for
-    live-preview overlays. Charuco already detects partially/quickly, so it falls
-    through to the normal path. Never feeds the solver."""
+    live-preview overlays. `hi_res` hints that the board is near the FOV periphery,
+    so the detector skips the doomed downscaled pass and goes straight to full-res.
+    Charuco already detects partially/quickly, so it falls through to the normal
+    path. Never feeds the solver."""
     if board.type == "chess":
-        corners = detect_chessboard_live(gray, board.cols, board.rows)
+        corners = detect_chessboard_live(gray, board.cols, board.rows, hi_res=hi_res)
         if corners is None:
             return None
         return corners, chess_object_points(board.cols, board.rows, board.square)

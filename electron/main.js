@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Menu, dialog, ipcMain, shell } = require('electron');
+const { app, BrowserWindow, Menu, dialog, ipcMain, shell, session } = require('electron');
 const path = require('path');
 const { startSidecar, stopSidecar } = require('./sidecar');
 
@@ -8,6 +8,16 @@ let backend = null;
 
 async function createWindow() {
   backend = await startSidecar({ isDev });
+
+  // Voice commands use the browser SpeechRecognition / getUserMedia, which
+  // require microphone permission. The page is loaded over file:// (packaged)
+  // or localhost (dev), so Electron's default handler denies the mic request
+  // and the renderer sees a `not-allowed` error. Grant audio capture here.
+  const grantMic = (permission) => permission === 'media' || permission === 'audioCapture';
+  session.defaultSession.setPermissionRequestHandler((_wc, permission, callback) => {
+    callback(grantMic(permission));
+  });
+  session.defaultSession.setPermissionCheckHandler((_wc, permission) => grantMic(permission));
 
   // Drop the default File / Edit / View / Window / Help bar — the workbench
   // has its own tabs and the boilerplate menu just adds vertical clutter.

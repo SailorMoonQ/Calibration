@@ -269,7 +269,10 @@
     "algo": "cv2.fisheye · Levenberg-Marquardt",
     "solving": "fisheye solving…",
     "rmsResult": "rms {{rms}} px · {{message}}",
-    "loadedDetail": "loaded ({{fmt}}) ← {{name}} · rms {{rms}} · fx {{fx}}"
+    "loadedDetail": "loaded ({{fmt}}) ← {{name}} · rms {{rms}} · fx {{fx}}",
+    "wroteCameraIntrix": "wrote [{{slot}}] → {{path}}",
+    "cameraIntrixFailed": "camera_intrix write failed: {{error}}",
+    "voicePlayFailed": "voice playback blocked ({{name}}): {{error}}"
   },
   "handeye": {
     "railTitlePrefix": "Hand-Eye · cam ↔ {{tracker}}",
