@@ -263,6 +263,7 @@ export function FisheyeTab({ tweaks }) {
   const lastAutoSnapRef = useRef(0);
   const autoSnapInFlightRef = useRef(false);
   const prevCornersRef = useRef(null);    // last frame's corners (for motion)
+  const lastDetSeqRef = useRef(-1);       // last processed detection seq (skip repaints)
   const dwellStartRef = useRef(0);        // when the current good pose began
   const maxSharpRef = useRef(0);          // session-best sharpness (adaptive blur gate)
   // Per-cell list of captured board tilts (deg) — drives orientation diversity:
@@ -294,6 +295,7 @@ export function FisheyeTab({ tweaks }) {
     setPolarCounts(new Array(totalPolarCells()).fill(0));
     cellTiltsRef.current = Array.from({ length: totalPolarCells() }, () => []);
     prevCornersRef.current = null;
+    lastDetSeqRef.current = -1;
     dwellStartRef.current = 0;
     maxSharpRef.current = 0;
     dirStateRef.current = { dir: null, target: null, refDist: Infinity, lastSpeak: 0, arrived: false };
@@ -455,6 +457,11 @@ export function FisheyeTab({ tweaks }) {
     const size = meta?.image_size;
 
     if (!autoCapture || !liveDevice || !datasetPath) { dwellStartRef.current = 0; return; }
+    // Backend streams video faster than it detects, so the same detection arrives
+    // on several frames. Run the capture/motion logic only on a FRESH detection,
+    // else a moving board's repeated corners read as "still" and could mis-fire.
+    if (meta?.det_seq != null && meta.det_seq === lastDetSeqRef.current) return;
+    lastDetSeqRef.current = meta?.det_seq ?? lastDetSeqRef.current;
     const now = performance.now();
 
     // No full board in view → nothing to do; reset the dwell.

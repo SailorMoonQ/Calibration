@@ -1328,39 +1328,45 @@ async def stream_ws(
             square=square, marker=marker, dictionary=dictionary,
         )
         min_interval = 1.0 / max(1, fps)
-        last_seq = -1
         last_sent = 0.0
-        # Last frame's board centroid (px) — lets the live detector skip the doomed
-        # downscaled pass and go straight to full-res once the board is working the
-        # FOV periphery (where the fisheye compresses it past what 640px can resolve).
-        last_centroid: tuple[float, float] | None = None
 
-        while True:
-            # wait for a fresh frame (sequence-based wakeup keeps latency low)
-            while src._latest_seq == last_seq:
-                await asyncio.sleep(0.003)
-            now = time.time()
-            if last_sent and now - last_sent < min_interval:
-                await asyncio.sleep(min_interval - (now - last_sent))
-            frame = src.read()
-            if frame is None:
-                continue
-            seq = src._latest_seq
-            last_seq = seq
-            h, w = frame.shape[:2]
+        # Board detection (findChessboardCornersSB) is the slow step — tens to
+        # hundreds of ms per frame. Running it inline once per frame caps the SEND
+        # rate at 1/detect_time (≈5 fps on a busy fisheye scene), so the live video
+        # crawls even when the camera delivers 60. Decouple them: a detector task
+        # chews the freshest frame as fast as it can and publishes its latest result
+        # into `det_state`; the send loop ships JPEG frames at the camera/fps rate
+        # and tags each with the MOST RECENT detection. Overlay corners then lag the
+        # pixels by at most one detect period — invisible for a hand-held board, and
+        # the solver never uses these (it re-detects from saved full-res images).
+        # `det_seq` increments on every detection UPDATE (not every video frame), so
+        # the client can tell a fresh detection from the same one repainted across
+        # several video frames — and only then accumulate footprint heat / run the
+        # auto-capture stillness gate. Without it the 22 fps video upsamples a 10/s
+        # detection: identical corners repeat, footprint greens far too fast, and the
+        # motion gate reads a moving board as "still".
+        det_state: dict = {"corners": [], "ids": None, "sharpness": None, "det_seq": 0}
+        det_n = 0
+        det_stop = False
+        # Last detected board centroid (px) — lets the detector skip the doomed
+        # downscaled pass and go straight to full-res once the board works the FOV
+        # periphery (where the fisheye compresses it past what 640px can resolve).
+        last_centroid: list | None = None
 
-            corners: list[list[float]] = []
-            ids = None
-            sharpness = None
-            if detect:
-                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-                # Live preview uses the fast approximate detector (downscaled, no
-                # exhaustive search) to keep the overlay at video rate. The solver
-                # never sees these corners — it re-detects from saved full-res
-                # images, so calibration accuracy is unaffected.
-                # When the board sat near the FOV edge last frame, ask for the
-                # full-res pass directly — the downscaled pass almost always misses
-                # there, which is exactly why peripheral poses can't auto-capture.
+        async def detector() -> None:
+            nonlocal det_state, last_centroid, det_n
+            last_det_seq = -1
+            while not det_stop:
+                if src._latest_seq == last_det_seq:
+                    await asyncio.sleep(0.003)
+                    continue
+                frame = src.read()
+                if frame is None:
+                    await asyncio.sleep(0.003)
+                    continue
+                last_det_seq = src._latest_seq
+                h, w = frame.shape[:2]
+                gray = await asyncio.to_thread(cv2.cvtColor, frame, cv2.COLOR_BGR2GRAY)
                 hi_res = False
                 if last_centroid is not None:
                     rr = np.hypot(last_centroid[0] - w / 2.0, last_centroid[1] - h / 2.0)
@@ -1368,41 +1374,71 @@ async def stream_ws(
                 res = await asyncio.to_thread(_io.detect_board_live, gray, board, hi_res=hi_res)
                 if res is not None:
                     corners_arr, _obj = res
-                    corners = corners_arr.tolist()
-                    last_centroid = (float(corners_arr[:, 0].mean()), float(corners_arr[:, 1].mean()))
+                    last_centroid = [float(corners_arr[:, 0].mean()), float(corners_arr[:, 1].mean())]
                     # Sharpness = variance of the Laplacian over the board ROI.
-                    # Drives the auto-capture blur gate on the client (it rejects
-                    # motion-blurred poses). Computed only on the small board crop,
-                    # only when a board is present — cheap. Live-only; never the solver.
+                    # Drives the client's auto-capture blur gate. Cheap (small crop,
+                    # only when a board is present). Live-only; never the solver.
                     pts = corners_arr
                     x0, y0 = pts.min(0); x1, y1 = pts.max(0)
                     xa, ya = max(0, int(x0) - 8), max(0, int(y0) - 8)
                     xb, yb = min(w, int(x1) + 8), min(h, int(y1) + 8)
+                    sharpness = None
                     if xb > xa and yb > ya:
                         roi = gray[ya:yb, xa:xb]
                         sharpness = float(cv2.Laplacian(roi, cv2.CV_64F).var())
+                    det_n += 1
+                    det_state = {"corners": corners_arr.tolist(), "ids": None, "sharpness": sharpness, "det_seq": det_n}
                 else:
                     last_centroid = None
+                    det_n += 1
+                    det_state = {"corners": [], "ids": None, "sharpness": None, "det_seq": det_n}
 
-            ok, buf = await asyncio.to_thread(
-                cv2.imencode, ".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, int(quality)]
-            )
-            if not ok:
-                continue
+        det_task = asyncio.create_task(detector()) if detect else None
+        try:
+            last_seq = -1
+            while True:
+                # wait for a fresh frame (sequence-based wakeup keeps latency low)
+                while src._latest_seq == last_seq:
+                    await asyncio.sleep(0.003)
+                now = time.time()
+                if last_sent and now - last_sent < min_interval:
+                    await asyncio.sleep(min_interval - (now - last_sent))
+                frame = src.read()
+                if frame is None:
+                    continue
+                seq = src._latest_seq
+                last_seq = seq
+                h, w = frame.shape[:2]
 
-            meta = {
-                "seq": int(seq), "ts": time.time(),
-                "image_size": [int(w), int(h)],
-                "corners": corners, "ids": ids,
-                "sharpness": sharpness,
-            }
-            header = json.dumps(meta).encode("utf-8")
-            payload = struct.pack("<I", len(header)) + header + buf.tobytes()
-            try:
-                await ws.send_bytes(payload)
-            except (WebSocketDisconnect, RuntimeError):
-                break
-            last_sent = time.time()
+                ok, buf = await asyncio.to_thread(
+                    cv2.imencode, ".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, int(quality)]
+                )
+                if not ok:
+                    continue
+
+                ds = det_state  # atomic grab of the latest detection
+                meta = {
+                    "seq": int(seq), "ts": time.time(),
+                    "image_size": [int(w), int(h)],
+                    "corners": ds["corners"], "ids": ds["ids"],
+                    "sharpness": ds["sharpness"],
+                    "det_seq": ds.get("det_seq", 0),
+                }
+                header = json.dumps(meta).encode("utf-8")
+                payload = struct.pack("<I", len(header)) + header + buf.tobytes()
+                try:
+                    await ws.send_bytes(payload)
+                except (WebSocketDisconnect, RuntimeError):
+                    break
+                last_sent = time.time()
+        finally:
+            det_stop = True
+            if det_task is not None:
+                det_task.cancel()
+                try:
+                    await det_task
+                except (asyncio.CancelledError, Exception):  # noqa: BLE001
+                    pass
     except WebSocketDisconnect:
         pass
     except Exception:

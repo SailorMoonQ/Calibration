@@ -81,7 +81,10 @@ const FP_COLS = 40, FP_ROWS = 25;
 
 export function LiveDetectedFrame({
   device, board,
-  fps = 10, quality = 70, detect = true,
+  // Detection runs decoupled on the backend, so the preview can request a high
+  // frame rate without the slow board detector throttling the video. The overlay
+  // corners update at detection rate (≈10/s); the pixels stream at this rate.
+  fps = 24, quality = 70, detect = true,
   showCorners = true, showOrigin = true,
   onMeta,                 // optional: called each frame with the parsed meta
   // Coverage overlay drawn directly on the frame (image-pixel coords, so it
@@ -135,6 +138,9 @@ export function LiveDetectedFrame({
       showPolarGrid, polarCells, polarCounts, polarGuidance, polarTarget, rings, sectors, guided]);
   // Persistent detection-footprint accumulator (reset when the stream restarts).
   const footprintRef = useRef(new Float32Array(FP_COLS * FP_ROWS));
+  // det_seq of the last detection already folded into the footprint, so the same
+  // detection repainted across several video frames is accumulated only ONCE.
+  const fpDetSeqRef = useRef(-1);
   // Cached fisheye image circle ({circle,at,sizeKey}); detection is throttled.
   const circleRef = useRef(null);
   const onCircleRef = useRef(onCircle);
@@ -154,6 +160,7 @@ export function LiveDetectedFrame({
     let rafId = null;
     tickRef.current = { recent: [], last: 0 };
     footprintRef.current = new Float32Array(FP_COLS * FP_ROWS);
+    fpDetSeqRef.current = -1;
     circleRef.current = null;
 
     // Resolve theme colors once; canvas can't read CSS variables directly.
@@ -216,11 +223,18 @@ export function LiveDetectedFrame({
       // "which areas can actually be scanned".
       if (cov?.showFootprint) {
         const fp = footprintRef.current;
-        for (const [x, y] of corners) {
-          const ci = Math.min(FP_COLS - 1, Math.max(0, Math.floor((x / w) * FP_COLS)));
-          const ri = Math.min(FP_ROWS - 1, Math.max(0, Math.floor((y / h) * FP_ROWS)));
-          const k = ri * FP_COLS + ci;
-          fp[k] = Math.min(1, fp[k] + 0.2);
+        // Accumulate ONLY on a fresh detection (det_seq changed). Otherwise the
+        // same corners repainted across the 22 fps video would bump the heat several
+        // times per real detection and the footprint greens far too fast.
+        const dseq = next.meta.det_seq;
+        if (dseq == null || dseq !== fpDetSeqRef.current) {
+          fpDetSeqRef.current = dseq ?? fpDetSeqRef.current;
+          for (const [x, y] of corners) {
+            const ci = Math.min(FP_COLS - 1, Math.max(0, Math.floor((x / w) * FP_COLS)));
+            const ri = Math.min(FP_ROWS - 1, Math.max(0, Math.floor((y / h) * FP_ROWS)));
+            const k = ri * FP_COLS + ci;
+            fp[k] = Math.min(1, fp[k] + 0.2);
+          }
         }
         const cw = w / FP_COLS, ch = h / FP_ROWS;
         for (let k = 0; k < fp.length; k++) {
