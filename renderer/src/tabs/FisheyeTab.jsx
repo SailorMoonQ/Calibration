@@ -286,9 +286,12 @@ export function FisheyeTab({ tweaks }) {
     if (minGapMs && now - (lastSpokeRef.current[name] || 0) < minGapMs) return;
     lastSpokeRef.current[name] = now;
     speak(name).catch((e) => {
-      // Surface a blocked/failed playback to the foreground status bar instead of
-      // swallowing it. De-duped by message so a persistent block (e.g. autoplay)
-      // doesn't overwrite the bar on every cue.
+      // AbortError ("play() interrupted by a new load request") is EXPECTED: a newer
+      // cue intentionally cut this one off (one shared <audio>, prompts don't stack).
+      // That's not a failure — swallow it. Only surface genuine blocks (autoplay
+      // NotAllowedError, missing codec/device, …), de-duped so a persistent block
+      // doesn't overwrite the status bar on every cue.
+      if (e?.name === 'AbortError') return;
       const msg = e?.message || e?.name || 'play blocked';
       if (msg === voiceErrRef.current) return;
       voiceErrRef.current = msg;
