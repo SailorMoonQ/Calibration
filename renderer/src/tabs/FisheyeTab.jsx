@@ -62,7 +62,8 @@ export function FisheyeTab({ tweaks }) {
   const [autoRate, setAutoRate] = useState(0.5);  // seconds between auto-snaps
   const [showPolar, setShowPolar] = useState(true);       // 极坐标靶盘叠加在画面上
   const [showFootprint, setShowFootprint] = useState(false); // 检测可达足迹热力
-  const [mirror, setMirror] = useState(false);            // 镜像翻转显示（仅显示，不影响保存）
+  // 镜像翻转：仅用于实时预览画面，不影响抓拍帧/校正视图/保存的原图。勾选状态跨会话记住。
+  const [mirror, setMirror] = useState(() => localStorage.getItem('calib_fisheye_mirror') === '1');
 
   // Auto-detected fisheye image circle {cx,cy,r}, reported by LiveDetectedFrame.
   // Drives the polar dartboard, capture binning, and the FOV boundary.
@@ -299,7 +300,10 @@ export function FisheyeTab({ tweaks }) {
   // spoken left/right match a mirrored display.
   const dirStateRef = useRef({ dir: null, target: null, refDist: Infinity, lastSpeak: 0, arrived: false });
   const mirrorRef = useRef(false);
-  useEffect(() => { mirrorRef.current = mirror; }, [mirror]);
+  useEffect(() => {
+    mirrorRef.current = mirror;
+    localStorage.setItem('calib_fisheye_mirror', mirror ? '1' : '0');
+  }, [mirror]);
 
   // Decide whether to speak a steering cue this frame. Event-driven: speak on a
   // new target, a changed direction, drifting the wrong way, or a stall — and go
