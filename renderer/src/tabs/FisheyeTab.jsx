@@ -50,6 +50,7 @@ export function FisheyeTab({ tweaks }) {
   const [autoRate, setAutoRate] = useState(0.5);  // seconds between auto-snaps
   const [showPolar, setShowPolar] = useState(true);       // 极坐标靶盘叠加在画面上
   const [showFootprint, setShowFootprint] = useState(false); // 检测可达足迹热力
+  const [mirror, setMirror] = useState(false);            // 镜像翻转显示（仅显示，不影响保存）
 
   // Auto-detected fisheye image circle {cx,cy,r}, reported by LiveDetectedFrame.
   // Drives the polar dartboard, capture binning, and the FOV boundary.
@@ -253,6 +254,7 @@ export function FisheyeTab({ tweaks }) {
     prevCornersRef.current = null;
     dwellStartRef.current = 0;
     maxSharpRef.current = 0;
+    dirStateRef.current = { dir: null, target: null, refDist: Infinity, lastSpeak: 0, arrived: false };
   }, [datasetPath]);
 
   // Board geometry in a ref so the per-frame handler reads current cols/rows
@@ -264,7 +266,6 @@ export function FisheyeTab({ tweaks }) {
   // "captured" cue is rate-limited so rapid auto-captures don't stutter the audio.
   const voicePrompts = !!tweaks?.voicePrompts;
   const lastSpokeRef = useRef({});
-  const lastDirSpeakRef = useRef(0);  // global gate for directional cues
   const say = useCallback((name, minGapMs = 0) => {
     if (!voicePrompts) return;
     const now = performance.now();
@@ -272,6 +273,53 @@ export function FisheyeTab({ tweaks }) {
     lastSpokeRef.current[name] = now;
     speak(name);
   }, [voicePrompts]);
+
+  // Directional-guidance state machine (see steerVoice). mirrorRef lets the
+  // spoken left/right match a mirrored display.
+  const dirStateRef = useRef({ dir: null, target: null, refDist: Infinity, lastSpeak: 0, arrived: false });
+  const mirrorRef = useRef(false);
+  useEffect(() => { mirrorRef.current = mirror; }, [mirror]);
+
+  // Decide whether to speak a steering cue this frame. Event-driven: speak on a
+  // new target, a changed direction, drifting the wrong way, or a stall — and go
+  // quiet while the board is closing in. Announces arrival once.
+  const steerVoice = useCallback(({ cell, reason, circle, curX, curY }) => {
+    const guid = guidanceRef.current;
+    const st = dirStateRef.current;
+    if (st.target !== guid) { st.target = guid; st.dir = null; st.refDist = Infinity; st.arrived = false; }
+    if (guid == null || !circle || cell == null) return;
+
+    if (cell === guid) {                       // on the target cell
+      if (!st.arrived) { st.arrived = true; say('onTarget'); }
+      return;
+    }
+    st.arrived = false;
+    if (reason !== 'enough') return;           // only steer off an already-full cell
+
+    const g = polarCellGeometry(circle).find(x => x.index === guid);
+    if (!g) return;
+    const dx = g.x - curX, dy = g.y - curY;
+    const dist = Math.hypot(dx, dy);
+    const curR = Math.hypot(curX - circle.cx, curY - circle.cy);
+    const gR = Math.hypot(g.x - circle.cx, g.y - circle.cy);
+    let dir;
+    if (gR - curR > circle.r * 0.33) dir = 'moveOut';
+    else if (Math.abs(dx) > Math.abs(dy)) {
+      const right = dx > 0;
+      dir = (right !== mirrorRef.current) ? 'moveRight' : 'moveLeft';  // mirror swaps L/R
+    } else dir = dy > 0 ? 'moveDown' : 'moveUp';
+
+    const now = performance.now();
+    const eps = circle.r * 0.06;
+    const progressed = dist <= st.refDist - eps;
+    const wrongWay = dist >= st.refDist + eps;
+    let speakIt = false;
+    if (dir !== st.dir) speakIt = now - st.lastSpeak > 900;        // new direction
+    else if (wrongWay) speakIt = now - st.lastSpeak > 1500;        // drifting away
+    else if (!progressed) speakIt = now - st.lastSpeak > 3500;     // stalled, no progress
+    if (progressed) st.refDist = dist;                            // closing in → stay quiet
+    if (speakIt) { say(dir); st.dir = dir; st.refDist = dist; st.lastSpeak = now; }
+  }, [say]);
 
   // Keep the binning circle and live counts in refs so the per-frame auto-capture
   // handler reads the freshest values without being recreated every detection.
@@ -372,29 +420,20 @@ export function FisheyeTab({ tweaks }) {
     else if (!still) reason = 'hold';
     else reason = 'capturing';
 
+    // Spoken directional guidance — event-driven, not on a fixed timer. We only
+    // speak when it carries new information: the target cell changed, the
+    // recommended direction changed, the board drifted the wrong way, or it
+    // stalled with no progress. While the board is steadily approaching the
+    // target we stay silent. Arriving on the target says "就这儿，稳住" once.
+    steerVoice({
+      cell, reason, circle,
+      curX: sx / corners.length, curY: sy / corners.length,
+    });
+
     const ready = novel && sharpOk && still && debounced && !autoSnapInFlightRef.current;
     if (!ready) {
       if (reason !== 'capturing') dwellStartRef.current = 0;
       if (reason === 'tilt') say('tiltHint', 4000);
-      // Spoken directional guidance: when the board sits on an already-full cell,
-      // steer it toward the emptiest cell ("向左一点 / 往外圈移一点").
-      if (reason === 'enough' && guidanceRef.current != null && circle) {
-        const now2 = performance.now();
-        if (now2 - lastDirSpeakRef.current > 2800) {
-          const g = polarCellGeometry(circle).find(x => x.index === guidanceRef.current);
-          if (g) {
-            lastDirSpeakRef.current = now2;
-            const curX = sx / corners.length, curY = sy / corners.length;
-            const dx = g.x - curX, dy = g.y - curY;
-            // If the target is a far-out ring and we're near the centre, say "move outward".
-            const curR = Math.hypot(curX - circle.cx, curY - circle.cy);
-            const gR = Math.hypot(g.x - circle.cx, g.y - circle.cy);
-            if (gR - curR > circle.r * 0.33) say('moveOut');
-            else if (Math.abs(dx) > Math.abs(dy)) say(dx > 0 ? 'moveRight' : 'moveLeft');
-            else say(dy > 0 ? 'moveDown' : 'moveUp');
-          }
-        }
-      }
       setAutoHud({ reason, dwell: 0, tilt });
       return;
     }
@@ -422,7 +461,7 @@ export function FisheyeTab({ tweaks }) {
         autoSnapInFlightRef.current = false;
       }
     })();
-  }, [autoCapture, liveDevice, datasetPath, autoRate, say, markCellsFromSnap]);
+  }, [autoCapture, liveDevice, datasetPath, autoRate, say, markCellsFromSnap, steerVoice]);
 
   const onDrop = async () => {
     if (!selectedPath) { setStatus(t('common.noFrameSelected')); return; }
@@ -664,8 +703,9 @@ export function FisheyeTab({ tweaks }) {
                 polarCounts={coverage.counts}
                 polarGuidance={coverage.guidance}
                 rings={RINGS} sectors={SECTORS}
-                showFootprint={showFootprint}/>
-          : <LivePreview device={liveDevice}/>
+                showFootprint={showFootprint}
+                mirror={mirror}/>
+          : <LivePreview device={liveDevice} mirror={mirror}/>
       ) : datasetFiles.length > 0 && selectedPath ? (
         <DetectedFrame
           path={selectedPath}
@@ -673,7 +713,8 @@ export function FisheyeTab({ tweaks }) {
           showCorners={showBoard}
           showOrigin={true}
           overlay={showResid ? 'residuals' : 'none'}
-          residuals={residualsByPath?.get(selectedPath)}/>
+          residuals={residualsByPath?.get(selectedPath)}
+          mirror={mirror}/>
       ) : (
         emptyCell(t('fisheye.connectOrLoad'))
       )}
@@ -712,10 +753,10 @@ export function FisheyeTab({ tweaks }) {
     let body;
     if (useLive) {
       body = <RectifiedLivePreview device={liveDevice} K={Kraw} D={D}
-                balance={balance} fovScale={fovScale} method={m}/>;
+                balance={balance} fovScale={fovScale} method={m} mirror={mirror}/>;
     } else if (canRectifyFrame) {
       body = <RectifiedFrame path={selectedPath} K={Kraw} D={D}
-                balance={balance} fovScale={fovScale} method={m}/>;
+                balance={balance} fovScale={fovScale} method={m} mirror={mirror}/>;
     } else if (calibrated) {
       body = emptyCell(t('fisheye.connectOrSelectFrame'));
     } else {
@@ -829,6 +870,7 @@ export function FisheyeTab({ tweaks }) {
           <Chk checked={liveDetect} onChange={setLiveDetect}>{t('fisheye.detectLive')}</Chk>
           <Chk checked={showPolar} onChange={(v) => { setShowPolar(v); if (v) setLiveDetect(true); }}>{t('fisheye.coverageGrid')}</Chk>
           <Chk checked={showFootprint} onChange={(v) => { setShowFootprint(v); if (v) setLiveDetect(true); }}>{t('fisheye.footprint')}</Chk>
+          <Chk checked={mirror} onChange={setMirror}>{t('fisheye.mirror')}</Chk>
           <div className="spacer"/>
           <div className="read">
             {streamInfo?.open && (

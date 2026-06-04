@@ -14,6 +14,7 @@ export function DetectedFrame({
   showCorners = true, showOrigin = true, overlay = 'none',
   residuals,                // optional [[x,y,ex,ey],...] — if present, used instead of live detection
   residualScale = 40,
+  mirror = false,           // display-only horizontal flip
 }) {
   const { t } = useTranslation();
   const [img, setImg] = useState(null);
@@ -97,7 +98,8 @@ export function DetectedFrame({
   }, [corners, board.cols, axisLen, showOrigin]);
 
   return (
-    <svg className="fill" viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="xMidYMid meet">
+    <svg className="fill" viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="xMidYMid meet"
+         style={{ transform: mirror ? 'scaleX(-1)' : undefined }}>
       {img && <image href={img} x={0} y={0} width={w} height={h} preserveAspectRatio="none"/>}
       {overlay === 'heatmap' && det && (
         <rect x={0} y={0} width={w} height={h} fill="url(#none)" opacity={0}/>

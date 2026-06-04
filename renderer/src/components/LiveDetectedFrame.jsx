@@ -50,6 +50,7 @@ export function LiveDetectedFrame({
   polarGuidance = null,   // int|null — cell index to steer the board toward next
   rings = 3, sectors = 8,
   onCircle,               // optional: called with {cx,cy,r} when the circle is detected
+  mirror = false,         // display-only horizontal flip (does not affect saved frames)
 }) {
   const { t } = useTranslation();
   const [meta, setMeta] = useState(null);
@@ -479,7 +480,8 @@ export function LiveDetectedFrame({
   return (
     <>
       <canvas ref={canvasRef}
-              style={{ width: '100%', height: '100%', objectFit: 'contain', display: 'block' }}/>
+              style={{ width: '100%', height: '100%', objectFit: 'contain', display: 'block',
+                       transform: mirror ? 'scaleX(-1)' : undefined }}/>
       {!meta && (
         <div style={{
           position: 'absolute', inset: 0, ...placeholderStyle,

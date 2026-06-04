@@ -20,7 +20,7 @@ function parseFrame(buf) {
   return jpeg;
 }
 
-export function LivePreview({ device, fps = 30, quality = 70 }) {
+export function LivePreview({ device, fps = 30, quality = 70, mirror = false }) {
   const { t } = useTranslation();
   const [info, setInfo] = useState(null);
   const [hasFrame, setHasFrame] = useState(false);
@@ -119,7 +119,8 @@ export function LivePreview({ device, fps = 30, quality = 70 }) {
   return (
     <>
       <canvas ref={canvasRef}
-              style={{ width: '100%', height: '100%', objectFit: 'contain', display: 'block' }}/>
+              style={{ width: '100%', height: '100%', objectFit: 'contain', display: 'block',
+                       transform: mirror ? 'scaleX(-1)' : undefined }}/>
       {!hasFrame && (
         <div style={{
           position: 'absolute', inset: 0,

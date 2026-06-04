@@ -8,6 +8,7 @@ export function RectifiedFrame({
   balance = 0.5, fovScale = 1.0,
   alpha = 0.5,
   method = 'remap',
+  mirror = false,
 }) {
   const { t } = useTranslation();
   const [url, setUrl] = useState(null);
@@ -64,5 +65,6 @@ export function RectifiedFrame({
     );
   }
   return <img src={url} alt="rectified"
-              style={{ width:'100%', height:'100%', objectFit:'contain', display:'block' }}/>;
+              style={{ width:'100%', height:'100%', objectFit:'contain', display:'block',
+                       transform: mirror ? 'scaleX(-1)' : undefined }}/>;
 }

@@ -239,6 +239,7 @@
     "board": "靶标",
     "residuals": "残差",
     "detectLive": "实时检测",
+    "mirror": "镜像",
     "coverageGrid": "覆盖靶盘",
     "footprint": "检测足迹",
     "autoCapture": "自动采集",
