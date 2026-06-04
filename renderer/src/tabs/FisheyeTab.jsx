@@ -920,7 +920,11 @@ export function FisheyeTab({ tweaks }) {
   // glyph, or {done:true} once the checklist is exhausted. null in polar mode.
   const guidedStepNow = GUIDED_STEPS[guidedProgress.step];
   const guidedOverlay = guidedMode
-    ? (guidedStepNow ? { region: guidedStepNow.region, glyph: guidedStepNow.glyph, done: false } : { done: true })
+    ? (guidedStepNow
+        ? { region: guidedStepNow.region, glyph: guidedStepNow.glyph,
+            pose: guidedStepNow.pose, scale: guidedStepNow.scale ?? null,
+            group: guidedStepNow.group, done: false }
+        : { done: true })
     : null;
 
   const rawCell = (
@@ -961,17 +965,19 @@ export function FisheyeTab({ tweaks }) {
         return (
           <div style={{
             position: 'absolute', top: 10, left: '50%', transform: 'translateX(-50%)',
-            background: 'var(--surface-1)', border: `1px solid ${color}`, borderRadius: 6,
-            padding: '5px 10px', display: 'flex', flexDirection: 'column', gap: 4, minWidth: 140,
-            fontFamily: 'JetBrains Mono', fontSize: 11, color, boxShadow: '0 2px 10px rgba(0,0,0,0.4)',
+            background: 'rgba(8,10,14,0.82)', border: `1.5px solid ${color}`, borderRadius: 7,
+            padding: '7px 13px', display: 'flex', flexDirection: 'column', gap: 5, minWidth: 168,
+            fontFamily: 'JetBrains Mono', fontSize: 12.5, fontWeight: 600, color,
+            boxShadow: '0 3px 14px rgba(0,0,0,0.55)', backdropFilter: 'blur(3px)',
+            textShadow: '0 1px 2px rgba(0,0,0,0.7)',
           }}>
             {autoHud.guidedLabel && (
-              <div style={{ color: 'var(--text)', fontSize: 10.5 }}>{autoHud.guidedLabel}</div>
+              <div style={{ color: 'var(--text)', fontSize: 12, fontWeight: 700 }}>{autoHud.guidedLabel}</div>
             )}
             <div>⦿ {t('fisheye.autoCapture')} · {t(`fisheye.auto_${r}`)}
-              {typeof autoHud.tilt === 'number' && <span style={{ color: 'var(--text-3)' }}>  ∠{autoHud.tilt.toFixed(0)}°</span>}
+              {typeof autoHud.tilt === 'number' && <span style={{ color: 'var(--text-2)', fontWeight: 500 }}>  ∠{autoHud.tilt.toFixed(0)}°</span>}
             </div>
-            <div style={{ height: 3, background: 'var(--surface-3)', borderRadius: 2, overflow: 'hidden' }}>
+            <div style={{ height: 4, background: 'rgba(255,255,255,0.18)', borderRadius: 2, overflow: 'hidden' }}>
               <div style={{ height: '100%', width: `${Math.round((autoHud.dwell || 0) * 100)}%`, background: 'var(--ok)', transition: 'width 80ms linear' }}/>
             </div>
           </div>

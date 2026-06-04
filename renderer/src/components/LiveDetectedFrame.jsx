@@ -3,13 +3,13 @@ import { useTranslation } from 'react-i18next';
 import { streamWsUrl } from '../api/client.js';
 import { useReportCamera } from '../lib/telemetry.jsx';
 import { detectCircleFromImageData, polarCellGeometry, polarCellAt } from '../lib/polarCoverage.js';
-import { regionTarget } from '../lib/guidedSequence.js';
+import { regionTarget, boardScale } from '../lib/guidedSequence.js';
 
 // Draw the pose-hint glyph for the guided sequence at (x,y), sized to ~r. The
 // shape tells the operator what ORIENTATION the board should be at for this step
 // (the highlighted zone already says WHERE). Drawn in amber to match the target.
-function drawGuidedGlyph(ctx, x, y, r, glyph, unit) {
-  const s = Math.max(r * 0.5, unit * 6);
+function drawGuidedGlyph(ctx, x, y, r, glyph, unit, phase = 0) {
+  const s = Math.max(r * 0.5, unit * 6) * (1 + 0.12 * Math.sin(phase * 4));
   ctx.save();
   ctx.strokeStyle = 'oklch(0.92 0.18 90 / 0.95)';
   ctx.fillStyle = 'oklch(0.92 0.18 90 / 0.95)';
@@ -51,6 +51,106 @@ function drawGuidedGlyph(ctx, x, y, r, glyph, unit) {
       ctx.beginPath(); ctx.moveTo(x - s * 0.4, y); ctx.lineTo(x + s * 0.4, y);
       ctx.moveTo(x, y - s * 0.4); ctx.lineTo(x, y + s * 0.4); ctx.stroke(); break;
   }
+  ctx.restore();
+}
+
+// Recommended on-screen half-size of the target board, as a fraction of the image
+// circle radius — bigger for centre/near, smaller for edges/far (docs §3: a centred
+// board should fill ~1/3–1/2 of the frame, edge boards may be smaller). Aspect ≈ the
+// real board's cols:rows so the operator matches shape, not just position.
+function targetHalfSize(step, circle, bCols, bRows) {
+  const r = circle.r;
+  let frac;
+  if (step.pose === 'dist') frac = step.scale === 'near' ? 0.5 : step.scale === 'far' ? 0.27 : 0.38;
+  else if (step.group === 'edge') frac = 0.27;
+  else if (step.region === 'center') frac = 0.42;
+  else frac = 0.34;
+  const halfW = frac * r;
+  return { halfW, halfH: halfW * (bRows / Math.max(1, bCols)) };
+}
+
+// Stroke a closed polyline twice — a dark underlay then the colour on top — so a
+// thin bright overlay line stays legible over both the white board and dark scene.
+function strokeQuadContrast(ctx, pts, color, unit) {
+  const path = () => {
+    ctx.beginPath();
+    ctx.moveTo(pts[0][0], pts[0][1]);
+    for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]);
+    ctx.closePath();
+  };
+  ctx.lineJoin = 'round';
+  ctx.strokeStyle = 'oklch(0.2 0 0 / 0.5)'; ctx.lineWidth = Math.max(4, unit * 1.4); path(); ctx.stroke();
+  ctx.strokeStyle = color; ctx.lineWidth = Math.max(2.2, unit * 0.7); path(); ctx.stroke();
+}
+
+// The live board's own outline (its four outer corners), in `color`.
+function drawBoardQuad(ctx, quad, color, unit) {
+  ctx.save();
+  strokeQuadContrast(ctx, quad, color, unit);
+  ctx.restore();
+}
+
+// The animated target: a board-aspect rectangle that DEFORMS to show the wanted
+// motion — a trapezoid that tips for pitch/yaw, a box that rocks for roll, a box
+// that breathes in/out for near/far — so the overlay demonstrates the move rather
+// than freezing a static outline. `phase` is seconds (performance.now()/1000).
+function drawTargetBoard(ctx, cx, cy, halfW, halfH, step, unit, phase) {
+  const osc = Math.sin(phase * 2.2);             // slow rock for tilt/roll
+  let hw = halfW, hh = halfH;
+  if (step.pose === 'dist') {                    // near/far/mid → gentle breathing
+    const b = 1 + 0.06 * Math.sin(phase * (step.scale === 'near' ? 3 : 2.2));
+    hw *= b; hh *= b;
+  }
+  let pts;
+  if (step.glyph === 'tiltV') {                  // pitch: top edge narrows/widens
+    const k = 0.45 + 0.22 * (0.5 + 0.5 * osc);
+    pts = [[-hw * k, -hh], [hw * k, -hh], [hw, hh], [-hw, hh]];
+  } else if (step.glyph === 'tiltH') {           // yaw: left edge narrows/widens
+    const k = 0.45 + 0.22 * (0.5 + 0.5 * osc);
+    pts = [[-hw, -hh * k], [hw, -hh], [hw, hh], [-hw, hh * k]];
+  } else {
+    pts = [[-hw, -hh], [hw, -hh], [hw, hh], [-hw, hh]];
+  }
+  ctx.save();
+  ctx.translate(cx, cy);
+  if (step.pose === 'roll') ctx.rotate(0.5 * osc);   // ±~28° rock
+  ctx.beginPath();
+  ctx.moveTo(pts[0][0], pts[0][1]);
+  for (let i = 1; i < 4; i++) ctx.lineTo(pts[i][0], pts[i][1]);
+  ctx.closePath();
+  ctx.fillStyle = 'oklch(0.85 0.18 90 / 0.10)'; ctx.fill();
+  strokeQuadContrast(ctx, pts, 'oklch(0.9 0.18 90 / 0.95)', unit);
+  ctx.restore();
+}
+
+// A marching, pulsing arrow from (fx,fy) → (tx,ty) — the "move the board this way"
+// cue, complementing the spoken steering. Amber over a dark underlay; dashes march
+// toward the target and the head pulses. Hidden once the board is on the target.
+function drawSteerArrow(ctx, fx, fy, tx, ty, unit, phase) {
+  const dx = tx - fx, dy = ty - fy;
+  const dist = Math.hypot(dx, dy);
+  if (dist < unit * 8) return;
+  const ux = dx / dist, uy = dy / dist;
+  const sx = fx + ux * unit * 3, sy = fy + uy * unit * 3;
+  const ex = tx - ux * unit * 4, ey = ty - uy * unit * 4;
+  ctx.save();
+  ctx.lineCap = 'round';
+  ctx.setLineDash([unit * 2.6, unit * 2.6]);
+  ctx.lineDashOffset = -phase * unit * 9;
+  ctx.strokeStyle = 'oklch(0.2 0 0 / 0.5)'; ctx.lineWidth = Math.max(4, unit * 1.5);
+  ctx.beginPath(); ctx.moveTo(sx, sy); ctx.lineTo(ex, ey); ctx.stroke();
+  ctx.strokeStyle = 'oklch(0.9 0.18 90 / 0.95)'; ctx.lineWidth = Math.max(2.4, unit * 0.85);
+  ctx.beginPath(); ctx.moveTo(sx, sy); ctx.lineTo(ex, ey); ctx.stroke();
+  ctx.setLineDash([]);
+  const h = Math.max(7, unit * 3) * (1 + 0.18 * Math.sin(phase * 6));
+  const a = Math.atan2(uy, ux);
+  const bx = tx - ux * unit * 1.5, by = ty - uy * unit * 1.5;
+  ctx.fillStyle = 'oklch(0.92 0.18 90 / 0.97)';
+  ctx.beginPath();
+  ctx.moveTo(bx, by);
+  ctx.lineTo(bx - h * Math.cos(a - 0.5), by - h * Math.sin(a - 0.5));
+  ctx.lineTo(bx - h * Math.cos(a + 0.5), by - h * Math.sin(a + 0.5));
+  ctx.closePath(); ctx.fill();
   ctx.restore();
 }
 
@@ -193,6 +293,7 @@ export function LiveDetectedFrame({
       const corners = next.meta.corners ?? [];
       const cornerR = Math.max(2, Math.round(Math.min(w, h) / 300));
       const cov = covRef.current;
+      const phase = performance.now() / 1000;   // animation clock for the live hints
 
       // ── Auto-detect the fisheye image circle (throttled, from the clean frame
       // BEFORE any overlay is painted) ──────────────────────────────────────
@@ -329,11 +430,12 @@ export function LiveDetectedFrame({
         const cells = cov.polarCells, pcounts = cov.polarCounts;
         const geo = polarCellGeometry(circle, cov.rings, cov.sectors);
 
-        let cur = null;
+        let cur = null, pcx = null, pcy = null;
         if (corners.length) {
           let sx = 0, sy = 0;
           for (const [x, y] of corners) { sx += x; sy += y; }
-          cur = polarCellAt(sx / corners.length, sy / corners.length, circle, cov.rings, cov.sectors);
+          pcx = sx / corners.length; pcy = sy / corners.length;
+          cur = polarCellAt(pcx, pcy, circle, cov.rings, cov.sectors);
         }
 
         const wedge = (g) => {
@@ -389,8 +491,10 @@ export function LiveDetectedFrame({
             ctx.strokeStyle = 'oklch(0.9 0.18 90 / 0.95)';
             ctx.lineWidth = Math.max(2, cornerR * 0.5);
             wedge(g); ctx.stroke();
+            const tpulse = 1 + 0.25 * Math.sin(phase * 6);
             ctx.fillStyle = 'oklch(0.92 0.18 90 / 0.95)';
-            ctx.beginPath(); ctx.arc(g.x, g.y, cornerR * 1.9, 0, Math.PI * 2); ctx.fill();
+            ctx.beginPath(); ctx.arc(g.x, g.y, cornerR * 1.9 * tpulse, 0, Math.PI * 2); ctx.fill();
+            if (pcx != null) drawSteerArrow(ctx, pcx, pcy, g.x, g.y, cornerR, phase);
           }
         }
 
@@ -405,35 +509,67 @@ export function LiveDetectedFrame({
         }
       }
 
-      // ── Guided-sequence overlay (circular frame + target zone + pose glyph) ──
+      // ── Guided-sequence overlay (FOV circle + board-shaped target + steer arrow) ──
+      // The target is a BOARD-shaped rectangle (skewed to a trapezoid for tilt/yaw,
+      // rotated for roll, sized for near/far) that ANIMATES so the wanted motion is
+      // shown, not just a static outline — mirroring docs/fisheye-howto §2. A marching
+      // arrow points from the live board to the target; the live board's own quad is
+      // outlined and tinted by how much of the frame it fills (doc §3 size guidance).
       if (cov?.guided && circleRef.current?.circle) {
         const circle = circleRef.current.circle;
         const g = cov.guided;
-        // image-circle frame
-        ctx.strokeStyle = 'oklch(0.85 0.03 230 / 0.45)';
+        // FOV circle (dashed, faint) — the fisheye image boundary, matches the doc figures
+        ctx.save();
+        ctx.setLineDash([cornerR * 2, cornerR * 2]);
+        ctx.strokeStyle = 'oklch(0.85 0.03 230 / 0.4)';
         ctx.lineWidth = Math.max(1, cornerR * 0.3);
         ctx.beginPath(); ctx.arc(circle.cx, circle.cy, circle.r, 0, Math.PI * 2); ctx.stroke();
+        ctx.restore();
 
         if (!g.done) {
           const tgt = regionTarget(g.region, circle);
-          if (tgt) {
-            // target zone
-            ctx.beginPath(); ctx.arc(tgt.x, tgt.y, tgt.acceptR, 0, Math.PI * 2);
-            ctx.fillStyle = 'oklch(0.85 0.18 90 / 0.13)'; ctx.fill();
-            ctx.strokeStyle = 'oklch(0.9 0.18 90 / 0.9)';
-            ctx.lineWidth = Math.max(2, cornerR * 0.5);
-            ctx.beginPath(); ctx.arc(tgt.x, tgt.y, tgt.acceptR, 0, Math.PI * 2); ctx.stroke();
-            // pose hint glyph
-            drawGuidedGlyph(ctx, tgt.x, tgt.y, tgt.acceptR, g.glyph, cornerR);
-          }
-          // where the board is right now (blue dot at its centroid)
+          const ts = tgt ? targetHalfSize(g, circle, bCols, bRows) : null;
+          // live board centroid + outer quad (only a full detection has the quad)
+          let cenX = null, cenY = null, quad = null;
           if (corners.length) {
             let sx = 0, sy = 0;
             for (const [x, y] of corners) { sx += x; sy += y; }
+            cenX = sx / corners.length; cenY = sy / corners.length;
+            const nb = bCols * bRows;
+            if (corners.length >= nb) {
+              quad = [corners[0], corners[bCols - 1], corners[nb - 1], corners[bCols * (bRows - 1)]];
+            }
+          }
+
+          if (tgt && ts) {
+            drawTargetBoard(ctx, tgt.x, tgt.y, ts.halfW, ts.halfH, g, cornerR, phase);
+            // reinforce poses the rect shape doesn't already convey (frontal / near-far)
+            if (g.pose === 'frontal' || g.pose === 'dist') {
+              drawGuidedGlyph(ctx, tgt.x, tgt.y, Math.min(ts.halfW, ts.halfH), g.glyph, cornerR, phase);
+            }
+            // marching "go here" arrow while the board is away from the target zone
+            if (cenX != null && Math.hypot(cenX - tgt.x, cenY - tgt.y) > tgt.acceptR) {
+              drawSteerArrow(ctx, cenX, cenY, tgt.x, tgt.y, cornerR, phase);
+            }
+          }
+
+          // Live board outline, tinted by ABSOLUTE frame-fill quality (doc §3): green
+          // when it occupies a good fraction of the FOV, amber when too big (outer
+          // corners get clipped) or too small (corners blur), blue in between. A
+          // step-relative band was tried but read WORSE on the /tmp/1+/tmp/4 captures
+          // (real boards cluster ~0.24–0.58 regardless of step), so this fixed band —
+          // which the sample sets validate at 35/38 correctly-placed frames green — stays.
+          if (quad) {
+            const sc = boardScale(corners, bCols, bRows, circle);
+            let qc = 'oklch(0.8 0.16 235 / 0.95)';                       // blue: detected, transitional size
+            if (sc != null) {
+              if (sc > 0.66 || sc < 0.24) qc = 'oklch(0.72 0.18 35 / 0.95)';        // 太大/太小
+              else if (sc >= 0.30 && sc <= 0.60) qc = 'oklch(0.78 0.16 150 / 0.95)'; // 合适
+            }
+            drawBoardQuad(ctx, quad, qc, cornerR);
+          } else if (cenX != null) {
             ctx.fillStyle = 'oklch(0.8 0.16 235 / 0.95)';
-            ctx.beginPath();
-            ctx.arc(sx / corners.length, sy / corners.length, cornerR * 2.2, 0, Math.PI * 2);
-            ctx.fill();
+            ctx.beginPath(); ctx.arc(cenX, cenY, cornerR * 2.2, 0, Math.PI * 2); ctx.fill();
           }
         }
       }
