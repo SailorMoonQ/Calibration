@@ -3,6 +3,56 @@ import { useTranslation } from 'react-i18next';
 import { streamWsUrl } from '../api/client.js';
 import { useReportCamera } from '../lib/telemetry.jsx';
 import { detectCircleFromImageData, polarCellGeometry, polarCellAt } from '../lib/polarCoverage.js';
+import { regionTarget } from '../lib/guidedSequence.js';
+
+// Draw the pose-hint glyph for the guided sequence at (x,y), sized to ~r. The
+// shape tells the operator what ORIENTATION the board should be at for this step
+// (the highlighted zone already says WHERE). Drawn in amber to match the target.
+function drawGuidedGlyph(ctx, x, y, r, glyph, unit) {
+  const s = Math.max(r * 0.5, unit * 6);
+  ctx.save();
+  ctx.strokeStyle = 'oklch(0.92 0.18 90 / 0.95)';
+  ctx.fillStyle = 'oklch(0.92 0.18 90 / 0.95)';
+  ctx.lineWidth = Math.max(2, unit * 0.6);
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  const arrow = (x0, y0, x1, y1) => {
+    ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(x1, y1); ctx.stroke();
+    const a = Math.atan2(y1 - y0, x1 - x0), h = Math.max(5, unit * 2.2);
+    ctx.beginPath(); ctx.moveTo(x1, y1);
+    ctx.lineTo(x1 - h * Math.cos(a - 0.5), y1 - h * Math.sin(a - 0.5));
+    ctx.moveTo(x1, y1);
+    ctx.lineTo(x1 - h * Math.cos(a + 0.5), y1 - h * Math.sin(a + 0.5));
+    ctx.stroke();
+  };
+  switch (glyph) {
+    case 'tiltV':                       // pitch — vertical double arrow
+      arrow(x, y, x, y - s * 0.5); arrow(x, y, x, y + s * 0.5); break;
+    case 'tiltH':                       // yaw — horizontal double arrow
+      arrow(x, y, x - s * 0.5, y); arrow(x, y, x + s * 0.5, y); break;
+    case 'roll': {                      // in-plane roll — rotation arc + arrowhead
+      ctx.beginPath(); ctx.arc(x, y, s * 0.45, -Math.PI * 0.75, Math.PI * 0.5); ctx.stroke();
+      const ex = x + Math.cos(Math.PI * 0.5) * s * 0.45, ey = y + Math.sin(Math.PI * 0.5) * s * 0.45;
+      const h = Math.max(5, unit * 2.2);
+      ctx.beginPath(); ctx.moveTo(ex, ey);
+      ctx.lineTo(ex - h * 0.2, ey - h); ctx.moveTo(ex, ey); ctx.lineTo(ex + h, ey - h * 0.2); ctx.stroke();
+      break;
+    }
+    case 'near':                        // move closer — arrows pointing out
+      arrow(x, y, x - s * 0.5, y - s * 0.5); arrow(x, y, x + s * 0.5, y + s * 0.5); break;
+    case 'far':                         // pull back — arrows pointing in
+      arrow(x - s * 0.5, y - s * 0.5, x - unit * 2, y - unit * 2);
+      arrow(x + s * 0.5, y + s * 0.5, x + unit * 2, y + unit * 2); break;
+    case 'mid':                         // medium — equals sign
+      ctx.beginPath(); ctx.moveTo(x - s * 0.3, y - unit * 2); ctx.lineTo(x + s * 0.3, y - unit * 2);
+      ctx.moveTo(x - s * 0.3, y + unit * 2); ctx.lineTo(x + s * 0.3, y + unit * 2); ctx.stroke(); break;
+    case 'frontal':                     // face on — crosshair
+    default:
+      ctx.beginPath(); ctx.moveTo(x - s * 0.4, y); ctx.lineTo(x + s * 0.4, y);
+      ctx.moveTo(x, y - s * 0.4); ctx.lineTo(x, y + s * 0.4); ctx.stroke(); break;
+  }
+  ctx.restore();
+}
 
 // JPEG-per-message WebSocket → canvas via createImageBitmap. Same plumbing as
 // LivePreview, plus we draw corner markers and the board origin axes on top of
@@ -50,6 +100,9 @@ export function LiveDetectedFrame({
   polarGuidance = null,   // int|null — cell index to steer the board toward next
   polarTarget = 5,        // captures-per-cell that counts as "采够" → persistent deep green
   rings = 3, sectors = 8,
+  // Guided-sequence overlay (doc-driven mode): { region, glyph, done } for the
+  // active checklist step, or null in polar mode. Shares the image-circle detection.
+  guided = null,
   onCircle,               // optional: called with {cx,cy,r} when the circle is detected
   mirror = false,         // display-only horizontal flip (does not affect saved frames)
 }) {
@@ -76,9 +129,10 @@ export function LiveDetectedFrame({
       cells: coverageCells, counts: coverageCounts, fovMask,
       cols: covCols, rows: covRows, showGrid: showCoverageGrid, showFootprint,
       showPolar: showPolarGrid, polarCells, polarCounts, polarGuidance, target: polarTarget, rings, sectors,
+      guided,
     };
   }, [coverageCells, coverageCounts, fovMask, covCols, covRows, showCoverageGrid, showFootprint,
-      showPolarGrid, polarCells, polarCounts, polarGuidance, polarTarget, rings, sectors]);
+      showPolarGrid, polarCells, polarCounts, polarGuidance, polarTarget, rings, sectors, guided]);
   // Persistent detection-footprint accumulator (reset when the stream restarts).
   const footprintRef = useRef(new Float32Array(FP_COLS * FP_ROWS));
   // Cached fisheye image circle ({circle,at,sizeKey}); detection is throttled.
@@ -135,7 +189,7 @@ export function LiveDetectedFrame({
 
       // ── Auto-detect the fisheye image circle (throttled, from the clean frame
       // BEFORE any overlay is painted) ──────────────────────────────────────
-      if (cov?.showPolar) {
+      if (cov?.showPolar || cov?.guided) {
         const sizeKey = `${w}x${h}`;
         const now = performance.now();
         let cc = circleRef.current;
@@ -333,6 +387,39 @@ export function LiveDetectedFrame({
             ctx.strokeStyle = 'oklch(0.8 0.16 235 / 0.95)';
             ctx.lineWidth = Math.max(2, cornerR * 0.6);
             wedge(g); ctx.stroke();
+          }
+        }
+      }
+
+      // ── Guided-sequence overlay (circular frame + target zone + pose glyph) ──
+      if (cov?.guided && circleRef.current?.circle) {
+        const circle = circleRef.current.circle;
+        const g = cov.guided;
+        // image-circle frame
+        ctx.strokeStyle = 'oklch(0.85 0.03 230 / 0.45)';
+        ctx.lineWidth = Math.max(1, cornerR * 0.3);
+        ctx.beginPath(); ctx.arc(circle.cx, circle.cy, circle.r, 0, Math.PI * 2); ctx.stroke();
+
+        if (!g.done) {
+          const tgt = regionTarget(g.region, circle);
+          if (tgt) {
+            // target zone
+            ctx.beginPath(); ctx.arc(tgt.x, tgt.y, tgt.acceptR, 0, Math.PI * 2);
+            ctx.fillStyle = 'oklch(0.85 0.18 90 / 0.13)'; ctx.fill();
+            ctx.strokeStyle = 'oklch(0.9 0.18 90 / 0.9)';
+            ctx.lineWidth = Math.max(2, cornerR * 0.5);
+            ctx.beginPath(); ctx.arc(tgt.x, tgt.y, tgt.acceptR, 0, Math.PI * 2); ctx.stroke();
+            // pose hint glyph
+            drawGuidedGlyph(ctx, tgt.x, tgt.y, tgt.acceptR, g.glyph, cornerR);
+          }
+          // where the board is right now (blue dot at its centroid)
+          if (corners.length) {
+            let sx = 0, sy = 0;
+            for (const [x, y] of corners) { sx += x; sy += y; }
+            ctx.fillStyle = 'oklch(0.8 0.16 235 / 0.95)';
+            ctx.beginPath();
+            ctx.arc(sx / corners.length, sy / corners.length, cornerR * 2.2, 0, Math.PI * 2);
+            ctx.fill();
           }
         }
       }

@@ -13,6 +13,10 @@ import {
   trafficKindForRms, trafficColor,
 } from '../components/panels.jsx';
 import { binPolar, pickGuidanceCell, totalPolarCells, polarCellAt, polarCellGeometry, boardTiltDeg, RINGS, SECTORS } from '../lib/polarCoverage.js';
+import {
+  GUIDED_STEPS, analyzeBoard, regionTarget, regionOk, poseOk,
+  differsEnough, shotSignature,
+} from '../lib/guidedSequence.js';
 import { speak, createVoiceRecognizer } from '../lib/voice.js';
 
 // A snapped board only counts as covering a (polar) cell when at least this many
@@ -60,7 +64,11 @@ export function FisheyeTab({ tweaks }) {
   const [liveDetect, setLiveDetect] = useState(false);
   const [autoCapture, setAutoCapture] = useState(false);
   const [autoRate, setAutoRate] = useState(0.5);  // seconds between auto-snaps
-  const [showPolar, setShowPolar] = useState(true);       // 极坐标靶盘叠加在画面上
+  // 二选一的自动检测/叠加模式：'polar' 极坐标覆盖靶盘（手持扫覆盖），
+  // 'guided' 文档引导序列（按手册清单逐个位置/动作各拍两张）。跨会话记住。
+  const [captureMode, setCaptureMode] = useState(() => localStorage.getItem('calib_fisheye_capmode') || 'polar');
+  const showPolar = captureMode === 'polar';
+  const guidedMode = captureMode === 'guided';
   const [showFootprint, setShowFootprint] = useState(false); // 检测可达足迹热力
   // 镜像翻转：仅用于实时预览画面，不影响抓拍帧/校正视图/保存的原图。勾选状态跨会话记住。
   const [mirror, setMirror] = useState(() => localStorage.getItem('calib_fisheye_mirror') === '1');
@@ -260,7 +268,28 @@ export function FisheyeTab({ tweaks }) {
   // Per-cell list of captured board tilts (deg) — drives orientation diversity:
   // a 2nd/3rd capture in a cell only counts if its tilt is fresh.
   const cellTiltsRef = useRef(Array.from({ length: totalPolarCells() }, () => []));
-  const [autoHud, setAutoHud] = useState(null);  // { reason, dwell:0..1, tilt } for the on-frame badge
+  const [autoHud, setAutoHud] = useState(null);  // { reason, dwell:0..1, tilt, guidedLabel } for the on-frame badge
+
+  // Guided-sequence progress (doc-driven mode). guidedStepRef indexes GUIDED_STEPS;
+  // guidedShotsRef is how many of this step's shots are banked (0..shots);
+  // guidedSigRef is the first shot's signature, so the 2nd shot can be required to
+  // differ a little. guidedProgress mirrors the refs into state for the overlay/HUD.
+  const guidedStepRef = useRef(0);
+  const guidedShotsRef = useRef(0);
+  const guidedSigRef = useRef(null);
+  const [guidedProgress, setGuidedProgress] = useState({ step: 0, shots: 0 });
+  const captureModeRef = useRef(captureMode);
+  const resetGuided = () => {
+    guidedStepRef.current = 0; guidedShotsRef.current = 0; guidedSigRef.current = null;
+    setGuidedProgress({ step: 0, shots: 0 });
+    dirStateRef.current = { dir: null, target: null, refDist: Infinity, lastSpeak: 0, arrived: false };
+  };
+  useEffect(() => {
+    captureModeRef.current = captureMode;
+    localStorage.setItem('calib_fisheye_capmode', captureMode);
+    resetGuided();
+  }, [captureMode]);
+
   useEffect(() => {
     setPolarCounts(new Array(totalPolarCells()).fill(0));
     cellTiltsRef.current = Array.from({ length: totalPolarCells() }, () => []);
@@ -268,6 +297,7 @@ export function FisheyeTab({ tweaks }) {
     dwellStartRef.current = 0;
     maxSharpRef.current = 0;
     dirStateRef.current = { dir: null, target: null, refDist: Infinity, lastSpeak: 0, arrived: false };
+    resetGuided();
   }, [datasetPath]);
 
   // Board geometry in a ref so the per-frame handler reads current cols/rows
@@ -349,6 +379,36 @@ export function FisheyeTab({ tweaks }) {
     if (speakIt) { say(dir); st.dir = dir; st.refDist = dist; st.lastSpeak = now; }
   }, [say]);
 
+  // Directional voice for the guided sequence: steer the board toward an explicit
+  // target point (the active step's region), with the same event-driven cadence as
+  // steerVoice — speak on a new direction / drift / stall, stay quiet while closing
+  // in. `stepKey` resets the progress baseline when the active step changes.
+  const guidedSteer = useCallback((curX, curY, target, circle, stepKey) => {
+    const st = dirStateRef.current;
+    if (st.target !== stepKey) { st.target = stepKey; st.dir = null; st.refDist = Infinity; }
+    if (curX == null || !circle || !target) return;
+    const dx = target.x - curX, dy = target.y - curY;
+    const dist = Math.hypot(dx, dy);
+    const curR = Math.hypot(curX - circle.cx, curY - circle.cy);
+    const gR = Math.hypot(target.x - circle.cx, target.y - circle.cy);
+    let dir;
+    if (gR - curR > circle.r * 0.33) dir = 'moveOut';
+    else if (Math.abs(dx) > Math.abs(dy)) {
+      const right = dx > 0;
+      dir = (right !== mirrorRef.current) ? 'moveRight' : 'moveLeft';   // mirror swaps L/R
+    } else dir = dy > 0 ? 'moveDown' : 'moveUp';
+    const now = performance.now();
+    const eps = circle.r * 0.06;
+    const progressed = dist <= st.refDist - eps;
+    const wrongWay = dist >= st.refDist + eps;
+    let speakIt = false;
+    if (dir !== st.dir) speakIt = now - st.lastSpeak > 900;
+    else if (wrongWay) speakIt = now - st.lastSpeak > 1500;
+    else if (!progressed) speakIt = now - st.lastSpeak > 3500;
+    if (progressed) st.refDist = dist;
+    if (speakIt) { say(dir); st.dir = dir; st.refDist = dist; st.lastSpeak = now; }
+  }, [say]);
+
   // Keep the binning circle and live counts in refs so the per-frame auto-capture
   // handler reads the freshest values without being recreated every detection.
   const covCircleRef = useRef(null);
@@ -362,7 +422,7 @@ export function FisheyeTab({ tweaks }) {
   // board actually filled (≥ CAPTURE_MIN_CORNERS corners) are incremented, so
   // coverage reflects deliberate captures — not the live board sweeping past.
   // Uses the freshest live-detection meta (snap returns only a file path).
-  const markCellsFromSnap = useCallback(() => {
+  const markCellsFromSnap = useCallback(({ silent = false } = {}) => {
     const meta = latestMetaRef.current;
     const c = covCircleRef.current;
     if (!meta?.corners?.length || !c) return;
@@ -376,10 +436,13 @@ export function FisheyeTab({ tweaks }) {
     setPolarCounts(prev => {
       const next = prev.map((n, i) => n + (perCell[i] >= CAPTURE_MIN_CORNERS ? 1 : 0));
       // Spoken cues: a short "captured", and "coverage complete" the moment the
-      // last cell crosses from empty to covered.
-      say('captured', 600);
-      const wasFull = prev.every(n => n > 0);
-      if (!wasFull && next.every(n => n > 0)) say('allCovered');
+      // last cell crosses from empty to covered. Guided mode passes silent:true
+      // and drives its own voice cadence (per-step, not per-cell).
+      if (!silent) {
+        say('captured', 600);
+        const wasFull = prev.every(n => n > 0);
+        if (!wasFull && next.every(n => n > 0)) say('allCovered');
+      }
       return next;
     });
   }, [say]);
@@ -420,6 +483,94 @@ export function FisheyeTab({ tweaks }) {
     if (sharp != null) maxSharpRef.current = Math.max(maxSharpRef.current, sharp);
     const sharpOk = sharp == null
       || sharp >= Math.max(SHARP_ABS, maxSharpRef.current * SHARP_REL);
+
+    // ── Guided-sequence branch ────────────────────────────────────────────────
+    // Doc-driven checklist: walk GUIDED_STEPS in order, two shots per action, the
+    // 2nd required to differ a little from the 1st. Region + pose are matched
+    // against the active step; we steer with voice/HUD until both are satisfied,
+    // then dwell-snap. Shares the motion (still) + sharpness (sharpOk) gates above.
+    if (captureModeRef.current === 'guided') {
+      const debouncedG = now - lastAutoSnapRef.current >= Math.max(400, autoRate * 1000);
+      const circleG = covCircleRef.current;
+      const step = GUIDED_STEPS[guidedStepRef.current];
+      if (!step) {                                  // whole sequence finished
+        dwellStartRef.current = 0;
+        setAutoHud({ reason: 'done', dwell: 0, guidedLabel: t('fisheye.guided.done') });
+        return;
+      }
+      const shots = guidedShotsRef.current;
+      const m = analyzeBoard(corners, boardRef.current, circleG);
+      const rOk = regionOk(step, m, circleG);
+      const pOk = poseOk(step, m);
+      const needVary = shots === 1 && !differsEnough(guidedSigRef.current, m, circleG);
+
+      let reason;
+      if (!rOk) reason = 'region';
+      else if (!pOk) reason = 'pose';
+      else if (needVary) reason = 'vary';
+      else if (!sharpOk) reason = 'blurry';
+      else if (!still) reason = 'hold';
+      else reason = 'capturing';
+
+      // Voice steering: position first, then pose. Reuse the Chinese clips.
+      if (!rOk) {
+        guidedSteer(m.centroid?.x, m.centroid?.y, regionTarget(step.region, circleG), circleG, step.id);
+      } else if (!pOk) {
+        say('tiltHint', 4000);
+      }
+
+      const label = t('fisheye.guided.progress', {
+        step: guidedStepRef.current + 1, total: GUIDED_STEPS.length,
+        group: t(`fisheye.guided.groups.${step.group}`),
+        action: t(`fisheye.guided.steps.${step.id}`),
+        shot: shots + 1, shots: step.shots,
+      });
+
+      const readyG = rOk && pOk && !needVary && sharpOk && still && debouncedG && !autoSnapInFlightRef.current;
+      if (!readyG) {
+        if (reason !== 'capturing') dwellStartRef.current = 0;
+        setAutoHud({ reason, dwell: 0, tilt: m.tilt, guidedLabel: label });
+        return;
+      }
+      if (dwellStartRef.current === 0) dwellStartRef.current = now;
+      const heldG = now - dwellStartRef.current;
+      setAutoHud({ reason: 'capturing', dwell: Math.min(1, heldG / DWELL_MS), tilt: m.tilt, guidedLabel: label });
+      if (heldG < DWELL_MS) return;
+
+      autoSnapInFlightRef.current = true;
+      lastAutoSnapRef.current = now;
+      dwellStartRef.current = 0;
+      const sigNow = shotSignature(m);
+      (async () => {
+        try {
+          const r = await api.snap(liveDevice, datasetPath);
+          pushUndo({ kind: 'snap', path: r.path });
+          markCellsFromSnap({ silent: true });   // feed the fallback coverage % silently
+          const newShots = shots + 1;
+          if (newShots >= step.shots) {           // step done → advance
+            guidedShotsRef.current = 0;
+            guidedSigRef.current = null;
+            guidedStepRef.current += 1;
+            const done = guidedStepRef.current >= GUIDED_STEPS.length;
+            say(done ? 'allCovered' : 'captured', 600);
+            setGuidedProgress({ step: guidedStepRef.current, shots: 0 });
+          } else {                                 // banked shot 1 → wait for a varied 2nd
+            guidedShotsRef.current = newShots;
+            guidedSigRef.current = sigNow;
+            say('captured', 600);
+            setGuidedProgress({ step: guidedStepRef.current, shots: newShots });
+          }
+          setStatus(t('common.autoSnapped', { name: r.path.split('/').pop(), cell: guidedStepRef.current }));
+          const files = await refreshDataset();
+          if (files) setSelected(files.length);
+        } catch (e) {
+          setStatus(t('common.autoSnapFailed', { error: e.message }), true);
+        } finally {
+          autoSnapInFlightRef.current = false;
+        }
+      })();
+      return;
+    }
 
     // 3) Novelty: the cell the board centroid sits in is still under-sampled,
     //    AND — once a cell has a capture — the board is at a *fresh tilt*, so we
@@ -495,7 +646,7 @@ export function FisheyeTab({ tweaks }) {
         autoSnapInFlightRef.current = false;
       }
     })();
-  }, [autoCapture, liveDevice, datasetPath, autoRate, say, markCellsFromSnap, steerVoice]);
+  }, [autoCapture, liveDevice, datasetPath, autoRate, say, markCellsFromSnap, steerVoice, guidedSteer, t]);
 
   const onDrop = async () => {
     if (!selectedPath) { setStatus(t('common.noFrameSelected')); return; }
@@ -571,6 +722,24 @@ export function FisheyeTab({ tweaks }) {
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 
+  // Advance the guided checklist by one banked shot. Auto-capture advances inline
+  // in onAutoMeta; this keeps manual (space-bar) snaps in guided mode in sync so
+  // the overlay/HUD step doesn't stall while the user shoots by hand.
+  const advanceGuidedShot = () => {
+    const step = GUIDED_STEPS[guidedStepRef.current];
+    if (!step) return;
+    const m = analyzeBoard(latestMetaRef.current?.corners, boardRef.current, covCircleRef.current);
+    const shots = guidedShotsRef.current;
+    const newShots = shots + 1;
+    if (newShots >= step.shots) {
+      guidedShotsRef.current = 0; guidedSigRef.current = null; guidedStepRef.current += 1;
+      setGuidedProgress({ step: guidedStepRef.current, shots: 0 });
+    } else {
+      guidedShotsRef.current = newShots; guidedSigRef.current = shotSignature(m);
+      setGuidedProgress({ step: guidedStepRef.current, shots: newShots });
+    }
+  };
+
   const onSnap = async () => {
     let dir = datasetPath;
     if (!dir) {
@@ -580,10 +749,12 @@ export function FisheyeTab({ tweaks }) {
       dir = picked;
     }
     if (!liveDevice) { setStatus(t('common.pickCamera'), true); return; }
+    const guided = captureModeRef.current === 'guided';
     try {
       const r = await api.snap(liveDevice, dir);
       pushUndo({ kind: 'snap', path: r.path });
-      markCellsFromSnap();
+      markCellsFromSnap({ silent: guided });
+      if (guided) { advanceGuidedShot(); say('captured', 600); }
       setStatus(t('common.snapped', { name: r.path.split('/').pop() }));
       if (dir === datasetPath) {
         // Refresh the listing but keep the live view in the cell — the user is mid-capture
@@ -738,6 +909,13 @@ export function FisheyeTab({ tweaks }) {
   // clicking "👁 live preview" puts them back to live.
   const showLive = liveDevice && (viewMode === 'live' || datasetFiles.length === 0);
 
+  // Guided overlay descriptor for the live frame: the active step's region + pose
+  // glyph, or {done:true} once the checklist is exhausted. null in polar mode.
+  const guidedStepNow = GUIDED_STEPS[guidedProgress.step];
+  const guidedOverlay = guidedMode
+    ? (guidedStepNow ? { region: guidedStepNow.region, glyph: guidedStepNow.glyph, done: false } : { done: true })
+    : null;
+
   const rawCell = (
     <div className="vp-cell" key="raw">
       <span className="vp-label">
@@ -755,6 +933,7 @@ export function FisheyeTab({ tweaks }) {
                 polarGuidance={coverage.guidance}
                 polarTarget={TARGET_PER_CELL}
                 rings={RINGS} sectors={SECTORS}
+                guided={guidedOverlay}
                 showFootprint={showFootprint}
                 mirror={mirror}/>
           : <LivePreview device={liveDevice} mirror={mirror}/>
@@ -779,6 +958,9 @@ export function FisheyeTab({ tweaks }) {
             padding: '5px 10px', display: 'flex', flexDirection: 'column', gap: 4, minWidth: 140,
             fontFamily: 'JetBrains Mono', fontSize: 11, color, boxShadow: '0 2px 10px rgba(0,0,0,0.4)',
           }}>
+            {autoHud.guidedLabel && (
+              <div style={{ color: 'var(--text)', fontSize: 10.5 }}>{autoHud.guidedLabel}</div>
+            )}
             <div>⦿ {t('fisheye.autoCapture')} · {t(`fisheye.auto_${r}`)}
               {typeof autoHud.tilt === 'number' && <span style={{ color: 'var(--text-3)' }}>  ∠{autoHud.tilt.toFixed(0)}°</span>}
             </div>
@@ -919,7 +1101,10 @@ export function FisheyeTab({ tweaks }) {
           <Chk checked={showBoard} onChange={setShowBoard}>{t('fisheye.board')}</Chk>
           <Chk checked={showResid} onChange={setShowResid}>{t('fisheye.residuals')}</Chk>
           <Chk checked={liveDetect} onChange={setLiveDetect}>{t('fisheye.detectLive')}</Chk>
-          <Chk checked={showPolar} onChange={(v) => { setShowPolar(v); if (v) setLiveDetect(true); }}>{t('fisheye.coverageGrid')}</Chk>
+          <Seg value={captureMode} onChange={(v) => { setCaptureMode(v); setLiveDetect(true); }} options={[
+            {value:'polar',label:t('fisheye.captureModePolar')},
+            {value:'guided',label:t('fisheye.captureModeGuided')},
+          ]}/>
           <Chk checked={showFootprint} onChange={(v) => { setShowFootprint(v); if (v) setLiveDetect(true); }}>{t('fisheye.footprint')}</Chk>
           <Chk checked={mirror} onChange={setMirror}>{t('fisheye.mirror')}</Chk>
           <div className="spacer"/>

@@ -241,6 +241,8 @@
     "detectLive": "实时检测",
     "mirror": "镜像",
     "coverageGrid": "覆盖靶盘",
+    "captureModePolar": "覆盖靶盘",
+    "captureModeGuided": "文档引导",
     "footprint": "检测足迹",
     "autoCapture": "自动采集",
     "auto_noBoard": "未见标定板",
@@ -249,6 +251,30 @@
     "auto_blurry": "太模糊，请稳住",
     "auto_hold": "稳住…",
     "auto_capturing": "采集中…",
+    "auto_region": "移到目标位置",
+    "auto_pose": "调整姿态",
+    "auto_vary": "微调一点再拍",
+    "auto_done": "全部完成",
+    "guided": {
+      "progress": "步骤 {{step}}/{{total}} · {{group}}·{{action}} · 第 {{shot}}/{{shots}} 张",
+      "done": "全部完成，可运行标定",
+      "groups": {
+        "frontal": "正对分区", "edge": "边缘", "tilt": "俯仰", "yaw": "偏摆", "roll": "平面旋转", "dist": "远近"
+      },
+      "steps": {
+        "f_center": "正对·中心", "f_tl": "正对·左上", "f_tr": "正对·右上", "f_bl": "正对·左下", "f_br": "正对·右下",
+        "e_top": "怼上边", "e_bottom": "怼下边", "e_left": "怼左边", "e_right": "怼右边",
+        "t_fwd": "上沿前倒（俯）", "t_back": "上沿后仰（仰）",
+        "y_left": "左侧前转（偏摆）", "y_right": "右侧前转（偏摆）",
+        "r_roll": "平面内旋转（当钟表转角）",
+        "d_near": "拉近占满", "d_far": "推远变小", "d_mid": "中等距离"
+      },
+      "hint": {
+        "frontal": "正对相机、放平", "tilted": "把板倾斜约 30~45°", "roll": "板在平面内转个角度",
+        "near": "靠近相机、占满画面", "far": "远离相机、变小", "mid": "保持中等距离",
+        "region": "移到高亮区域", "vary": "微调一点再拍第二张"
+      }
+    },
     "voiceError": "语音识别错误：{{error}}",
     "noCalibrationYet": "尚未标定",
     "rawDistorted": "原始 · 畸变",
