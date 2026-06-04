@@ -1,6 +1,6 @@
 {
   "name": "calibration-workbench",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "private": true,
   "description": "Camera / fish-eye / hand-eye / chain calibration GUI for VR rigs.",
   "main": "electron/main.js",
