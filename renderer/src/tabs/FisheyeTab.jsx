@@ -453,6 +453,13 @@ export function FisheyeTab({ tweaks }) {
     });
   }, [say]);
 
+  // Cancellation flag for async snap operations to prevent state updates after unmount
+  const snapCancelledRef = useRef(false);
+  useEffect(() => {
+    snapCancelledRef.current = false;
+    return () => { snapCancelledRef.current = true; };
+  }, []);
+
   const onAutoMeta = useCallback((meta) => {
     // Always stash the freshest meta so a manual snap can bin its corners,
     // even when auto-capture is off.
@@ -537,8 +544,8 @@ export function FisheyeTab({ tweaks }) {
         shot: shots + 1, shots: step.shots,
       });
 
-      const readyG = rOk && pOk && !needVary && sharpOk && still && debouncedG && !snapInFlightRef.current;
-      if (!readyG) {
+      const readyG = rOk && pOk && !needVary && sharpOk && still && debouncedG;
+      if (!readyG || snapInFlightRef.current) {
         if (reason !== 'capturing') dwellStartRef.current = 0;
         setAutoHud({ reason, dwell: 0, tilt: m.tilt, guidedLabel: label });
         return;
@@ -548,6 +555,8 @@ export function FisheyeTab({ tweaks }) {
       setAutoHud({ reason: 'capturing', dwell: Math.min(1, heldG / DWELL_MS), tilt: m.tilt, guidedLabel: label });
       if (heldG < DWELL_MS) return;
 
+      // Atomically claim the lock before starting async work
+      if (snapInFlightRef.current) return;  // double-check after dwell
       snapInFlightRef.current = true;
       lastAutoSnapRef.current = now;
       dwellStartRef.current = 0;
@@ -555,6 +564,7 @@ export function FisheyeTab({ tweaks }) {
       (async () => {
         try {
           const r = await api.snap(liveDevice, datasetPath);
+          if (snapCancelledRef.current) return;  // component unmounted
           pushUndo({ kind: 'snap', path: r.path });
           markCellsFromSnap({ silent: true });   // feed the fallback coverage % silently
           const newShots = shots + 1;
@@ -573,8 +583,10 @@ export function FisheyeTab({ tweaks }) {
           }
           setStatus(t('common.autoSnapped', { name: r.path.split('/').pop(), cell: guidedStepRef.current }));
           const files = await refreshDataset();
+          if (snapCancelledRef.current) return;  // check again after async operation
           if (files) setSelected(files.length);
         } catch (e) {
+          if (snapCancelledRef.current) return;
           setStatus(t('common.autoSnapFailed', { error: e.message }), true);
         } finally {
           snapInFlightRef.current = false;
@@ -642,8 +654,8 @@ export function FisheyeTab({ tweaks }) {
       curX: cenX, curY: cenY,
     });
 
-    const ready = novel && sharpOk && still && debounced && !snapInFlightRef.current;
-    if (!ready) {
+    const ready = novel && sharpOk && still && debounced;
+    if (!ready || snapInFlightRef.current) {
       if (reason !== 'capturing') dwellStartRef.current = 0;
       if (reason === 'tilt') say('tiltHint', 4000);
       setAutoHud({ reason, dwell: 0, tilt });
@@ -656,18 +668,23 @@ export function FisheyeTab({ tweaks }) {
     setAutoHud({ reason: 'capturing', dwell: Math.min(1, held / DWELL_MS), tilt });
     if (held < DWELL_MS) return;
 
+    // Atomically claim the lock before starting async work
+    if (snapInFlightRef.current) return;  // double-check after dwell
     snapInFlightRef.current = true;
     lastAutoSnapRef.current = now;
     dwellStartRef.current = 0;
     (async () => {
       try {
         const r = await api.snap(liveDevice, datasetPath);
+        if (snapCancelledRef.current) return;  // component unmounted
         pushUndo({ kind: 'snap', path: r.path });
         markCellsFromSnap();
         setStatus(t('common.autoSnapped', { name: r.path.split('/').pop(), cell: cell ?? 0 }));
         const files = await refreshDataset();
+        if (snapCancelledRef.current) return;  // check again after async operation
         if (files) setSelected(files.length);
       } catch (e) {
+        if (snapCancelledRef.current) return;
         setStatus(t('common.autoSnapFailed', { error: e.message }), true);
       } finally {
         snapInFlightRef.current = false;
@@ -768,6 +785,9 @@ export function FisheyeTab({ tweaks }) {
   };
 
   const onSnap = async () => {
+    // Block manual snap unconditionally if any snap is in flight (guided or polar)
+    if (snapInFlightRef.current) return;
+
     let dir = datasetPath;
     if (!dir) {
       const picked = await pickFolder();
@@ -777,11 +797,12 @@ export function FisheyeTab({ tweaks }) {
     }
     if (!liveDevice) { setStatus(t('common.pickCamera'), true); return; }
     const guided = captureModeRef.current === 'guided';
-    // In guided mode, block manual snap if auto-capture is in flight to prevent race conditions
-    if (guided && snapInFlightRef.current) return;
+
     try {
-      if (guided) snapInFlightRef.current = true;
+      // Always set lock for manual snap to prevent race with auto-capture
+      snapInFlightRef.current = true;
       const r = await api.snap(liveDevice, dir);
+      if (snapCancelledRef.current) return;  // component unmounted
       pushUndo({ kind: 'snap', path: r.path });
       markCellsFromSnap({ silent: guided });
       if (guided) { advanceGuidedShot(); say('captured', 600); }
@@ -793,9 +814,10 @@ export function FisheyeTab({ tweaks }) {
         await refreshDataset();
       }
     } catch (e) {
+      if (snapCancelledRef.current) return;
       setStatus(t('common.snapFailed', { error: e.message }), true);
     } finally {
-      if (guided) snapInFlightRef.current = false;
+      snapInFlightRef.current = false;
     }
   };
   // Keep refs pointed at the latest closures so the global keydown handler
