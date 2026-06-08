@@ -1,12 +1,10 @@
 import { useTranslation } from 'react-i18next';
 import { Field, Seg, Chk } from './primitives.jsx';
-import { voiceSupported } from '../lib/voice.js';
 
 export const TWEAKS_DEFAULTS = {
   theme: 'dark',
   density: 'comfortable',
   accentHue: 295,
-  voiceCommands: false,   // hands-free voice control (browser SpeechRecognition, zh)
   voicePrompts: false,    // spoken cues (Edge-TTS clips, zh)
 };
 
@@ -36,15 +34,9 @@ export function TweaksPanel({ visible, tweaks, setTweaks, onClose }) {
         <div className="tweaks-section-label" style={{ fontSize: 10.5, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '0.05em', marginTop: 8, marginBottom: 2 }}>
           {t('tweaks.voice')}
         </div>
-        <Chk checked={tweaks.voiceCommands} onChange={v => setTweaks({ ...tweaks, voiceCommands: v })}>
-          {t('tweaks.voiceCommands')}
-        </Chk>
         <Chk checked={tweaks.voicePrompts} onChange={v => setTweaks({ ...tweaks, voicePrompts: v })}>
           {t('tweaks.voicePrompts')}
         </Chk>
-        {tweaks.voiceCommands && !voiceSupported() && (
-          <div style={{ fontSize: 10.5, color: 'var(--warn)', marginTop: 2 }}>{t('tweaks.voiceUnsupported')}</div>
-        )}
 
         <div style={{ display: 'flex', gap: 6, marginTop: 4 }}>
           <button className="btn sm block" onClick={() => setTweaks({ ...TWEAKS_DEFAULTS })}>{t('tweaks.reset')}</button>

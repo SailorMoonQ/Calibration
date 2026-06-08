@@ -17,7 +17,7 @@ import {
   GUIDED_STEPS, analyzeBoard, regionTarget, regionOk, poseOk,
   differsEnough, shotSignature,
 } from '../lib/guidedSequence.js';
-import { speak, createVoiceRecognizer } from '../lib/voice.js';
+import { speak } from '../lib/voice.js';
 
 // A snapped board only counts as covering a (polar) cell when at least this many
 // of its corners land in that cell — so a board merely clipping a cell's edge
@@ -131,7 +131,11 @@ export function FisheyeTab({ tweaks }) {
     if (!imgSizeForCov) return null;
     const [w, h] = imgSizeForCov;
     if (!w || !h) return null;
-    return { cx: w / 2, cy: h / 2, r: (Math.min(w, h) / 2) * 1.06 };
+    // 0.98 (not >1): keep the outer ring just inside the inscribed fisheye disk.
+    // Overshooting pushes the outermost cells into the black border, where no real
+    // corner can ever land, so coverage could never reach 100%. Used only until
+    // detectCircleFromImageData lands a measured circle.
+    return { cx: w / 2, cy: h / 2, r: (Math.min(w, h) / 2) * 0.98 };
   }, [circle, imgSizeForCov?.[0], imgSizeForCov?.[1]]);
 
   // Polar coverage. Two sources, picked by phase:
@@ -261,7 +265,7 @@ export function FisheyeTab({ tweaks }) {
   // sharpness + stillness + polar-novelty + a dwell timer, so the board can be
   // swept around hands-free and the app captures the good poses by itself.
   const lastAutoSnapRef = useRef(0);
-  const autoSnapInFlightRef = useRef(false);
+  const snapInFlightRef = useRef(false);  // blocks both auto and manual snap to prevent race conditions
   const prevCornersRef = useRef(null);    // last frame's corners (for motion)
   const lastDetSeqRef = useRef(-1);       // last processed detection seq (skip repaints)
   const dwellStartRef = useRef(0);        // when the current good pose began
@@ -533,7 +537,7 @@ export function FisheyeTab({ tweaks }) {
         shot: shots + 1, shots: step.shots,
       });
 
-      const readyG = rOk && pOk && !needVary && sharpOk && still && debouncedG && !autoSnapInFlightRef.current;
+      const readyG = rOk && pOk && !needVary && sharpOk && still && debouncedG && !snapInFlightRef.current;
       if (!readyG) {
         if (reason !== 'capturing') dwellStartRef.current = 0;
         setAutoHud({ reason, dwell: 0, tilt: m.tilt, guidedLabel: label });
@@ -544,7 +548,7 @@ export function FisheyeTab({ tweaks }) {
       setAutoHud({ reason: 'capturing', dwell: Math.min(1, heldG / DWELL_MS), tilt: m.tilt, guidedLabel: label });
       if (heldG < DWELL_MS) return;
 
-      autoSnapInFlightRef.current = true;
+      snapInFlightRef.current = true;
       lastAutoSnapRef.current = now;
       dwellStartRef.current = 0;
       const sigNow = shotSignature(m);
@@ -573,41 +577,57 @@ export function FisheyeTab({ tweaks }) {
         } catch (e) {
           setStatus(t('common.autoSnapFailed', { error: e.message }), true);
         } finally {
-          autoSnapInFlightRef.current = false;
+          snapInFlightRef.current = false;
         }
       })();
       return;
     }
 
-    // 3) Novelty: the cell the board centroid sits in is still under-sampled,
-    //    AND — once a cell has a capture — the board is at a *fresh tilt*, so we
-    //    accumulate orientation diversity instead of three look-alike poses.
+    // 3) Novelty (corner-binned, to match the coverage tally): bin THIS board's
+    //    corners into the polar cells exactly like markCellsFromSnap, instead of
+    //    keying only on the cell its centroid sits in. A board "怼到边缘" deposits
+    //    corners into an empty outer-ring cell even while its centroid stays
+    //    mid-frame, so corner-in-cell rewards the edge shots that matter most for
+    //    fisheye. The target cell is the emptiest under-sampled cell the board
+    //    actually fills (≥ CAPTURE_MIN_CORNERS corners), tie-broken toward the
+    //    outer rings (higher flat index = outer) — the hardest, most valuable ones.
     const circle = covCircleRef.current;
     let sx = 0, sy = 0;
     for (const c of corners) { sx += c[0]; sy += c[1]; }
-    const cell = circle ? polarCellAt(sx / corners.length, sy / corners.length, circle) : null;
+    const cenX = sx / corners.length, cenY = sy / corners.length;
+    const centroidCell = circle ? polarCellAt(cenX, cenY, circle) : null;
     const counts = polarCountsRef.current;
     const b = boardRef.current;
     const tilt = boardTiltDeg(corners, b.cols, b.rows);
-    const cellCount = cell != null ? (counts[cell] ?? 0) : TARGET_PER_CELL;
-    const tilts = cell != null ? cellTiltsRef.current[cell] : [];
-    // Freshness is judged against the MOST RECENT capture in this cell, not every
-    // prior one. Comparing to all past tilts means that once you've swept the board
-    // through a range of angles, every new angle lands within TILT_MIN_DIFF of *some*
-    // earlier capture and the gate locks up ("换个倾斜角度" forever) even as you tilt
-    // hard. Against just the last shot, an obvious tilt change always reads as fresh.
+    const perCell = circle ? binPolar(corners, circle) : [];
+    let cell = null, cellCount = TARGET_PER_CELL;
+    for (let i = 0; i < perCell.length; i++) {
+      if (perCell[i] < CAPTURE_MIN_CORNERS) continue;
+      const n = counts[i] ?? 0;
+      if (n < TARGET_PER_CELL && (cell == null || n < cellCount || (n === cellCount && i > cell))) {
+        cell = i; cellCount = n;
+      }
+    }
+    // Tilt freshness is tracked against the target cell (or the centroid cell when
+    // the board adds no new coverage). Judged against the MOST RECENT capture in
+    // that cell, not every prior one: comparing to all past tilts means that once
+    // you've swept through a range of angles every new angle lands within
+    // TILT_MIN_DIFF of *some* earlier capture and the gate locks up ("换个倾斜角度"
+    // forever). Against just the last shot, an obvious tilt change reads as fresh.
+    const trackCell = cell != null ? cell : centroidCell;
+    const tilts = trackCell != null ? cellTiltsRef.current[trackCell] : [];
     const lastTilt = tilts.length ? tilts[tilts.length - 1] : null;
     const tiltFresh = tilt == null || lastTilt == null
       || Math.abs(lastTilt - tilt) >= TILT_MIN_DIFF;
-    const underTarget = cell != null && cellCount < TARGET_PER_CELL;
+    const underTarget = cell != null;     // set only when an under-target cell is filled
     const novel = underTarget && (cellCount === 0 || tiltFresh);
 
     // 4) Debounce after a snap, and never overlap an in-flight snap.
     const debounced = now - lastAutoSnapRef.current >= Math.max(400, autoRate * 1000);
 
     let reason;
-    if (cell != null && cellCount >= TARGET_PER_CELL) reason = 'enough';
-    else if (underTarget && !tiltFresh) reason = 'tilt';   // need a different angle here
+    if (cell == null) reason = 'enough';                   // board adds no under-target coverage
+    else if (!tiltFresh) reason = 'tilt';                  // need a different angle here
     else if (!sharpOk) reason = 'blurry';
     else if (!still) reason = 'hold';
     else reason = 'capturing';
@@ -618,11 +638,11 @@ export function FisheyeTab({ tweaks }) {
     // stalled with no progress. While the board is steadily approaching the
     // target we stay silent. Arriving on the target says "就这儿，稳住" once.
     steerVoice({
-      cell, reason, circle,
-      curX: sx / corners.length, curY: sy / corners.length,
+      cell: centroidCell, reason, circle,
+      curX: cenX, curY: cenY,
     });
 
-    const ready = novel && sharpOk && still && debounced && !autoSnapInFlightRef.current;
+    const ready = novel && sharpOk && still && debounced && !snapInFlightRef.current;
     if (!ready) {
       if (reason !== 'capturing') dwellStartRef.current = 0;
       if (reason === 'tilt') say('tiltHint', 4000);
@@ -636,7 +656,7 @@ export function FisheyeTab({ tweaks }) {
     setAutoHud({ reason: 'capturing', dwell: Math.min(1, held / DWELL_MS), tilt });
     if (held < DWELL_MS) return;
 
-    autoSnapInFlightRef.current = true;
+    snapInFlightRef.current = true;
     lastAutoSnapRef.current = now;
     dwellStartRef.current = 0;
     (async () => {
@@ -650,7 +670,7 @@ export function FisheyeTab({ tweaks }) {
       } catch (e) {
         setStatus(t('common.autoSnapFailed', { error: e.message }), true);
       } finally {
-        autoSnapInFlightRef.current = false;
+        snapInFlightRef.current = false;
       }
     })();
   }, [autoCapture, liveDevice, datasetPath, autoRate, say, markCellsFromSnap, steerVoice, guidedSteer, t]);
@@ -757,7 +777,10 @@ export function FisheyeTab({ tweaks }) {
     }
     if (!liveDevice) { setStatus(t('common.pickCamera'), true); return; }
     const guided = captureModeRef.current === 'guided';
+    // In guided mode, block manual snap if auto-capture is in flight to prevent race conditions
+    if (guided && snapInFlightRef.current) return;
     try {
+      if (guided) snapInFlightRef.current = true;
       const r = await api.snap(liveDevice, dir);
       pushUndo({ kind: 'snap', path: r.path });
       markCellsFromSnap({ silent: guided });
@@ -769,7 +792,11 @@ export function FisheyeTab({ tweaks }) {
         // the FrameStrip to inspect a saved frame.
         await refreshDataset();
       }
-    } catch (e) { setStatus(t('common.snapFailed', { error: e.message }), true); }
+    } catch (e) {
+      setStatus(t('common.snapFailed', { error: e.message }), true);
+    } finally {
+      if (guided) snapInFlightRef.current = false;
+    }
   };
   // Keep refs pointed at the latest closures so the global keydown handler
   // always invokes the up-to-date functions (which close over liveDevice / datasetPath).
@@ -777,34 +804,6 @@ export function FisheyeTab({ tweaks }) {
   useEffect(() => { onUndoRef.current = onUndo; });
   useEffect(() => { onDropRef.current = onDrop; });
   useEffect(() => { onRunRef.current = onRun; });
-
-  // Voice commands (browser SpeechRecognition). Active only while the setting is
-  // on and a camera is live. Keywords map to the same actions as the buttons.
-  const voiceCommands = !!tweaks?.voiceCommands;
-  useEffect(() => {
-    if (!voiceCommands || !liveDevice) return;
-    const rec = createVoiceRecognizer({
-      onCommand: (action) => {
-        if (action === 'snap') onSnapRef.current?.();
-        else if (action === 'solve') onRunRef.current?.();
-        else if (action === 'undo') onUndoRef.current?.();
-        else if (action === 'drop') onDropRef.current?.();
-      },
-      onState: (s) => {
-        if (s === 'listening') say('listening', 3000);
-        else if (s.startsWith('error:')) {
-          const err = s.slice(6);
-          // 'no-speech' / 'aborted' fire constantly and are benign — don't nag.
-          if (err !== 'no-speech' && err !== 'aborted') {
-            setStatus(t('fisheye.voiceError', { error: err }), true);
-          }
-        }
-      },
-    });
-    if (!rec.supported) { setStatus(t('tweaks.voiceUnsupported'), true); return; }
-    rec.start();
-    return () => rec.stop();
-  }, [voiceCommands, liveDevice, say, t]);
 
   const onRun = async () => {
     if (!datasetPath) { setStatus(t('common.pickDatasetFolder'), true); return; }
