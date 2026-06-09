@@ -118,8 +118,6 @@ export function boardTiltDeg(corners, cols, rows) {
 // mean. Returns { cx, cy, r } or null when no clear disk is found.
 export function detectCircleFromImageData(data, w, h) {
   if (!data || !w || !h) return null;
-  const cx = w / 2, cy = h / 2;
-  const maxR = Math.min(w, h) * 0.62;            // a bit past the half-height edge
   const STEP = 2, ANG = 64;
   const lum = (x, y) => {
     const xi = x | 0, yi = y | 0;
@@ -127,6 +125,26 @@ export function detectCircleFromImageData(data, w, h) {
     const i = (yi * w + xi) * 4;
     return 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
   };
+
+  // Centre = centroid of the lit disk, not the geometric image centre. The
+  // fisheye image disk is the only bright region (its surround is the lens's
+  // black border), so a luminance-thresholded centroid pins the optical centre —
+  // which matters because the polar rings are drawn around this point and a real
+  // lens's centre is usually offset from w/2,h/2. Falls back to dead-centre only
+  // when the threshold finds nothing usable.
+  const THRESH = 30;
+  let csx = 0, csy = 0, lit = 0;
+  for (let y = 0; y < h; y += STEP) {
+    for (let x = 0; x < w; x += STEP) {
+      if (lum(x, y) >= THRESH) { csx += x; csy += y; lit++; }
+    }
+  }
+  const sampled = Math.ceil(w / STEP) * Math.ceil(h / STEP);
+  if (lit < sampled * 0.05) return null;          // too dark to be a real image
+  const cx = Math.min(w - 1, Math.max(0, csx / lit));
+  const cy = Math.min(h - 1, Math.max(0, csy / lit));
+
+  const maxR = Math.min(w, h) * 0.62;            // a bit past the half-height edge
   const rs = [];
   for (let r = 0; r < maxR; r += STEP) rs.push(r);
   const prof = new Array(rs.length).fill(0);

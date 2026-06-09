@@ -14,8 +14,19 @@
 import { boardTiltDeg } from './polarCoverage.js';
 
 // ── Pose / scale acceptance thresholds (heuristic, no intrinsics needed) ──────
-const TILT_FRONTAL_MAX = 14;   // a "正对" frame must be flatter than this (deg)
-const TILT_MIN = 22;           // a tilt/yaw frame must skew at least this much
+const TILT_FRONTAL_MAX = 8;    // a "正对" frame must be flatter than this (deg)
+// Tilt/yaw acceptance (boardTiltDeg proxy). Kept LOW on purpose. The board is
+// geometrically detectable to ~33° (verified against /tmp/1 saved frames — even
+// the downscaled live pass finds it), so this is NOT a detection ceiling. The
+// limiter is the auto-capture gate: a tilt step needs the pose held STILL +
+// SHARP + continuously detected through the 500ms dwell, and the fast live
+// detector (NORMALIZE only, no EXHAUSTIVE/ACCURACY) drops out intermittently
+// while the board is moving/motion-blurred mid-tilt. At the old 22° an operator
+// had to hold an extreme, blur-prone pose dead still for half a second — never
+// fired, so people fell back to manual snaps. A proxy reading an operator can
+// comfortably SUSTAIN tops out ~13–16°, so accept from 10° (margin below that),
+// and raise back toward ~20° only with a ChArUco board (steadier partial detect).
+const TILT_MIN = 10;           // a tilt/yaw frame must skew at least this much
 const ROLL_MIN = 15;           // an in-plane roll frame must rotate at least this
 const ROLL_FRONTAL_MAX = 12;   // ...while staying roughly fronto-parallel
 // board span / image-circle diameter. On real fisheye captures a board that
