@@ -23,7 +23,14 @@ const TAB_DEFS = [
 export function App() {
   const { t } = useTranslation();
   const [active, setActive] = useState(() => localStorage.getItem('calib_tab') || 'intrinsics');
-  const [tweaks, setTweaks] = useState({ ...TWEAKS_DEFAULTS });
+  const [tweaks, setTweaks] = useState(() => {
+    // Merge stored prefs over defaults so new keys (e.g. voice) appear for
+    // existing users, and a corrupt blob falls back cleanly.
+    try {
+      const saved = JSON.parse(localStorage.getItem('calib_tweaks') || '{}');
+      return { ...TWEAKS_DEFAULTS, ...saved };
+    } catch { return { ...TWEAKS_DEFAULTS }; }
+  });
   const [tweaksVisible, setTweaksVisible] = useState(false);
   // Eye-in-hand vs eye-to-hand is a property of the physical rig, not a per-tab
   // setting — Hand-Eye owns the toggle, Link reads it for its own solver.
@@ -33,6 +40,7 @@ export function App() {
 
   useEffect(() => { localStorage.setItem('calib_tab', active); }, [active]);
   useEffect(() => { localStorage.setItem('calib_handeye_pattern', solvePattern); }, [solvePattern]);
+  useEffect(() => { localStorage.setItem('calib_tweaks', JSON.stringify(tweaks)); }, [tweaks]);
 
   useEffect(() => {
     const root = document.documentElement;
@@ -72,7 +80,7 @@ export function App() {
           onToggleSettings={() => setTweaksVisible(v => !v)}
           onCloseSettings={() => setTweaksVisible(false)}/>
         <Tabs tabs={tabs} value={active} onChange={setActive}/>
-        <ActiveComp solvePattern={solvePattern} setSolvePattern={setSolvePattern}/>
+        <ActiveComp solvePattern={solvePattern} setSolvePattern={setSolvePattern} tweaks={tweaks}/>
         <LogStrip lines={[]}/>
         <ConfirmHost/>
       </div>

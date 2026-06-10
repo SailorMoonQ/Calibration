@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Section, Seg, Field, Chk, KV, NumInput, Spark, Histogram } from './primitives.jsx';
 import { useTelemetry } from '../lib/telemetry.jsx';
+import { polarCellGeometry } from '../lib/polarCoverage.js';
 
 function FrameThumb({ f }) {
   return (
@@ -65,22 +66,87 @@ export function FrameStrip({ frames, selected, onSelect, coverage, okBelow = 0.3
   );
 }
 
-export function CoverageGrid({ cells, w = 110, h = 72 }) {
+// `meanErr` (optional) is the post-solve per-cell mean reprojection error; when
+// present, captured cells are coloured by quality (green/amber/red) against the
+// okBelow/warnBelow thresholds instead of the flat accent tint. During capture
+// (meanErr null) it falls back to the simple captured/empty fill.
+export function CoverageGrid({ cells, meanErr = null, mask = null, okBelow = 0.25, warnBelow = 0.5, w = 110, h = 72 }) {
   const cols = 8, rows = 5;
+  const cellFill = (on, idx) => {
+    // Outside the fisheye FOV — never coverable, so render as N/A, not "missing".
+    if (mask && !mask[idx]) return { fill: 'var(--text-4)', opacity: 0.18, na: true };
+    if (!on) return { fill: 'transparent', opacity: 1 };
+    const e = meanErr?.[idx];
+    if (e == null) return { fill: 'var(--accent)', opacity: 0.45 };
+    const color = e < okBelow ? 'var(--ok)' : e < warnBelow ? 'var(--warn)' : 'var(--err)';
+    return { fill: color, opacity: 0.5 };
+  };
   return (
     <svg width={w} height={h}>
       <rect width={w} height={h} fill="var(--surface-2)" stroke="var(--border-soft)"/>
       {Array.from({length: cols * rows}).map((_, idx) => {
         const i = idx % cols, j = Math.floor(idx / cols);
-        const on = cells[idx];
+        const { fill, opacity, na } = cellFill(cells[idx], idx);
         return (
           <rect key={idx}
                 x={i * w/cols + 1} y={j * h/rows + 1}
                 width={w/cols - 2} height={h/rows - 2}
-                fill={on ? 'var(--accent)' : 'transparent'}
-                opacity={on ? 0.45 : 1}
-                stroke="var(--border)" strokeWidth="0.5"/>
+                fill={fill}
+                opacity={opacity}
+                stroke={na ? 'transparent' : 'var(--border)'} strokeWidth="0.5"/>
         );
+      })}
+    </svg>
+  );
+}
+
+// Polar "dartboard" mini-widget for the fisheye side panel — the small-scale
+// twin of the on-frame overlay. Rings × sectors; captured cells green (or
+// quality-coloured post-solve), the guidance cell amber, empties faint red.
+function wedgePath(cx, cy, r0, r1, a0, a1) {
+  const p = (r, a) => [cx + Math.cos(a) * r, cy + Math.sin(a) * r];
+  const [x1, y1] = p(r1, a0), [x2, y2] = p(r1, a1);
+  const [x3, y3] = p(r0, a1), [x4, y4] = p(r0, a0);
+  return `M ${x1} ${y1} A ${r1} ${r1} 0 0 1 ${x2} ${y2} L ${x3} ${y3} A ${r0} ${r0} 0 0 0 ${x4} ${y4} Z`;
+}
+
+export function PolarCoverageGrid({
+  cells, counts = null, meanErr = null, guidance = null,
+  rings = 3, sectors = 8, okBelow = 0.25, warnBelow = 0.5, size = 78,
+}) {
+  const cx = size / 2, cy = size / 2, r = size / 2 - 1;
+  const geo = polarCellGeometry({ cx, cy, r }, rings, sectors);
+  const fillFor = (idx) => {
+    if (idx === guidance) return { fill: 'var(--warn)', opacity: 0.55 };
+    const on = cells?.[idx];
+    if (!on) return { fill: 'var(--err)', opacity: 0.1 };
+    const e = meanErr?.[idx];
+    if (e != null) {
+      const c = e < okBelow ? 'var(--ok)' : e < warnBelow ? 'var(--warn)' : 'var(--err)';
+      return { fill: c, opacity: 0.55 };
+    }
+    const n = counts ? counts[idx] : 1;
+    return { fill: 'var(--ok)', opacity: Math.min(0.6, 0.28 + (n - 1) * 0.12) };
+  };
+  return (
+    <svg width={size} height={size}>
+      {geo.map(g => {
+        const { fill, opacity } = fillFor(g.index);
+        const d = g.r0 <= 0.001 ? null : wedgePath(cx, cy, g.r0, g.r1, g.a0, g.a1);
+        return g.r0 <= 0.001
+          ? <circle key={g.index} cx={cx} cy={cy} r={g.r1} fill={fill} opacity={opacity}/>
+          : <path key={g.index} d={d} fill={fill} opacity={opacity}/>;
+      })}
+      {/* structure: ring + sector lines */}
+      {Array.from({ length: rings }).map((_, i) => (
+        <circle key={`r${i}`} cx={cx} cy={cy} r={(r * (i + 1)) / rings}
+                fill="none" stroke="var(--border)" strokeWidth="0.5" opacity="0.6"/>
+      ))}
+      {Array.from({ length: sectors }).map((_, s) => {
+        const a = (s / sectors) * Math.PI * 2;
+        return <line key={`s${s}`} x1={cx + Math.cos(a) * r / rings} y1={cy + Math.sin(a) * r / rings}
+                     x2={cx + Math.cos(a) * r} y2={cy + Math.sin(a) * r}
+                     stroke="var(--border)" strokeWidth="0.5" opacity="0.6"/>;
       })}
     </svg>
   );
@@ -170,7 +236,8 @@ export function CaptureControls({
   autoCapture, onAuto,
   autoRate, onAutoRate,
   onSnap, onDrop,
-  coverage, coverageCells,
+  coverage, coverageCells, coverageMeanErr = null, coverageMask = null, okBelow, warnBelow,
+  polar = null,   // when provided, render the fisheye dartboard instead of the cartesian grid
 }) {
   const { t } = useTranslation();
   const rate = typeof autoRate === 'number' ? autoRate : 0.5;
@@ -198,11 +265,17 @@ export function CaptureControls({
         <button className="btn danger" onClick={onDrop} disabled={!onDrop}>{t('panels.dropSelected')}</button>
       </div>
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 4 }}>
-        <CoverageGrid cells={coverageCells}/>
+        {polar
+          ? <PolarCoverageGrid cells={polar.cells} counts={polar.counts} meanErr={polar.meanErr}
+                guidance={polar.guidance} rings={polar.rings} sectors={polar.sectors}
+                okBelow={okBelow} warnBelow={warnBelow}/>
+          : <CoverageGrid cells={coverageCells} meanErr={coverageMeanErr} mask={coverageMask} okBelow={okBelow} warnBelow={warnBelow}/>}
         <div style={{ fontSize: 11, color: 'var(--text-2)', lineHeight: 1.45 }}>
           <div style={{ fontSize: 10.5, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{t('panels.coverage')}</div>
           <div style={{ fontFamily: 'JetBrains Mono', fontSize: 16, fontWeight: 500, color: 'var(--text)' }}>{coverage}%</div>
-          <div style={{ fontSize: 10.5, color: 'var(--text-3)' }}>{t('panels.captureMoreLine1')}<br/>{t('panels.captureMoreLine2')}</div>
+          <div style={{ fontSize: 10.5, color: 'var(--text-3)' }}>
+            {polar && polar.guidance != null ? t('panels.captureGuide') : <>{t('panels.captureMoreLine1')}<br/>{t('panels.captureMoreLine2')}</>}
+          </div>
         </div>
       </div>
     </Section>
