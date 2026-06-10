@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { fetchRectifiedBlob } from '../api/client.js';
 
 export function RectifiedFrame({
@@ -7,7 +8,9 @@ export function RectifiedFrame({
   balance = 0.5, fovScale = 1.0,
   alpha = 0.5,
   method = 'remap',
+  mirror = false,
 }) {
+  const { t } = useTranslation();
   const [url, setUrl] = useState(null);
   const [err, setErr] = useState(null);
 
@@ -49,7 +52,7 @@ export function RectifiedFrame({
         display:'flex', alignItems:'center', justifyContent:'center',
         width:'100%', height:'100%', color:'var(--view-text-2)',
         fontFamily:'JetBrains Mono', fontSize: 11,
-      }}>calibrate to see the rectified view</div>
+      }}>{t('preview.calibrateToRectify')}</div>
     );
   }
   if (!url) {
@@ -58,9 +61,10 @@ export function RectifiedFrame({
         display:'flex', alignItems:'center', justifyContent:'center',
         width:'100%', height:'100%', color:'var(--view-text-2)',
         fontFamily:'JetBrains Mono', fontSize: 11,
-      }}>rectifying…</div>
+      }}>{t('preview.rectifying')}</div>
     );
   }
   return <img src={url} alt="rectified"
-              style={{ width:'100%', height:'100%', objectFit:'contain', display:'block' }}/>;
+              style={{ width:'100%', height:'100%', objectFit:'contain', display:'block',
+                       transform: mirror ? 'scaleX(-1)' : undefined }}/>;
 }

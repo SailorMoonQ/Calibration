@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { rectifiedMjpegUrl } from '../api/client.js';
 
 // Live MJPEG stream undistorted on the backend. <img> handles the multipart frames;
@@ -10,7 +11,9 @@ export function RectifiedLivePreview({
   balance = 0.5, fovScale = 1.0,
   alpha = 0.5,
   method = 'remap', fps = 15, quality = 75,
+  mirror = false,
 }) {
+  const { t } = useTranslation();
   const [url, setUrl] = useState(null);
   const [err, setErr] = useState(null);
   const imgRef = useRef(null);
@@ -50,9 +53,10 @@ export function RectifiedLivePreview({
   );
 
   if (err) return placeholder(err, 'var(--err)');
-  if (!device) return placeholder('pick a camera to rectify');
-  if (!K || !D || !D.length) return placeholder('run calibration to see the rectified view');
-  if (!url) return placeholder('starting…');
+  if (!device) return placeholder(t('preview.pickCameraToRectify'));
+  if (!K || !D || !D.length) return placeholder(t('preview.runCalibrationToRectify'));
+  if (!url) return placeholder(t('preview.starting'));
   return <img ref={imgRef} src={url} alt={`rectified ${device}`}
-              style={{ width:'100%', height:'100%', objectFit:'contain', display:'block' }}/>;
+              style={{ width:'100%', height:'100%', objectFit:'contain', display:'block',
+                       transform: mirror ? 'scaleX(-1)' : undefined }}/>;
 }

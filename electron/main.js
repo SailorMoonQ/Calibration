@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Menu, dialog, ipcMain, shell } = require('electron');
+const { app, BrowserWindow, Menu, dialog, ipcMain, shell, session } = require('electron');
 const path = require('path');
 const { startSidecar, stopSidecar } = require('./sidecar');
 
@@ -8,6 +8,16 @@ let backend = null;
 
 async function createWindow() {
   backend = await startSidecar({ isDev });
+
+  // Voice commands use the browser SpeechRecognition / getUserMedia, which
+  // require microphone permission. The page is loaded over file:// (packaged)
+  // or localhost (dev), so Electron's default handler denies the mic request
+  // and the renderer sees a `not-allowed` error. Grant audio capture here.
+  const grantMic = (permission) => permission === 'media' || permission === 'audioCapture';
+  session.defaultSession.setPermissionRequestHandler((_wc, permission, callback) => {
+    callback(grantMic(permission));
+  });
+  session.defaultSession.setPermissionCheckHandler((_wc, permission) => grantMic(permission));
 
   // Drop the default File / Edit / View / Window / Help bar — the workbench
   // has its own tabs and the boilerplate menu just adds vertical clutter.
@@ -20,9 +30,12 @@ async function createWindow() {
     height: 1000,
     minWidth: 1200,
     minHeight: 760,
-    backgroundColor: '#f4f5f7',
+    backgroundColor: '#0f1216',
     title: 'Calibration Workbench',
     autoHideMenuBar: true,
+    // Frameless: no native OS title bar. The in-app Topbar doubles as the
+    // window drag handle (see .topbar in app.css).
+    frame: false,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -49,6 +62,16 @@ async function createWindow() {
 }
 
 ipcMain.handle('backend:info', () => backend ? { port: backend.port, baseUrl: `http://127.0.0.1:${backend.port}` } : null);
+
+// Window controls for the frameless window — the in-app Topbar buttons drive these.
+ipcMain.handle('window:minimize', () => { mainWindow?.minimize(); });
+ipcMain.handle('window:toggleMaximize', () => {
+  if (!mainWindow) return false;
+  if (mainWindow.isMaximized()) { mainWindow.unmaximize(); return false; }
+  mainWindow.maximize();
+  return true;
+});
+ipcMain.handle('window:close', () => { mainWindow?.close(); });
 
 ipcMain.handle('dialog:pickFolder', async (_evt, defaultPath) => {
   const res = await dialog.showOpenDialog(mainWindow, {

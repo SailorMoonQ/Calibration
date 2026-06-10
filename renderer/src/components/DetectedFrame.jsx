@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { api, frameUrl } from '../api/client.js';
 
 // Cache detection results per (path|board-key) so switching frames is instant on revisit.
@@ -13,7 +14,9 @@ export function DetectedFrame({
   showCorners = true, showOrigin = true, overlay = 'none',
   residuals,                // optional [[x,y,ex,ey],...] — if present, used instead of live detection
   residualScale = 40,
+  mirror = false,           // display-only horizontal flip
 }) {
+  const { t } = useTranslation();
   const [img, setImg] = useState(null);
   const [det, setDet] = useState(null);
   const [err, setErr] = useState(null);
@@ -95,7 +98,8 @@ export function DetectedFrame({
   }, [corners, board.cols, axisLen, showOrigin]);
 
   return (
-    <svg className="fill" viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="xMidYMid meet">
+    <svg className="fill" viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="xMidYMid meet"
+         style={{ transform: mirror ? 'scaleX(-1)' : undefined }}>
       {img && <image href={img} x={0} y={0} width={w} height={h} preserveAspectRatio="none"/>}
       {overlay === 'heatmap' && det && (
         <rect x={0} y={0} width={w} height={h} fill="url(#none)" opacity={0}/>
@@ -130,7 +134,7 @@ export function DetectedFrame({
           <rect x={w * 0.5 - 120} y={h * 0.5 - 18} width={240} height={36} fill="rgba(0,0,0,0.6)" stroke="var(--err)"/>
           <text x={w * 0.5} y={h * 0.5 + 6} fontSize={Math.max(14, Math.round(h / 40))}
                 fontFamily="JetBrains Mono" fill="var(--err)" textAnchor="middle">
-            no board detected
+            {t('preview.noBoardDetected')}
           </text>
         </g>
       )}
@@ -138,7 +142,7 @@ export function DetectedFrame({
         <g>
           <rect x={8} y={h - 32} width={320} height={24} fill="rgba(0,0,0,0.6)" stroke="var(--err)"/>
           <text x={14} y={h - 14} fontSize={Math.max(11, Math.round(h / 60))}
-                fontFamily="JetBrains Mono" fill="var(--err)">detect error: {err}</text>
+                fontFamily="JetBrains Mono" fill="var(--err)">{t('preview.detectError', { error: err })}</text>
         </g>
       )}
     </svg>

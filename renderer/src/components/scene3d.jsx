@@ -1,4 +1,5 @@
 import { useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { project, applyT } from '../lib/math3d.js';
 
 export function Axes3D({ T = null, cam, len = 0.08, label, thick = 2 }) {
@@ -182,6 +183,7 @@ export function RigidLink3D({ a, b, cam, color = "#8a97aa" }) {
 }
 
 export function Scene3D({ w, h, children, defaultYaw = 0.6, defaultPitch = 0.35 }) {
+  const { t } = useTranslation();
   const [yaw, setYaw] = useState(defaultYaw);
   const [pitch, setPitch] = useState(defaultPitch);
   const [scale, setScale] = useState(Math.min(w, h) * 1.5);
@@ -217,7 +219,7 @@ export function Scene3D({ w, h, children, defaultYaw = 0.6, defaultPitch = 0.35 
       <Ground3D cam={cam}/>
       <Axes3D cam={cam} len={0.06} label="world"/>
       {typeof children === 'function' ? children(cam) : children}
-      <text x={10} y={h - 10} fontSize="10" fontFamily="JetBrains Mono" fill="var(--view-text-2)">yaw {(yaw*180/Math.PI).toFixed(0)}° pitch {(pitch*180/Math.PI).toFixed(0)}° · drag to orbit · scroll to zoom</text>
+      <text x={10} y={h - 10} fontSize="10" fontFamily="JetBrains Mono" fill="var(--view-text-2)">yaw {(yaw*180/Math.PI).toFixed(0)}° pitch {(pitch*180/Math.PI).toFixed(0)}° · {t('scene.orbitHint')}</text>
     </svg>
   );
 }

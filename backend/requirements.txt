@@ -1,8 +1,11 @@
+# 运行时依赖
 fastapi>=0.115
 uvicorn[standard]>=0.32
 pydantic>=2.9
 numpy>=1.26,<2
-opencv-contrib-python>=4.10
-scipy>=1.13
+# 非 contrib 即可: 仅用 aruco/charuco, 自 OpenCV 4.7 已并入主仓库 objdetect。
+opencv-python>=4.10
 ruamel.yaml>=0.18
+# 构建/测试用 (运行时后端不 import scipy, 仅 test_pico_pose 用到)
+scipy>=1.13
 pyinstaller>=6.11

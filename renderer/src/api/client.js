@@ -101,10 +101,12 @@ export const api = {
   detectFile: (body) => request('/detect/file', { method: 'POST', body: JSON.stringify(body) }),
   listDataset: (path) => request(`/dataset/list?path=${encodeURIComponent(path)}`),
   deleteFrame: (path) => request('/dataset/delete', { method: 'POST', body: JSON.stringify({ path }) }),
+  clearDataset: (path) => request('/dataset/clear', { method: 'POST', body: JSON.stringify({ path }) }),
   restoreFrame: (trash_path, original_path) => request('/dataset/restore', {
     method: 'POST', body: JSON.stringify({ trash_path, original_path }),
   }),
   saveCalibration: (body) => request('/calibration/save', { method: 'POST', body: JSON.stringify(body) }),
+  exportCameraIntrix: (body) => request('/calibration/export_camera_intrix', { method: 'POST', body: JSON.stringify(body) }),
   loadCalibration: (path) => request('/calibration/load', { method: 'POST', body: JSON.stringify({ path }) }),
 };
 

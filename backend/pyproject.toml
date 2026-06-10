@@ -7,9 +7,10 @@ dependencies = [
   "fastapi>=0.115",
   "uvicorn[standard]>=0.32",
   "pydantic>=2.9",
-  "numpy>=1.26",
-  "opencv-contrib-python>=4.10",
-  "scipy>=1.13",
+  # numpy<2 强制: ROS2 cv_bridge 与 numpy 2.x 同载会段错误。
+  "numpy>=1.26,<2",
+  # 非 contrib 即可: 仅用 aruco/charuco, 自 OpenCV 4.7 已并入主仓库 objdetect。
+  "opencv-python>=4.10",
   "ruamel.yaml>=0.18",
 ]
 
@@ -18,6 +19,8 @@ dev = [
   "pyinstaller>=6.11",
   "pytest>=8.3",
   "httpx>=0.27",
+  # scipy 仅测试 (test_pico_pose) 用到, 运行时后端不 import, 故归 dev。
+  "scipy>=1.13",
   "mcap_protobuf_support>=0.5",
   "foxglove-schemas-protobuf>=0.3",
   "ruff>=0.15",

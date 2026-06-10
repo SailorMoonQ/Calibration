@@ -547,6 +547,13 @@ docs/precision/
 
 # Claude
 .claude/
+CLAUDE.md
+
+# Local media and doc assets (not versioned)
+media/
+docs/*.jpg
+docs/*.png
+docs/*.html
 
 # Electron-builder resources (icons, installer assets) — overrides the generic
 # build/ rule from the ROS2 template above.

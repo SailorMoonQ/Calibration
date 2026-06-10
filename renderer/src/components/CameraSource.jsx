@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Section, Seg, Field } from './primitives.jsx';
 import { Ros2TopicPicker } from './Ros2TopicPicker.jsx';
 import { SizeInput } from './SizeInput.jsx';
@@ -72,6 +73,7 @@ export function useCameraSource({ pollEnabled = true } = {}) {
 }
 
 export function CameraSourcePanel({ source, onLivePreview }) {
+  const { t } = useTranslation();
   const {
     sourceMode, setSourceMode,
     devices, liveDevice, setLiveDevice,
@@ -89,61 +91,61 @@ export function CameraSourcePanel({ source, onLivePreview }) {
 
   return (
     <Section
-      title="Source"
+      title={t('cameraSource.title')}
       hint={sourceMode === 'live'
         ? (streamInfo?.open
             ? `${streamInfo.width}×${streamInfo.height} · ${streamInfo.capture_fps?.toFixed(1) ?? '—'} fps`
-            : (liveDevice || 'no device'))
-        : (ros2Topic || 'no topic')
+            : (liveDevice || t('cameraSource.noDevice')))
+        : (ros2Topic || t('cameraSource.noTopic'))
       }
       right={<Seg value={sourceMode} onChange={onModeChange} options={[
-        { value: 'live', label: 'live' },
-        { value: 'ros2', label: 'ros2' },
+        { value: 'live', label: t('cameraSource.live') },
+        { value: 'ros2', label: t('cameraSource.ros2') },
       ]}/>}
     >
       {sourceMode === 'live' ? (
         <>
-          <Field label="device">
+          <Field label={t('cameraSource.device')}>
             <select className="select" value={liveDevice} onChange={e => setLiveDevice(e.target.value)}>
-              <option value="">— none —</option>
+              <option value="">{t('common.none')}</option>
               {devices.map(d => <option key={d.device} value={d.device}>{d.label}</option>)}
             </select>
           </Field>
           {streamInfo?.open && (
             <div className="mono" style={{ fontSize: 11, color:'var(--text-3)', display:'grid', gridTemplateColumns:'auto 1fr', columnGap: 8, rowGap: 2, alignItems:'center' }}>
-              <span>resolution</span>
+              <span>{t('cameraSource.resolution')}</span>
               <SizeInput
                 value={[streamInfo.raw_width || streamInfo.width, streamInfo.raw_height || streamInfo.height]}
                 options={availableResolutions}
                 listId={`resopts-${liveDevice}`}
-                title="press Enter to apply — camera restarts at the new size"
+                title={t('cameraSource.resolutionTitle')}
                 onCommit={(w, h) => api.setStreamResolution(liveDevice, w, h).then(setStreamInfo)}
               />
-              <span>clip</span>
+              <span>{t('cameraSource.clip')}</span>
               <SizeInput
                 value={(streamInfo.clip_width && streamInfo.clip_height)
                   ? [streamInfo.clip_width, streamInfo.clip_height]
                   : null}
                 allowOff
-                title='post-grab clip target — type "off" to disable, WxH to enable'
+                title={t('cameraSource.clipTitle')}
                 onCommit={(w, h) => api.setStreamClip(liveDevice, w, h).then(setStreamInfo)}
               />
               {streamInfo.clipped && (
                 <>
-                  <span>effective</span>
+                  <span>{t('cameraSource.effective')}</span>
                   <span style={{ color:'var(--text-3)' }}>
                     {streamInfo.width} × {streamInfo.height}
-                    <span style={{ color:'var(--warn)', marginLeft: 6 }}>· clipped</span>
+                    <span style={{ color:'var(--warn)', marginLeft: 6 }}>{t('cameraSource.clipped')}</span>
                   </span>
                 </>
               )}
-              <span>fps (measured)</span><span style={{ color:'var(--text-1)' }}>{streamInfo.capture_fps?.toFixed(2) ?? '—'}</span>
-              <span>fps (advertised)</span><span style={{ color:'var(--text-1)' }}>{streamInfo.fps_advertised?.toFixed(0) ?? '—'}</span>
+              <span>{t('cameraSource.fpsMeasured')}</span><span style={{ color:'var(--text-1)' }}>{streamInfo.capture_fps?.toFixed(2) ?? '—'}</span>
+              <span>{t('cameraSource.fpsAdvertised')}</span><span style={{ color:'var(--text-1)' }}>{streamInfo.fps_advertised?.toFixed(0) ?? '—'}</span>
             </div>
           )}
           <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:6 }}>
-            <button className="btn" onClick={onLivePreview}>👁 live preview</button>
-            <button className="btn ghost" onClick={rescanDevices}>↻ rescan</button>
+            <button className="btn" onClick={onLivePreview}>{t('cameraSource.livePreview')}</button>
+            <button className="btn ghost" onClick={rescanDevices}>{t('cameraSource.rescan')}</button>
           </div>
         </>
       ) : (
@@ -153,12 +155,12 @@ export function CameraSourcePanel({ source, onLivePreview }) {
             onTopic={(t) => { setRos2Topic(t); setLiveDevice(t ? 'ros2:' + t : ''); }}/>
           {streamInfo?.open && (
             <div className="mono" style={{ fontSize: 11, color:'var(--text-3)', display:'grid', gridTemplateColumns:'auto 1fr', columnGap: 8, rowGap: 2 }}>
-              <span>resolution</span><span style={{ color:'var(--text-1)' }}>{streamInfo.width} × {streamInfo.height}</span>
-              <span>fps (measured)</span><span style={{ color:'var(--text-1)' }}>{streamInfo.capture_fps?.toFixed(2) ?? '—'}</span>
+              <span>{t('cameraSource.resolution')}</span><span style={{ color:'var(--text-1)' }}>{streamInfo.width} × {streamInfo.height}</span>
+              <span>{t('cameraSource.fpsMeasured')}</span><span style={{ color:'var(--text-1)' }}>{streamInfo.capture_fps?.toFixed(2) ?? '—'}</span>
             </div>
           )}
           <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:6 }}>
-            <button className="btn" onClick={onLivePreview}>👁 live preview</button>
+            <button className="btn" onClick={onLivePreview}>{t('cameraSource.livePreview')}</button>
             <div/>
           </div>
         </>

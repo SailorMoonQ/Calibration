@@ -1,6 +1,158 @@
 import { useEffect, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { streamWsUrl } from '../api/client.js';
 import { useReportCamera } from '../lib/telemetry.jsx';
+import { detectCircleFromImageData, polarCellGeometry, polarCellAt } from '../lib/polarCoverage.js';
+import { regionTarget, boardScale } from '../lib/guidedSequence.js';
+
+// Draw the pose-hint glyph for the guided sequence at (x,y), sized to ~r. The
+// shape tells the operator what ORIENTATION the board should be at for this step
+// (the highlighted zone already says WHERE). Drawn in amber to match the target.
+function drawGuidedGlyph(ctx, x, y, r, glyph, unit, phase = 0) {
+  const s = Math.max(r * 0.5, unit * 6) * (1 + 0.12 * Math.sin(phase * 4));
+  ctx.save();
+  ctx.strokeStyle = 'oklch(0.92 0.18 90 / 0.95)';
+  ctx.fillStyle = 'oklch(0.92 0.18 90 / 0.95)';
+  ctx.lineWidth = Math.max(2, unit * 0.6);
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  const arrow = (x0, y0, x1, y1) => {
+    ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(x1, y1); ctx.stroke();
+    const a = Math.atan2(y1 - y0, x1 - x0), h = Math.max(5, unit * 2.2);
+    ctx.beginPath(); ctx.moveTo(x1, y1);
+    ctx.lineTo(x1 - h * Math.cos(a - 0.5), y1 - h * Math.sin(a - 0.5));
+    ctx.moveTo(x1, y1);
+    ctx.lineTo(x1 - h * Math.cos(a + 0.5), y1 - h * Math.sin(a + 0.5));
+    ctx.stroke();
+  };
+  switch (glyph) {
+    case 'tiltV':                       // pitch — vertical double arrow
+      arrow(x, y, x, y - s * 0.5); arrow(x, y, x, y + s * 0.5); break;
+    case 'tiltH':                       // yaw — horizontal double arrow
+      arrow(x, y, x - s * 0.5, y); arrow(x, y, x + s * 0.5, y); break;
+    case 'roll': {                      // in-plane roll — rotation arc + arrowhead
+      ctx.beginPath(); ctx.arc(x, y, s * 0.45, -Math.PI * 0.75, Math.PI * 0.5); ctx.stroke();
+      const ex = x + Math.cos(Math.PI * 0.5) * s * 0.45, ey = y + Math.sin(Math.PI * 0.5) * s * 0.45;
+      const h = Math.max(5, unit * 2.2);
+      ctx.beginPath(); ctx.moveTo(ex, ey);
+      ctx.lineTo(ex - h * 0.2, ey - h); ctx.moveTo(ex, ey); ctx.lineTo(ex + h, ey - h * 0.2); ctx.stroke();
+      break;
+    }
+    case 'near':                        // move closer — arrows pointing out
+      arrow(x, y, x - s * 0.5, y - s * 0.5); arrow(x, y, x + s * 0.5, y + s * 0.5); break;
+    case 'far':                         // pull back — arrows pointing in
+      arrow(x - s * 0.5, y - s * 0.5, x - unit * 2, y - unit * 2);
+      arrow(x + s * 0.5, y + s * 0.5, x + unit * 2, y + unit * 2); break;
+    case 'mid':                         // medium — equals sign
+      ctx.beginPath(); ctx.moveTo(x - s * 0.3, y - unit * 2); ctx.lineTo(x + s * 0.3, y - unit * 2);
+      ctx.moveTo(x - s * 0.3, y + unit * 2); ctx.lineTo(x + s * 0.3, y + unit * 2); ctx.stroke(); break;
+    case 'frontal':                     // face on — crosshair
+    default:
+      ctx.beginPath(); ctx.moveTo(x - s * 0.4, y); ctx.lineTo(x + s * 0.4, y);
+      ctx.moveTo(x, y - s * 0.4); ctx.lineTo(x, y + s * 0.4); ctx.stroke(); break;
+  }
+  ctx.restore();
+}
+
+// Recommended on-screen half-size of the target board, as a fraction of the image
+// circle radius — bigger for centre/near, smaller for edges/far (docs §3: a centred
+// board should fill ~1/3–1/2 of the frame, edge boards may be smaller). Aspect ≈ the
+// real board's cols:rows so the operator matches shape, not just position.
+function targetHalfSize(step, circle, bCols, bRows) {
+  const r = circle.r;
+  let frac;
+  if (step.pose === 'dist') frac = step.scale === 'near' ? 0.5 : step.scale === 'far' ? 0.27 : 0.38;
+  else if (step.group === 'edge') frac = 0.27;
+  else if (step.region === 'center') frac = 0.42;
+  else frac = 0.34;
+  const halfW = frac * r;
+  return { halfW, halfH: halfW * (bRows / Math.max(1, bCols)) };
+}
+
+// Stroke a closed polyline twice — a dark underlay then the colour on top — so a
+// thin bright overlay line stays legible over both the white board and dark scene.
+function strokeQuadContrast(ctx, pts, color, unit) {
+  const path = () => {
+    ctx.beginPath();
+    ctx.moveTo(pts[0][0], pts[0][1]);
+    for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]);
+    ctx.closePath();
+  };
+  ctx.lineJoin = 'round';
+  ctx.strokeStyle = 'oklch(0.2 0 0 / 0.5)'; ctx.lineWidth = Math.max(4, unit * 1.4); path(); ctx.stroke();
+  ctx.strokeStyle = color; ctx.lineWidth = Math.max(2.2, unit * 0.7); path(); ctx.stroke();
+}
+
+// The live board's own outline (its four outer corners), in `color`.
+function drawBoardQuad(ctx, quad, color, unit) {
+  ctx.save();
+  strokeQuadContrast(ctx, quad, color, unit);
+  ctx.restore();
+}
+
+// The animated target: a board-aspect rectangle that DEFORMS to show the wanted
+// motion — a trapezoid that tips for pitch/yaw, a box that rocks for roll, a box
+// that breathes in/out for near/far — so the overlay demonstrates the move rather
+// than freezing a static outline. `phase` is seconds (performance.now()/1000).
+function drawTargetBoard(ctx, cx, cy, halfW, halfH, step, unit, phase) {
+  const osc = Math.sin(phase * 2.2);             // slow rock for tilt/roll
+  let hw = halfW, hh = halfH;
+  if (step.pose === 'dist') {                    // near/far/mid → gentle breathing
+    const b = 1 + 0.06 * Math.sin(phase * (step.scale === 'near' ? 3 : 2.2));
+    hw *= b; hh *= b;
+  }
+  let pts;
+  if (step.glyph === 'tiltV') {                  // pitch: top edge narrows/widens
+    const k = 0.45 + 0.22 * (0.5 + 0.5 * osc);
+    pts = [[-hw * k, -hh], [hw * k, -hh], [hw, hh], [-hw, hh]];
+  } else if (step.glyph === 'tiltH') {           // yaw: left edge narrows/widens
+    const k = 0.45 + 0.22 * (0.5 + 0.5 * osc);
+    pts = [[-hw, -hh * k], [hw, -hh], [hw, hh], [-hw, hh * k]];
+  } else {
+    pts = [[-hw, -hh], [hw, -hh], [hw, hh], [-hw, hh]];
+  }
+  ctx.save();
+  ctx.translate(cx, cy);
+  if (step.pose === 'roll') ctx.rotate(0.5 * osc);   // ±~28° rock
+  ctx.beginPath();
+  ctx.moveTo(pts[0][0], pts[0][1]);
+  for (let i = 1; i < 4; i++) ctx.lineTo(pts[i][0], pts[i][1]);
+  ctx.closePath();
+  ctx.fillStyle = 'oklch(0.85 0.18 90 / 0.10)'; ctx.fill();
+  strokeQuadContrast(ctx, pts, 'oklch(0.9 0.18 90 / 0.95)', unit);
+  ctx.restore();
+}
+
+// A marching, pulsing arrow from (fx,fy) → (tx,ty) — the "move the board this way"
+// cue, complementing the spoken steering. Amber over a dark underlay; dashes march
+// toward the target and the head pulses. Hidden once the board is on the target.
+function drawSteerArrow(ctx, fx, fy, tx, ty, unit, phase) {
+  const dx = tx - fx, dy = ty - fy;
+  const dist = Math.hypot(dx, dy);
+  if (dist < unit * 8) return;
+  const ux = dx / dist, uy = dy / dist;
+  const sx = fx + ux * unit * 3, sy = fy + uy * unit * 3;
+  const ex = tx - ux * unit * 4, ey = ty - uy * unit * 4;
+  ctx.save();
+  ctx.lineCap = 'round';
+  ctx.setLineDash([unit * 2.6, unit * 2.6]);
+  ctx.lineDashOffset = -phase * unit * 9;
+  ctx.strokeStyle = 'oklch(0.2 0 0 / 0.5)'; ctx.lineWidth = Math.max(4, unit * 1.5);
+  ctx.beginPath(); ctx.moveTo(sx, sy); ctx.lineTo(ex, ey); ctx.stroke();
+  ctx.strokeStyle = 'oklch(0.9 0.18 90 / 0.95)'; ctx.lineWidth = Math.max(2.4, unit * 0.85);
+  ctx.beginPath(); ctx.moveTo(sx, sy); ctx.lineTo(ex, ey); ctx.stroke();
+  ctx.setLineDash([]);
+  const h = Math.max(7, unit * 3) * (1 + 0.18 * Math.sin(phase * 6));
+  const a = Math.atan2(uy, ux);
+  const bx = tx - ux * unit * 1.5, by = ty - uy * unit * 1.5;
+  ctx.fillStyle = 'oklch(0.92 0.18 90 / 0.97)';
+  ctx.beginPath();
+  ctx.moveTo(bx, by);
+  ctx.lineTo(bx - h * Math.cos(a - 0.5), by - h * Math.sin(a - 0.5));
+  ctx.lineTo(bx - h * Math.cos(a + 0.5), by - h * Math.sin(a + 0.5));
+  ctx.closePath(); ctx.fill();
+  ctx.restore();
+}
 
 // JPEG-per-message WebSocket → canvas via createImageBitmap. Same plumbing as
 // LivePreview, plus we draw corner markers and the board origin axes on top of
@@ -22,12 +174,42 @@ function parseFrame(buf) {
 
 const CORNER_COLOR = 'oklch(0.75 0.17 40)';
 
+// Detection-footprint heat is accumulated on a finer grid than the coverage
+// cells so the "where can this lens actually be detected" region reads as a
+// smooth blob rather than 8×5 blocks.
+const FP_COLS = 40, FP_ROWS = 25;
+
 export function LiveDetectedFrame({
   device, board,
-  fps = 10, quality = 70, detect = true,
+  // Detection runs decoupled on the backend, so the preview can request a high
+  // frame rate without the slow board detector throttling the video. The overlay
+  // corners update at detection rate (≈10/s); the pixels stream at this rate.
+  fps = 24, quality = 70, detect = true,
   showCorners = true, showOrigin = true,
   onMeta,                 // optional: called each frame with the parsed meta
+  // Coverage overlay drawn directly on the frame (image-pixel coords, so it
+  // stays aligned through object-fit letterboxing):
+  coverageCells = null,   // bool[covCols*covRows] — which cells are already captured
+  coverageCounts = null,  // int[]  — how many captures landed in each cell (depth of green)
+  fovMask = null,         // bool[] — false = cell outside fisheye FOV (drawn N/A, not red)
+  covCols = 8, covRows = 5,
+  showCoverageGrid = false,
+  showFootprint = false,  // accumulate + draw the detection-reachable heat
+  // Polar ("dartboard") coverage for circular fisheye — rings × sectors over the
+  // auto-detected image circle. Only the fisheye tab passes these.
+  showPolarGrid = false,
+  polarCells = null,      // bool[]  — captured polar cells
+  polarCounts = null,     // int[]   — captures per polar cell (depth of green)
+  polarGuidance = null,   // int|null — cell index to steer the board toward next
+  polarTarget = 5,        // captures-per-cell that counts as "采够" → persistent deep green
+  rings = 3, sectors = 8,
+  // Guided-sequence overlay (doc-driven mode): { region, glyph, done } for the
+  // active checklist step, or null in polar mode. Shares the image-circle detection.
+  guided = null,
+  onCircle,               // optional: called with {cx,cy,r} when the circle is detected
+  mirror = false,         // display-only horizontal flip (does not affect saved frames)
 }) {
+  const { t } = useTranslation();
   const [meta, setMeta] = useState(null);
   const [err, setErr] = useState(null);
   const [capFps, setCapFps] = useState(null);
@@ -42,6 +224,28 @@ export function LiveDetectedFrame({
   const onMetaRef = useRef(onMeta);
   useEffect(() => { onMetaRef.current = onMeta; }, [onMeta]);
 
+  // Overlay config in a ref so the draw closure (set up once per stream) always
+  // reads the freshest toggles/cells without re-binding the websocket.
+  const covRef = useRef(null);
+  useEffect(() => {
+    covRef.current = {
+      cells: coverageCells, counts: coverageCounts, fovMask,
+      cols: covCols, rows: covRows, showGrid: showCoverageGrid, showFootprint,
+      showPolar: showPolarGrid, polarCells, polarCounts, polarGuidance, target: polarTarget, rings, sectors,
+      guided,
+    };
+  }, [coverageCells, coverageCounts, fovMask, covCols, covRows, showCoverageGrid, showFootprint,
+      showPolarGrid, polarCells, polarCounts, polarGuidance, polarTarget, rings, sectors, guided]);
+  // Persistent detection-footprint accumulator (reset when the stream restarts).
+  const footprintRef = useRef(new Float32Array(FP_COLS * FP_ROWS));
+  // det_seq of the last detection already folded into the footprint, so the same
+  // detection repainted across several video frames is accumulated only ONCE.
+  const fpDetSeqRef = useRef(-1);
+  // Cached fisheye image circle ({circle,at,sizeKey}); detection is throttled.
+  const circleRef = useRef(null);
+  const onCircleRef = useRef(onCircle);
+  useEffect(() => { onCircleRef.current = onCircle; }, [onCircle]);
+
   // board key for effect deps
   const bType  = board?.type ?? 'chess';
   const bCols  = board?.cols ?? 9;
@@ -55,6 +259,9 @@ export function LiveDetectedFrame({
     let pending = null;          // { bitmap, meta } awaiting paint
     let rafId = null;
     tickRef.current = { recent: [], last: 0 };
+    footprintRef.current = new Float32Array(FP_COLS * FP_ROWS);
+    fpDetSeqRef.current = -1;
+    circleRef.current = null;
 
     // Resolve theme colors once; canvas can't read CSS variables directly.
     // We re-read on each draw via getComputedStyle so the live preview tracks
@@ -84,8 +291,290 @@ export function LiveDetectedFrame({
       next.bitmap.close();
 
       const corners = next.meta.corners ?? [];
-      if (!corners.length) return;
       const cornerR = Math.max(2, Math.round(Math.min(w, h) / 300));
+      const cov = covRef.current;
+      const phase = performance.now() / 1000;   // animation clock for the live hints
+
+      // ── Auto-detect the fisheye image circle (throttled, from the clean frame
+      // BEFORE any overlay is painted) ──────────────────────────────────────
+      if (cov?.showPolar || cov?.guided) {
+        const sizeKey = `${w}x${h}`;
+        const now = performance.now();
+        let cc = circleRef.current;
+        const needDetect = !cc || cc.sizeKey !== sizeKey
+          || (cc.circle == null && now - cc.at > 1200);   // keep retrying until found
+        if (needDetect) {
+          let circle = null;
+          try {
+            const img = ctx.getImageData(0, 0, w, h);
+            circle = detectCircleFromImageData(img.data, w, h);
+          } catch { /* tainted/again later */ }
+          cc = { circle, at: now, sizeKey };
+          circleRef.current = cc;
+          if (circle && onCircleRef.current) {
+            try { onCircleRef.current(circle); } catch { /* swallow */ }
+          }
+        }
+      }
+
+      // ── Detection-footprint heat ──────────────────────────────────────────
+      // Every detected corner bumps its fine-grid cell; the accumulated field is
+      // painted as a green wash. Regions the lens can never resolve a corner in
+      // (typically the fisheye periphery) stay dark — that's the answer to
+      // "which areas can actually be scanned".
+      if (cov?.showFootprint) {
+        const fp = footprintRef.current;
+        // Accumulate ONLY on a fresh detection (det_seq changed). Otherwise the
+        // same corners repainted across the 22 fps video would bump the heat several
+        // times per real detection and the footprint greens far too fast.
+        const dseq = next.meta.det_seq;
+        if (dseq == null || dseq !== fpDetSeqRef.current) {
+          fpDetSeqRef.current = dseq ?? fpDetSeqRef.current;
+          for (const [x, y] of corners) {
+            const ci = Math.min(FP_COLS - 1, Math.max(0, Math.floor((x / w) * FP_COLS)));
+            const ri = Math.min(FP_ROWS - 1, Math.max(0, Math.floor((y / h) * FP_ROWS)));
+            const k = ri * FP_COLS + ci;
+            fp[k] = Math.min(1, fp[k] + 0.2);
+          }
+        }
+        const cw = w / FP_COLS, ch = h / FP_ROWS;
+        for (let k = 0; k < fp.length; k++) {
+          const v = fp[k];
+          if (v <= 0.02) continue;
+          const ci = k % FP_COLS, ri = (k / FP_COLS) | 0;
+          ctx.fillStyle = `oklch(0.72 0.15 165 / ${(0.05 + v * 0.3).toFixed(3)})`;
+          ctx.fillRect(ci * cw, ri * ch, cw + 0.5, ch + 0.5);
+        }
+      }
+
+      // ── Coverage grid ─────────────────────────────────────────────────────
+      // Per cell:
+      //   • outside FOV (fisheye corners) → dim diagonal hatch, "N/A", not red.
+      //   • captured → green, deepening with the number of captures.
+      //   • coverable but empty → red outline.
+      //   • the cell the live board currently sits in → amber pulse.
+      // The FOV ellipse is outlined so the user sees exactly which region counts.
+      if (cov?.showGrid && cov.cells) {
+        const cols = cov.cols, rows = cov.rows;
+        const mask = cov.fovMask;
+        const counts = cov.counts;
+        const gw = w / cols, gh = h / rows;
+
+        // The live board's current cell — but only flag it when the board
+        // genuinely fills a cell (a clear majority of corners), so just sweeping
+        // the board across the frame doesn't imply coverage.
+        let curCell = -1;
+        if (corners.length) {
+          const per = new Array(cols * rows).fill(0);
+          for (const [x, y] of corners) {
+            const ci = Math.min(cols - 1, Math.max(0, Math.floor((x / w) * cols)));
+            const ri = Math.min(rows - 1, Math.max(0, Math.floor((y / h) * rows)));
+            per[ri * cols + ci] += 1;
+          }
+          let best = -1, bestN = 0;
+          for (let k = 0; k < per.length; k++) if (per[k] > bestN) { bestN = per[k]; best = k; }
+          if (bestN >= 3) curCell = best;
+        }
+
+        ctx.lineWidth = Math.max(1, cornerR * 0.25);
+        for (let k = 0; k < cols * rows; k++) {
+          const ci = k % cols, ri = (k / cols) | 0;
+          const x0 = ci * gw, y0 = ri * gh;
+          const inFov = !mask || mask[k];
+          if (!inFov) {
+            // N/A cell: faint hatch so it reads as "not applicable", not "missing".
+            ctx.fillStyle = 'oklch(0.5 0 0 / 0.28)';
+            ctx.fillRect(x0, y0, gw, gh);
+            ctx.strokeStyle = 'oklch(0.6 0 0 / 0.25)';
+            ctx.beginPath();
+            for (let d = -gh; d < gw; d += Math.max(6, gw / 6)) {
+              ctx.moveTo(x0 + Math.max(0, d), y0 + Math.max(0, -d));
+              ctx.lineTo(x0 + Math.min(gw, d + gh), y0 + Math.min(gh, gh - d));
+            }
+            ctx.stroke();
+            ctx.strokeStyle = 'oklch(0.6 0 0 / 0.3)';
+            ctx.strokeRect(x0 + 0.5, y0 + 0.5, gw - 1, gh - 1);
+            continue;
+          }
+          const on = cov.cells[k];
+          if (on) {
+            const n = counts ? counts[k] : 1;
+            const a = Math.min(0.42, 0.16 + (n - 1) * 0.1);   // deeper green with more captures
+            ctx.fillStyle = `oklch(0.72 0.16 150 / ${a.toFixed(3)})`;
+            ctx.fillRect(x0, y0, gw, gh);
+          }
+          ctx.strokeStyle = on ? 'oklch(0.78 0.15 150 / 0.55)' : 'oklch(0.7 0.13 30 / 0.4)';
+          ctx.strokeRect(x0 + 0.5, y0 + 0.5, gw - 1, gh - 1);
+        }
+        if (curCell >= 0) {
+          const ci = curCell % cols, ri = (curCell / cols) | 0;
+          ctx.strokeStyle = 'oklch(0.85 0.18 90 / 0.95)';
+          ctx.lineWidth = Math.max(2, cornerR * 0.55);
+          ctx.strokeRect(ci * gw + 1.5, ri * gh + 1.5, gw - 3, gh - 3);
+        }
+
+        // FOV ellipse boundary (inscribed, touching the edge midpoints).
+        ctx.strokeStyle = 'oklch(0.8 0.05 220 / 0.35)';
+        ctx.lineWidth = Math.max(1, cornerR * 0.3);
+        ctx.beginPath();
+        ctx.ellipse(w / 2, h / 2, w / 2, h / 2, 0, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+
+      // ── Polar dartboard coverage (circular fisheye) ───────────────────────
+      // Rings × sectors over the auto-detected image circle: captured cells fill
+      // green (deeper = more captures), empty cells faint red, the amber target
+      // marks where to move the board next, blue outlines where it is now.
+      if (cov?.showPolar && circleRef.current?.circle) {
+        const circle = circleRef.current.circle;
+        const cells = cov.polarCells, pcounts = cov.polarCounts;
+        const geo = polarCellGeometry(circle, cov.rings, cov.sectors);
+
+        let cur = null, pcx = null, pcy = null;
+        if (corners.length) {
+          let sx = 0, sy = 0;
+          for (const [x, y] of corners) { sx += x; sy += y; }
+          pcx = sx / corners.length; pcy = sy / corners.length;
+          cur = polarCellAt(pcx, pcy, circle, cov.rings, cov.sectors);
+        }
+
+        const wedge = (g) => {
+          ctx.beginPath();
+          if (g.r0 <= 0.001) { ctx.arc(circle.cx, circle.cy, g.r1, 0, Math.PI * 2); }
+          else {
+            ctx.arc(circle.cx, circle.cy, g.r1, g.a0, g.a1);
+            ctx.arc(circle.cx, circle.cy, g.r0, g.a1, g.a0, true);
+            ctx.closePath();
+          }
+        };
+
+        const target = cov.target || 5;
+        for (const g of geo) {
+          const n = pcounts ? (pcounts[g.index] || 0) : (cells && cells[g.index] ? 1 : 0);
+          wedge(g);
+          if (n >= target) {
+            // 采够 — persistent deep green so a finished sector reads as done at a glance.
+            ctx.fillStyle = 'oklch(0.52 0.17 150 / 0.62)';
+          } else if (n > 0) {
+            const a = Math.min(0.4, 0.15 + (n - 1) * 0.1);   // deepening with captures
+            ctx.fillStyle = `oklch(0.72 0.16 150 / ${a.toFixed(3)})`;
+          } else {
+            ctx.fillStyle = 'oklch(0.7 0.13 30 / 0.1)';
+          }
+          ctx.fill();
+        }
+
+        // dartboard structure: ring arcs + sector spokes
+        ctx.strokeStyle = 'oklch(0.85 0.03 230 / 0.4)';
+        ctx.lineWidth = Math.max(1, cornerR * 0.3);
+        for (let ring = 1; ring <= cov.rings; ring++) {
+          ctx.beginPath();
+          ctx.arc(circle.cx, circle.cy, (circle.r * ring) / cov.rings, 0, Math.PI * 2);
+          ctx.stroke();
+        }
+        for (let s = 0; s < cov.sectors; s++) {
+          const ang = (s / cov.sectors) * Math.PI * 2;
+          const r0 = circle.r / cov.rings;
+          ctx.beginPath();
+          ctx.moveTo(circle.cx + Math.cos(ang) * r0, circle.cy + Math.sin(ang) * r0);
+          ctx.lineTo(circle.cx + Math.cos(ang) * circle.r, circle.cy + Math.sin(ang) * circle.r);
+          ctx.stroke();
+        }
+
+        // guidance: pulse the emptiest cell + a target dot at its centroid
+        if (cov.polarGuidance != null) {
+          const g = geo.find(x => x.index === cov.polarGuidance);
+          if (g) {
+            wedge(g);
+            ctx.fillStyle = 'oklch(0.85 0.18 90 / 0.2)';
+            ctx.fill();
+            ctx.strokeStyle = 'oklch(0.9 0.18 90 / 0.95)';
+            ctx.lineWidth = Math.max(2, cornerR * 0.5);
+            wedge(g); ctx.stroke();
+            const tpulse = 1 + 0.25 * Math.sin(phase * 6);
+            ctx.fillStyle = 'oklch(0.92 0.18 90 / 0.95)';
+            ctx.beginPath(); ctx.arc(g.x, g.y, cornerR * 1.9 * tpulse, 0, Math.PI * 2); ctx.fill();
+            if (pcx != null) drawSteerArrow(ctx, pcx, pcy, g.x, g.y, cornerR, phase);
+          }
+        }
+
+        // where the board is right now (blue)
+        if (cur != null && cur >= 0) {
+          const g = geo.find(x => x.index === cur);
+          if (g) {
+            ctx.strokeStyle = 'oklch(0.8 0.16 235 / 0.95)';
+            ctx.lineWidth = Math.max(2, cornerR * 0.6);
+            wedge(g); ctx.stroke();
+          }
+        }
+      }
+
+      // ── Guided-sequence overlay (FOV circle + board-shaped target + steer arrow) ──
+      // The target is a BOARD-shaped rectangle (skewed to a trapezoid for tilt/yaw,
+      // rotated for roll, sized for near/far) that ANIMATES so the wanted motion is
+      // shown, not just a static outline — mirroring docs/fisheye-howto §2. A marching
+      // arrow points from the live board to the target; the live board's own quad is
+      // outlined and tinted by how much of the frame it fills (doc §3 size guidance).
+      if (cov?.guided && circleRef.current?.circle) {
+        const circle = circleRef.current.circle;
+        const g = cov.guided;
+        // FOV circle (dashed, faint) — the fisheye image boundary, matches the doc figures
+        ctx.save();
+        ctx.setLineDash([cornerR * 2, cornerR * 2]);
+        ctx.strokeStyle = 'oklch(0.85 0.03 230 / 0.4)';
+        ctx.lineWidth = Math.max(1, cornerR * 0.3);
+        ctx.beginPath(); ctx.arc(circle.cx, circle.cy, circle.r, 0, Math.PI * 2); ctx.stroke();
+        ctx.restore();
+
+        if (!g.done) {
+          const tgt = regionTarget(g.region, circle);
+          const ts = tgt ? targetHalfSize(g, circle, bCols, bRows) : null;
+          // live board centroid + outer quad (only a full detection has the quad)
+          let cenX = null, cenY = null, quad = null;
+          if (corners.length) {
+            let sx = 0, sy = 0;
+            for (const [x, y] of corners) { sx += x; sy += y; }
+            cenX = sx / corners.length; cenY = sy / corners.length;
+            const nb = bCols * bRows;
+            if (corners.length >= nb) {
+              quad = [corners[0], corners[bCols - 1], corners[nb - 1], corners[bCols * (bRows - 1)]];
+            }
+          }
+
+          if (tgt && ts) {
+            drawTargetBoard(ctx, tgt.x, tgt.y, ts.halfW, ts.halfH, g, cornerR, phase);
+            // reinforce poses the rect shape doesn't already convey (frontal / near-far)
+            if (g.pose === 'frontal' || g.pose === 'dist') {
+              drawGuidedGlyph(ctx, tgt.x, tgt.y, Math.min(ts.halfW, ts.halfH), g.glyph, cornerR, phase);
+            }
+            // marching "go here" arrow while the board is away from the target zone
+            if (cenX != null && Math.hypot(cenX - tgt.x, cenY - tgt.y) > tgt.acceptR) {
+              drawSteerArrow(ctx, cenX, cenY, tgt.x, tgt.y, cornerR, phase);
+            }
+          }
+
+          // Live board outline, tinted by ABSOLUTE frame-fill quality (doc §3): green
+          // when it occupies a good fraction of the FOV, amber when too big (outer
+          // corners get clipped) or too small (corners blur), blue in between. A
+          // step-relative band was tried but read WORSE on the /tmp/1+/tmp/4 captures
+          // (real boards cluster ~0.24–0.58 regardless of step), so this fixed band —
+          // which the sample sets validate at 35/38 correctly-placed frames green — stays.
+          if (quad) {
+            const sc = boardScale(corners, bCols, bRows, circle);
+            let qc = 'oklch(0.8 0.16 235 / 0.95)';                       // blue: detected, transitional size
+            if (sc != null) {
+              if (sc > 0.66 || sc < 0.24) qc = 'oklch(0.72 0.18 35 / 0.95)';        // 太大/太小
+              else if (sc >= 0.30 && sc <= 0.60) qc = 'oklch(0.78 0.16 150 / 0.95)'; // 合适
+            }
+            drawBoardQuad(ctx, quad, qc, cornerR);
+          } else if (cenX != null) {
+            ctx.fillStyle = 'oklch(0.8 0.16 235 / 0.95)';
+            ctx.beginPath(); ctx.arc(cenX, cenY, cornerR * 2.2, 0, Math.PI * 2); ctx.fill();
+          }
+        }
+      }
+
+      if (!corners.length) return;
 
       if (showCorners) {
         ctx.strokeStyle = CORNER_COLOR;
@@ -214,7 +703,7 @@ export function LiveDetectedFrame({
     width: '100%', height: '100%', fontFamily: 'JetBrains Mono', fontSize: 11,
   };
   if (!device) {
-    return <div style={{ ...placeholderStyle, color: 'var(--view-text-2)' }}>pick a camera to start the live preview</div>;
+    return <div style={{ ...placeholderStyle, color: 'var(--view-text-2)' }}>{t('preview.pickCamera')}</div>;
   }
   if (err) {
     return <div style={{ ...placeholderStyle, color: 'var(--err)', padding: 16, textAlign: 'center' }}>{err}</div>;
@@ -232,18 +721,19 @@ export function LiveDetectedFrame({
   return (
     <>
       <canvas ref={canvasRef}
-              style={{ width: '100%', height: '100%', objectFit: 'contain', display: 'block' }}/>
+              style={{ width: '100%', height: '100%', objectFit: 'contain', display: 'block',
+                       transform: mirror ? 'scaleX(-1)' : undefined }}/>
       {!meta && (
         <div style={{
           position: 'absolute', inset: 0, ...placeholderStyle,
           color: 'var(--view-text-2)', pointerEvents: 'none',
-        }}>connecting…</div>
+        }}>{t('preview.connecting')}</div>
       )}
       <div className="vp-corner-read left">
-        <div>live <b style={{ color: fpsColor }}>{capFps != null ? capFps.toFixed(1) : '—'}</b> fps · tgt <b>{fps}</b></div>
+        <div>{t('preview.live')} <b style={{ color: fpsColor }}>{capFps != null ? capFps.toFixed(1) : '—'}</b> fps · {t('preview.tgt')} <b>{fps}</b></div>
         {w != null && h != null && <div>{w}×{h} · seq <b>{meta.seq}</b></div>}
         {detect && (
-          <div>detect <b style={{ color: detected ? 'var(--ok)' : 'var(--warn)' }}>{detected ? `${corners.length} corners` : '—'}</b></div>
+          <div>{t('preview.detect')} <b style={{ color: detected ? 'var(--ok)' : 'var(--warn)' }}>{detected ? t('preview.cornersN', { count: corners.length }) : '—'}</b></div>
         )}
       </div>
     </>

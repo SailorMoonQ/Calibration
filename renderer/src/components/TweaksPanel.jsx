@@ -1,34 +1,45 @@
-import { Field, Seg } from './primitives.jsx';
+import { useTranslation } from 'react-i18next';
+import { Field, Seg, Chk } from './primitives.jsx';
 
 export const TWEAKS_DEFAULTS = {
-  theme: 'light',
+  theme: 'dark',
   density: 'comfortable',
   accentHue: 295,
+  voicePrompts: false,    // spoken cues (Edge-TTS clips, zh)
 };
 
 export function TweaksPanel({ visible, tweaks, setTweaks, onClose }) {
+  const { t } = useTranslation();
   if (!visible) return null;
   return (
     <div className="tweaks-panel">
       <div className="tweaks-head">
-        <span>Tweaks</span>
+        <span>{t('tweaks.title')}</span>
         <button className="btn ghost sm" onClick={onClose}>×</button>
       </div>
       <div className="tweaks-body">
-        <Field label="theme">
-          <Seg value={tweaks.theme} onChange={v => setTweaks({...tweaks, theme: v})} full options={[{value:'light',label:'light'},{value:'dark',label:'dark'}]}/>
+        <Field label={t('tweaks.theme')}>
+          <Seg value={tweaks.theme} onChange={v => setTweaks({...tweaks, theme: v})} full options={[{value:'light',label:t('tweaks.light')},{value:'dark',label:t('tweaks.dark')}]}/>
         </Field>
-        <Field label="density">
-          <Seg value={tweaks.density} onChange={v => setTweaks({...tweaks, density: v})} full options={[{value:'compact',label:'compact'},{value:'comfortable',label:'comfy'}]}/>
+        <Field label={t('tweaks.density')}>
+          <Seg value={tweaks.density} onChange={v => setTweaks({...tweaks, density: v})} full options={[{value:'compact',label:t('tweaks.compact')},{value:'comfortable',label:t('tweaks.comfy')}]}/>
         </Field>
-        <Field label="accent hue">
+        <Field label={t('tweaks.accentHue')}>
           <div className="slider-row">
             <input type="range" min="0" max="360" value={tweaks.accentHue} onChange={e => setTweaks({...tweaks, accentHue: +e.target.value})}/>
             <span className="mono">{tweaks.accentHue}°</span>
           </div>
         </Field>
+
+        <div className="tweaks-section-label" style={{ fontSize: 10.5, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '0.05em', marginTop: 8, marginBottom: 2 }}>
+          {t('tweaks.voice')}
+        </div>
+        <Chk checked={tweaks.voicePrompts} onChange={v => setTweaks({ ...tweaks, voicePrompts: v })}>
+          {t('tweaks.voicePrompts')}
+        </Chk>
+
         <div style={{ display: 'flex', gap: 6, marginTop: 4 }}>
-          <button className="btn sm block" onClick={() => setTweaks({ ...TWEAKS_DEFAULTS })}>reset</button>
+          <button className="btn sm block" onClick={() => setTweaks({ ...TWEAKS_DEFAULTS })}>{t('tweaks.reset')}</button>
         </div>
       </div>
     </div>

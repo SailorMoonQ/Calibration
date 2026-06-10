@@ -1,24 +1,36 @@
 import { useState, useEffect } from 'react';
+import { useTranslation } from 'react-i18next';
 import { TelemetryProvider } from './lib/telemetry.jsx';
 import { Topbar } from './components/Topbar.jsx';
 import { Tabs } from './components/Tabs.jsx';
-import { TweaksPanel, TWEAKS_DEFAULTS } from './components/TweaksPanel.jsx';
+import { TWEAKS_DEFAULTS } from './components/TweaksPanel.jsx';
 import { LogStrip } from './components/panels.jsx';
+import { ConfirmHost } from './components/confirm.jsx';
 import { IntrinsicsTab } from './tabs/IntrinsicsTab.jsx';
 import { FisheyeTab } from './tabs/FisheyeTab.jsx';
 import { HandEyeTab } from './tabs/HandEyeTab.jsx';
 import { LinkCalibTab } from './tabs/LinkCalibTab.jsx';
 
+// label/sub are resolved per-render via i18n (see buildTabs); id/num/badge/Comp
+// are language-independent.
 const TAB_DEFS = [
-  { id: 'intrinsics', num: '01', label: 'Pinhole',    sub: 'intrinsics',         badge: 'ok',   Comp: IntrinsicsTab },
-  { id: 'fisheye',    num: '02', label: 'Fish-eye',   sub: 'intrinsics',         badge: 'warn', Comp: FisheyeTab },
-  { id: 'handeye',    num: '03', label: 'Hand-Eye',   sub: 'cam ↔ tracker',      badge: 'ok',   Comp: HandEyeTab },
-  { id: 'link',       num: '04', label: 'Link',       sub: 'tracker ↔ ctrl',     badge: 'ok',   Comp: LinkCalibTab },
+  { id: 'intrinsics', num: '01', badge: 'ok',   Comp: IntrinsicsTab },
+  { id: 'fisheye',    num: '02', badge: 'warn', Comp: FisheyeTab },
+  { id: 'handeye',    num: '03', badge: 'ok',   Comp: HandEyeTab },
+  { id: 'link',       num: '04', badge: 'ok',   Comp: LinkCalibTab },
 ];
 
 export function App() {
+  const { t } = useTranslation();
   const [active, setActive] = useState(() => localStorage.getItem('calib_tab') || 'intrinsics');
-  const [tweaks, setTweaks] = useState({ ...TWEAKS_DEFAULTS });
+  const [tweaks, setTweaks] = useState(() => {
+    // Merge stored prefs over defaults so new keys (e.g. voice) appear for
+    // existing users, and a corrupt blob falls back cleanly.
+    try {
+      const saved = JSON.parse(localStorage.getItem('calib_tweaks') || '{}');
+      return { ...TWEAKS_DEFAULTS, ...saved };
+    } catch { return { ...TWEAKS_DEFAULTS }; }
+  });
   const [tweaksVisible, setTweaksVisible] = useState(false);
   // Eye-in-hand vs eye-to-hand is a property of the physical rig, not a per-tab
   // setting — Hand-Eye owns the toggle, Link reads it for its own solver.
@@ -28,6 +40,7 @@ export function App() {
 
   useEffect(() => { localStorage.setItem('calib_tab', active); }, [active]);
   useEffect(() => { localStorage.setItem('calib_handeye_pattern', solvePattern); }, [solvePattern]);
+  useEffect(() => { localStorage.setItem('calib_tweaks', JSON.stringify(tweaks)); }, [tweaks]);
 
   useEffect(() => {
     const root = document.documentElement;
@@ -50,17 +63,26 @@ export function App() {
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 
-  const tabDef = TAB_DEFS.find(t => t.id === active) || TAB_DEFS[0];
+  const tabDef = TAB_DEFS.find(d => d.id === active) || TAB_DEFS[0];
   const ActiveComp = tabDef.Comp;
+  const tabs = TAB_DEFS.map(d => ({
+    ...d,
+    label: t(`tabs.${d.id}.label`),
+    sub: t(`tabs.${d.id}.sub`),
+  }));
 
   return (
     <TelemetryProvider>
       <div className="app">
-        <Topbar/>
-        <Tabs tabs={TAB_DEFS} value={active} onChange={setActive}/>
-        <ActiveComp solvePattern={solvePattern} setSolvePattern={setSolvePattern}/>
+        <Topbar
+          tweaks={tweaks} setTweaks={setTweaks}
+          settingsOpen={tweaksVisible}
+          onToggleSettings={() => setTweaksVisible(v => !v)}
+          onCloseSettings={() => setTweaksVisible(false)}/>
+        <Tabs tabs={tabs} value={active} onChange={setActive}/>
+        <ActiveComp solvePattern={solvePattern} setSolvePattern={setSolvePattern} tweaks={tweaks}/>
         <LogStrip lines={[]}/>
-        <TweaksPanel visible={tweaksVisible} tweaks={tweaks} setTweaks={setTweaks} onClose={() => setTweaksVisible(false)}/>
+        <ConfirmHost/>
       </div>
     </TelemetryProvider>
   );

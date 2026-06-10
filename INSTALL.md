@@ -16,10 +16,15 @@ pip3 install --user \
   'uvicorn[standard]>=0.32' \
   pydantic>=2.9 \
   'numpy>=1.26,<2' \
-  opencv-contrib-python>=4.10 \
-  scipy>=1.13 \
+  'opencv-python-headless>=4.10' \
   ruamel.yaml>=0.18
 ```
+
+> **OpenCV — use `opencv-python-headless`, not contrib.** The backend only
+> uses `cv2.aruco` (charuco), which since OpenCV 4.7 lives in the main
+> `objdetect` module — plain opencv already has it. The `-headless` build
+> avoids pulling Qt/xcb that clashes with other GUI apps sharing `~/.local`.
+> `scipy` is **not** a runtime dependency (only the test suite imports it).
 
 **Important — NumPy must be `<2`.** ROS2 Humble's `cv_bridge` is built
 against NumPy 1.x and segfaults when loaded alongside NumPy 2.x. If you

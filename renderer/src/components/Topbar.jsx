@@ -1,5 +1,9 @@
-import { Pill } from './primitives.jsx';
+import { useEffect, useRef } from 'react';
+import { useTranslation } from 'react-i18next';
+import { Pill, Seg } from './primitives.jsx';
+import { TweaksPanel } from './TweaksPanel.jsx';
 import { useTelemetry } from '../lib/telemetry.jsx';
+import { setLang, normalizeLang } from '../i18n';
 
 // Map a /dev/videoN path to a short label. Anything else falls through.
 function camLabel(device) {
@@ -26,8 +30,22 @@ function dropStatus(pct) {
   return 'bad';
 }
 
-export function Topbar() {
+const win = (action) => () => window.calib?.win?.[action]?.();
+
+export function Topbar({ tweaks, setTweaks, settingsOpen, onToggleSettings, onCloseSettings }) {
+  const { t, i18n } = useTranslation();
   const { cameras, poses } = useTelemetry();
+  const settingsRef = useRef(null);
+
+  // Close the settings dropdown on an outside click while it's open.
+  useEffect(() => {
+    if (!settingsOpen) return;
+    const onDown = (e) => {
+      if (settingsRef.current && !settingsRef.current.contains(e.target)) onCloseSettings?.();
+    };
+    document.addEventListener('mousedown', onDown);
+    return () => document.removeEventListener('mousedown', onDown);
+  }, [settingsOpen, onCloseSettings]);
 
   const camPills = Object.entries(cameras)
     .sort(([a], [b]) => a.localeCompare(b))
@@ -40,7 +58,7 @@ export function Topbar() {
   const showSteamVR = poses && Array.isArray(poses.source) && poses.source.includes('steamvr');
   const steamPill = showSteamVR ? (
     <Pill key="steamvr" status={basesStatus(poses.bases ?? 0)}>
-      SteamVR · {poses.bases ?? 0} bases
+      SteamVR · {poses.bases ?? 0} {t('topbar.bases')}
     </Pill>
   ) : null;
 
@@ -49,14 +67,14 @@ export function Topbar() {
         .sort(([a], [b]) => a.localeCompare(b))
         .map(([name, { dropPct }]) => (
           <Pill key={`drop:${name}`} status={dropStatus(dropPct)}>
-            {name} drop {dropPct.toFixed(1)}%
+            {name} {t('topbar.drop')} {dropPct.toFixed(1)}%
           </Pill>
         ))
     : [];
 
   return (
     <div className="topbar">
-      <span className="brand"><span className="brand-mark"/>Calibration Workbench</span>
+      <span className="brand"><span className="brand-mark"/>{t('topbar.brand')}</span>
       <span className="divider"/>
       <div className="session">
         {camPills}
@@ -66,7 +84,20 @@ export function Topbar() {
       <span className="divider"/>
       <span className="session"><span className="path">~/projects/vr_rig/calib/session_0419.toml</span></span>
       <span className="spacer"/>
-      <button className="btn ghost icon" title="settings">⚙</button>
+      <Seg value={normalizeLang(i18n.language)} onChange={setLang} options={[
+        { value: 'en', label: 'EN' },
+        { value: 'zh', label: '中' },
+      ]}/>
+      <div className="settings-anchor" ref={settingsRef}>
+        <button className={"btn ghost icon" + (settingsOpen ? ' on' : '')}
+                title={t('topbar.settings')} onClick={onToggleSettings}>⚙</button>
+        <TweaksPanel visible={settingsOpen} tweaks={tweaks} setTweaks={setTweaks} onClose={onCloseSettings}/>
+      </div>
+      <span className="win-controls">
+        <button className="btn ghost icon win-btn" title={t('topbar.minimize')} onClick={win('minimize')}>﹣</button>
+        <button className="btn ghost icon win-btn" title={t('topbar.maximize')} onClick={win('toggleMaximize')}>▢</button>
+        <button className="btn ghost icon win-btn win-close" title={t('topbar.close')} onClick={win('close')}>✕</button>
+      </span>
     </div>
   );
 }
