@@ -638,7 +638,7 @@ async def calibration_export_camera_intrix(body: dict) -> dict:
     try:
         res = yaml_io.export_camera_intrinsics(slot, K, D, path=path)
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
     return {"ok": True, **res}
 
 
@@ -1379,7 +1379,8 @@ async def stream_ws(
                     # Drives the client's auto-capture blur gate. Cheap (small crop,
                     # only when a board is present). Live-only; never the solver.
                     pts = corners_arr
-                    x0, y0 = pts.min(0); x1, y1 = pts.max(0)
+                    x0, y0 = pts.min(0)
+                    x1, y1 = pts.max(0)
                     xa, ya = max(0, int(x0) - 8), max(0, int(y0) - 8)
                     xb, yb = min(w, int(x1) + 8), min(h, int(y1) + 8)
                     sharpness = None

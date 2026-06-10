@@ -85,6 +85,9 @@ export function HandEyeTab({ solvePattern, setSolvePattern }) {
     setStatus(t('handeye.connectingTracker'));
     try {
       const url = await posesWsUrl({ fps: 30, sources: [trackerSource] });
+      // Re-check after the await: a second click while the URL resolved would
+      // otherwise open a second socket and leak the first.
+      if (wsRef.current) return;
       const ws = new WebSocket(url);
       wsRef.current = ws;
       ws.onopen = () => { setConnected(true); setStatus(t('handeye.wsOpen', { source: trackerSource })); };

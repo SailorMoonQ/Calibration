@@ -6,6 +6,6 @@ numpy>=1.26,<2
 # 非 contrib 即可: 仅用 aruco/charuco, 自 OpenCV 4.7 已并入主仓库 objdetect。
 opencv-python>=4.10
 ruamel.yaml>=0.18
-# 构建/测试用 (运行时后端不 import scipy, 仅 test_pico_pose 用到)
+# 测试用 (运行时后端不 import scipy, 仅 test_pico_pose 用到)。
+# pyinstaller 是纯构建依赖, 由 scripts/build-backend.sh 单独安装, 不进运行时契约。
 scipy>=1.13
-pyinstaller>=6.11

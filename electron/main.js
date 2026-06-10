@@ -7,7 +7,9 @@ let mainWindow = null;
 let backend = null;
 
 async function createWindow() {
-  backend = await startSidecar({ isDev });
+  // Idempotent: on macOS `activate` re-creates the window while the sidecar
+  // from the first launch is still running.
+  if (!backend) backend = await startSidecar({ isDev });
 
   // Voice commands use the browser SpeechRecognition / getUserMedia, which
   // require microphone permission. The page is loaded over file:// (packaged)
@@ -117,15 +119,32 @@ ipcMain.handle('dialog:pickOpenFile', async (_evt, { defaultPath, filters } = {}
   return res.filePaths[0];
 });
 
-app.whenReady().then(createWindow);
+function startApp() {
+  return createWindow().catch((err) => {
+    console.error('startup failed:', err);
+    dialog.showErrorBox('Calibration Workbench failed to start', String(err.message || err));
+    app.quit();
+  });
+}
+
+app.whenReady().then(startApp);
 
 app.on('window-all-closed', () => {
-  stopSidecar();
   if (process.platform !== 'darwin') app.quit();
 });
 
 app.on('activate', () => {
-  if (BrowserWindow.getAllWindows().length === 0) createWindow();
+  if (BrowserWindow.getAllWindows().length === 0) startApp();
 });
 
-app.on('before-quit', stopSidecar);
+// stopSidecar resolves only once the backend process is gone; hold the quit
+// until then so the Python sidecar can't outlive the app.
+let sidecarStopped = false;
+app.on('before-quit', (e) => {
+  if (sidecarStopped) return;
+  e.preventDefault();
+  stopSidecar().then(() => {
+    sidecarStopped = true;
+    app.quit();
+  });
+});

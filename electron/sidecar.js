@@ -62,26 +62,55 @@ async function startSidecar({ isDev }) {
   const env = { ...process.env, CALIB_PORT: String(chosenPort), CALIB_HOST: '127.0.0.1' };
 
   proc = spawn(cmd, args, { cwd, env, stdio: ['ignore', 'pipe', 'pipe'] });
+  // 'error' (spawn failure, e.g. missing interpreter) and an early exit (import
+  // error, port bind failure) both mean health polling can never succeed —
+  // surface them immediately instead of burning the full 15 s timeout. An
+  // unhandled 'error' event would also crash the main process.
+  const died = new Promise((_resolve, reject) => {
+    proc.on('error', (err) => {
+      proc = null;
+      reject(new Error(`failed to spawn backend (${cmd}): ${err.message}`));
+    });
+    proc.on('exit', (code, sig) => {
+      console.log(`[backend] exited code=${code} sig=${sig}`);
+      proc = null;
+      reject(new Error(`backend exited before becoming healthy (code=${code} sig=${sig})`));
+    });
+  });
+  died.catch(() => { /* handled via Promise.race below; avoid unhandled rejection */ });
   proc.stdout.on('data', (b) => process.stdout.write(`[backend] ${b}`));
   proc.stderr.on('data', (b) => process.stderr.write(`[backend] ${b}`));
-  proc.on('exit', (code, sig) => {
-    console.log(`[backend] exited code=${code} sig=${sig}`);
-    proc = null;
-  });
 
   try {
-    await waitForHealth(chosenPort);
+    await Promise.race([waitForHealth(chosenPort), died]);
   } catch (err) {
-    stopSidecar();
+    await stopSidecar();
     throw err;
   }
   return { port: chosenPort };
 }
 
+// Resolves once the backend process is gone: SIGTERM first, SIGKILL after 2 s.
+// Callers (before-quit) must await so the app doesn't exit with the timer
+// pending and orphan the Python process.
 function stopSidecar() {
-  if (!proc) return;
-  try { proc.kill('SIGTERM'); } catch { /* swallow */ }
-  setTimeout(() => { if (proc) try { proc.kill('SIGKILL'); } catch { /* swallow */ } }, 2000);
+  const p = proc;
+  if (!p) return Promise.resolve();
+  return new Promise((resolve) => {
+    const killTimer = setTimeout(() => {
+      try { p.kill('SIGKILL'); } catch { /* swallow */ }
+    }, 2000);
+    p.once('exit', () => {
+      clearTimeout(killTimer);
+      proc = null;
+      resolve();
+    });
+    try { p.kill('SIGTERM'); } catch {
+      clearTimeout(killTimer);
+      proc = null;
+      resolve();
+    }
+  });
 }
 
 module.exports = { startSidecar, stopSidecar };

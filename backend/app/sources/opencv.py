@@ -283,9 +283,11 @@ class CameraSource:
         raw_w = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         raw_h = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         # Effective size = what consumers see, post-clip. Falls back to the raw V4L2
-        # values until the first frame lands in `_latest`.
-        if self._latest is not None:
-            eff_h, eff_w = self._latest.shape[:2]
+        # values until the first frame lands in `_latest`. Snapshot the slot first —
+        # stop()/set_resolution() can null it between the check and the shape read.
+        frm = self._latest
+        if frm is not None:
+            eff_h, eff_w = frm.shape[:2]
         else:
             eff_w, eff_h = raw_w, raw_h
         clipped = (eff_w, eff_h) != (raw_w, raw_h)

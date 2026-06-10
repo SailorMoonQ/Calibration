@@ -29,6 +29,7 @@ async function request(path, opts = {}) {
 // polling cycle still triggers exactly one fresh fetch — tabs that don't run
 // their own poll (Extrinsics, HandEye) keep working unchanged.
 const _streamInfoCache = new Map();
+const _streamInfoGen = new Map();
 const STREAM_INFO_TTL_MS = 1500;
 
 function streamInfoCached(device) {
@@ -40,14 +41,19 @@ function streamInfoCached(device) {
     }
     if (entry.inflight) return entry.inflight;
   }
+  // Generation guard: a response that raced an invalidation carries pre-change
+  // state — writing it back would re-seed the cache with stale info and a
+  // fresh ts. Only the generation it was requested under may populate.
+  const gen = _streamInfoGen.get(device) ?? 0;
+  const fresh = () => (_streamInfoGen.get(device) ?? 0) === gen;
   const inflight = request(`/stream/info?device=${encodeURIComponent(device)}`)
     .then(value => {
-      _streamInfoCache.set(device, { ts: Date.now(), value, inflight: null });
+      if (fresh()) _streamInfoCache.set(device, { ts: Date.now(), value, inflight: null });
       return value;
     })
     .catch(err => {
       // Don't poison the cache with a stale failure — next caller retries.
-      _streamInfoCache.set(device, { ts: 0, value: null, inflight: null });
+      if (fresh()) _streamInfoCache.set(device, { ts: 0, value: null, inflight: null });
       throw err;
     });
   _streamInfoCache.set(device, {
@@ -59,8 +65,10 @@ function streamInfoCached(device) {
 }
 
 // State-changing endpoints invalidate the cache so the next /stream/info hits
-// the backend instead of returning the pre-change snapshot.
+// the backend instead of returning the pre-change snapshot. Bumping the
+// generation also disowns any in-flight request started before the change.
 function invalidateStreamInfo(device) {
+  _streamInfoGen.set(device, (_streamInfoGen.get(device) ?? 0) + 1);
   _streamInfoCache.delete(device);
 }
 
