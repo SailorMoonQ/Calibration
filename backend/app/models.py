@@ -75,6 +75,7 @@ class HandEyeRequest(BaseModel):
     poses_path: str | None = None
     K: list[list[float]] | None = None
     D: list[float] | None = None
+    distortion_model: str = "pinhole"
     # Inline fallback: A = T_cam_board per frame, B = T_base_tracker per frame. 4x4 each.
     A: list[list[list[float]]] = Field(default_factory=list)
     B: list[list[list[float]]] = Field(default_factory=list)

@@ -18,8 +18,20 @@ import { makeT, applyT, composeT } from '../lib/math3d.js';
 import { DEFAULT_BOARD } from '../lib/board.js';
 import { computeCoverage, cellIndexFor } from '../lib/coverage.js';
 import { api, pickFolder, pickSaveFile, pickOpenFile, openPath, posesWsUrl } from '../api/client.js';
+import { speak } from '../lib/voice.js';
 
+const UNDO_LIMIT = 20;
 const basename = (p) => (p || '').split('/').pop();
+const CAMERA_INTRIX_PATH = '/mibot_env/configs/camera_intrix.yaml';
+const CAMERA_SLOT_RE = /(?:^|\/)(head|left|right|back)(?:\/|$)/;
+
+function cameraSlotFromSource(...sources) {
+  for (const s of sources) {
+    const m = CAMERA_SLOT_RE.exec(s || '');
+    if (m) return m[1];
+  }
+  return null;
+}
 
 const TRACKER_SOURCES = [
   { value: 'oculus',  label: 'Oculus Reader' },
@@ -29,7 +41,7 @@ const TRACKER_SOURCES = [
   { value: 'file',    label: 'JSON file' },
 ];
 
-export function HandEyeTab({ solvePattern, setSolvePattern }) {
+export function HandEyeTab({ solvePattern, setSolvePattern, tweaks }) {
   const { t } = useTranslation();
   const [kind, setKind] = useState('hmd');
   const isHMD = kind === 'hmd';
@@ -50,13 +62,37 @@ export function HandEyeTab({ solvePattern, setSolvePattern }) {
   const [datasetPath, setDatasetPath] = useState('');
   const [datasetFiles, setDatasetFiles] = useState([]);
   const [posesPath, setPosesPath] = useState('');
-  const [camInt, setCamInt] = useState(null); // { K, D, path }
+  const [camInt, setCamInt] = useState(null); // { K, D, path, distortion_model }
 
   const [viewMode, setViewMode] = useState('live');
 
   const [result, setResult] = useState(null);
   const [busy, setBusy] = useState(false);
-  const [status, setStatus] = useState('');
+  // status carries a message plus an explicit error flag so the solver-status
+  // colour is language-independent (no regex-matching the localized text).
+  const [status, setStatusMsg] = useState('');
+  const [statusErr, setStatusErr] = useState(false);
+  const setStatus = (msg, isErr = false) => { setStatusMsg(msg); setStatusErr(isErr); };
+
+  // Spoken cues (Edge-TTS clips, Chinese), reused from the fisheye capture loop.
+  // Gated by the ⚙ settings; failures surface in the status bar de-duped so a
+  // persistent autoplay block doesn't overwrite it on every cue.
+  const voicePrompts = !!tweaks?.voicePrompts;
+  const lastSpokeRef = useRef({});
+  const voiceErrRef = useRef('');
+  const say = useCallback((name, minGapMs = 0) => {
+    if (!voicePrompts) return;
+    const now = Date.now();
+    if (minGapMs && now - (lastSpokeRef.current[name] || 0) < minGapMs) return;
+    lastSpokeRef.current[name] = now;
+    speak(name).catch((e) => {
+      if (e?.name === 'AbortError') return;  // a newer cue cut this one off — expected
+      const msg = e?.message || e?.name || 'play blocked';
+      if (msg === voiceErrRef.current) return;
+      voiceErrRef.current = msg;
+      setStatus(t('fisheye.voicePlayFailed', { name, error: msg }), true);
+    });
+  }, [voicePrompts, t]);
 
   // Live tracker stream (used to attach pose to each captured image).
   const [connected, setConnected] = useState(false);
@@ -152,9 +188,29 @@ export function HandEyeTab({ solvePattern, setSolvePattern }) {
   const [autoCaptureRate, setAutoCaptureRate] = useState(0.5);  // seconds between snaps
   const [recordedCount, setRecordedCount] = useState(0);
 
-  // Hold the latest onSnap in a ref so the auto-capture timer always calls
-  // through to the up-to-date closure without resubscribing on every state tick.
+  // Hold the latest onSnap/onDrop/onUndo in refs so the keyboard handler always
+  // calls the up-to-date closure without resubscribing on every state tick.
   const onSnapRef = useRef(null);
+  const onDropRef = useRef(null);
+  const onUndoRef = useRef(null);
+
+  // Undo stack — bounded LIFO, entries: { kind:'snap'|'drop', path, trashPath? }
+  const undoStackRef = useRef([]);
+  const pushUndo = (entry) => {
+    undoStackRef.current = [entry, ...undoStackRef.current].slice(0, UNDO_LIMIT);
+  };
+
+  // Keep a ref-shadowed count so the keyboard handler can read it without
+  // closing over stale state.
+  const datasetCountRef = useRef(0);
+  useEffect(() => { datasetCountRef.current = datasetFiles.length; }, [datasetFiles.length]);
+
+  const refreshDataset = async () => {
+    if (!datasetPath) return [];
+    const r = await api.listDataset(datasetPath);
+    setDatasetFiles(r.files);
+    return r.files;
+  };
 
   // Coverage tracking. snappedCellsRef holds the grid cells that already
   // contributed a frame this session — auto-capture skips frames whose
@@ -214,11 +270,22 @@ export function HandEyeTab({ solvePattern, setSolvePattern }) {
     const p = await pickOpenFile({});
     if (!p) return;
     try {
-      const resp = await api.loadCalibration(p);
+      const isCameraIntrix = p === CAMERA_INTRIX_PATH || p.endsWith(CAMERA_INTRIX_PATH);
+      const slot = isCameraIntrix ? cameraSlotFromSource(liveDevice, datasetPath) : null;
+      const resp = await api.loadCalibration(p, slot ? { slot } : {});
       const d = resp.data || {};
       if (!d.K || !d.D) { setStatus(t('handeye.noKdInYaml', { name: basename(p) })); return; }
-      setCamInt({ K: d.K, D: d.D, path: p });
-      setStatus(t('handeye.intrinsicsLoaded', { name: basename(p) }));
+      const distortionModel = (d.distortion_model || d.model || 'pinhole').toLowerCase();
+      setCamInt({
+        K: d.K,
+        D: d.D,
+        path: p,
+        distortion_model: distortionModel.includes('fish') || distortionModel.includes('equidistant') ? 'fisheye' : 'pinhole',
+        camera_slot: d.camera_slot || slot || null,
+        image_size: d.image_size || null,
+      });
+      const name = d.camera_slot ? `${basename(p)}:${d.camera_slot}` : basename(p);
+      setStatus(t('handeye.intrinsicsLoaded', { name }));
     } catch (e) { setStatus(t('handeye.intrinsicsLoadFailed', { error: e.message })); }
   };
 
@@ -266,9 +333,13 @@ export function HandEyeTab({ solvePattern, setSolvePattern }) {
           }
         }
       }
-      if (appended) setStatus(t('handeye.snappedPose', { name: fname }));
+      if (appended) {
+        pushUndo({ kind: 'snap', path: imagePath });
+        setStatus(t('handeye.snappedPose', { name: fname })); say('captured', 600);
+      }
     } else {
-      setStatus(t('handeye.snapImageOnly', { name: fname }));
+      pushUndo({ kind: 'snap', path: imagePath });
+      setStatus(t('handeye.snapImageOnly', { name: fname })); say('captured', 600);
     }
 
     if (dir === datasetPath) {
@@ -280,6 +351,76 @@ export function HandEyeTab({ solvePattern, setSolvePattern }) {
     }
   };
   onSnapRef.current = onSnap;
+
+  const onDrop = async () => {
+    if (!selectedPath) { setStatus(t('common.noFrameSelected')); return; }
+    const name = selectedPath.split('/').pop();
+    try {
+      const r = await api.deleteFrame(selectedPath);
+      pushUndo({ kind: 'drop', path: selectedPath, trashPath: r.trash_path });
+      const files = await refreshDataset();
+      const newLen = files?.length ?? 0;
+      setSelected(Math.min(Math.max(1, selected), Math.max(1, newLen)));
+      if (newLen === 0) setViewMode('live');
+      setStatus(t('common.dropped', { name }));
+    } catch (e) { setStatus(t('common.dropFailed', { error: e.message }), true); }
+  };
+  onDropRef.current = onDrop;
+
+  const onUndo = async () => {
+    const stack = undoStackRef.current;
+    if (!stack.length) { setStatus(t('common.nothingToUndo')); return; }
+    const entry = stack.pop();
+    try {
+      if (entry.kind === 'snap') {
+        await api.deleteFrame(entry.path);
+        const files = await refreshDataset();
+        const newLen = files?.length ?? 0;
+        setSelected(Math.min(Math.max(1, selected), Math.max(1, newLen)));
+        if (newLen === 0) setViewMode('live');
+        setStatus(t('common.undidSnap', { name: entry.path.split('/').pop() }));
+      } else if (entry.kind === 'drop') {
+        await api.restoreFrame(entry.trashPath, entry.path);
+        const files = await refreshDataset();
+        const idx = files.findIndex(p => p === entry.path);
+        if (idx >= 0) { setSelected(idx + 1); setViewMode('frame'); }
+        setStatus(t('common.undidDrop', { name: entry.path.split('/').pop() }));
+      }
+    } catch (e) {
+      stack.push(entry);
+      setStatus(t('common.undoFailed', { error: e.message }), true);
+    }
+  };
+  onUndoRef.current = onUndo;
+
+  // Keyboard shortcuts: ←/→ frame nav, Space=snap, Ctrl+Z=undo, Del/Bksp=drop.
+  // Mirror the FisheyeTab handler exactly so muscle memory transfers.
+  useEffect(() => {
+    const handler = (e) => {
+      const tag = (e.target?.tagName || '').toUpperCase();
+      if (tag === 'INPUT' || tag === 'SELECT' || tag === 'BUTTON' || tag === 'TEXTAREA') return;
+      if (e.key === 'ArrowLeft') {
+        e.preventDefault();
+        setSelected(s => Math.max(1, s - 1));
+        setViewMode('frame');
+      } else if (e.key === 'ArrowRight') {
+        e.preventDefault();
+        setSelected(s => Math.min(datasetCountRef.current || 1, s + 1));
+        setViewMode('frame');
+      } else if (e.key === ' ') {
+        e.preventDefault();
+        onSnapRef.current?.();
+      } else if ((e.key === 'z' || e.key === 'Z') && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault();
+        onUndoRef.current?.();
+      } else if (e.key === 'Delete' || e.key === 'Backspace') {
+        e.preventDefault();
+        onDropRef.current?.();
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, []);
 
   // Auto-capture, cell-aware. LiveDetectedFrame fires onMeta on every
   // detected tick; we snap only if (a) auto-capture is on, (b) we're
@@ -313,14 +454,15 @@ export function HandEyeTab({ solvePattern, setSolvePattern }) {
   }, [autoCapture, autoCaptureRate, liveDevice, datasetPath]);
 
   const onRun = async () => {
-    if (!datasetPath) { setStatus(t('handeye.pickDatasetFolder')); return; }
+    if (!datasetPath) { setStatus(t('handeye.pickDatasetFolder'), true); say('solveFail'); return; }
     if (trackerSource !== 'file') {
-      setStatus(t('handeye.liveSourceNotWired', { source: trackerSource }));
+      setStatus(t('handeye.liveSourceNotWired', { source: trackerSource }), true);
+      say('solveFail');
       return;
     }
-    if (!posesPath) { setStatus(t('handeye.pickPosesJson')); return; }
-    if (!camInt) { setStatus(t('handeye.loadCamIntrinsics')); return; }
-    setBusy(true); setStatus(t('handeye.solvingAxxb'));
+    if (!posesPath) { setStatus(t('handeye.pickPosesJson'), true); say('solveFail'); return; }
+    if (!camInt) { setStatus(t('handeye.loadCamIntrinsics'), true); say('solveFail'); return; }
+    setBusy(true); setStatus(t('handeye.solvingAxxb')); say('solveStart');
     try {
       const res = await api.calibrate('handeye', {
         method, kind, pattern: solvePattern,
@@ -328,12 +470,14 @@ export function HandEyeTab({ solvePattern, setSolvePattern }) {
         dataset_path: datasetPath,
         poses_path: posesPath,
         K: camInt.K, D: camInt.D,
+        distortion_model: camInt.distortion_model,
       });
       setResult(res);
       setStatus(res.ok
         ? t('handeye.rmsResult', { rot: res.rms.toFixed(3), trans: res.final_cost.toFixed(2), message: res.message })
-        : t('common.failed', { message: res.message }));
-    } catch (e) { setStatus(t('common.error', { error: e.message })); } finally { setBusy(false); }
+        : t('common.failed', { message: res.message }), !res.ok);
+      say(res.ok ? 'solveOk' : 'solveFail');
+    } catch (e) { setStatus(t('common.error', { error: e.message }), true); say('solveFail'); } finally { setBusy(false); }
   };
 
   const onSaveYaml = async () => {
@@ -572,11 +716,16 @@ export function HandEyeTab({ solvePattern, setSolvePattern }) {
           <CaptureControls
             autoCapture={autoCapture} onAuto={setAutoCapture}
             autoRate={autoCaptureRate} onAutoRate={setAutoCaptureRate}
-            onSnap={onSnap}
+            onSnap={onSnap} onDrop={onDrop}
             coverage={coverage.percent} coverageCells={coverage.cells}/>
-          {status && <div className="mono" style={{ fontSize: 10.5, color: 'var(--text-3)', padding: '0 2px' }}>{status}</div>}
         </div>
-        <SolverButton onSolve={onRun} busy={busy} label={t('handeye.solveAxxb')}/>
+        <SolverButton onSolve={onRun} busy={busy} label={t('handeye.solveAxxb')}
+          status={status}
+          statusKind={
+            !status ? undefined :
+            statusErr ? 'err' :
+            result?.ok ? 'ok' : 'warn'
+          }/>
       </div>
 
       <div className="viewport">

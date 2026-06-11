@@ -632,11 +632,12 @@ async def calibration_export_camera_intrix(body: dict) -> dict:
     slot = body.get("slot")
     K = body.get("K")
     D = body.get("D") or []
+    image_size = body.get("image_size")
     path = body.get("path")
     if not slot:
         raise HTTPException(status_code=400, detail="missing camera slot")
     try:
-        res = yaml_io.export_camera_intrinsics(slot, K, D, path=path)
+        res = yaml_io.export_camera_intrinsics(slot, K, D, image_size=image_size, path=path)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     return {"ok": True, **res}
@@ -647,7 +648,10 @@ async def calibration_load(body: dict) -> CalibrationLoadResponse:
     path = body.get("path")
     if not path or not os.path.isfile(path):
         raise HTTPException(status_code=404, detail="yaml not found")
-    return yaml_io.load_calibration(path)
+    try:
+        return yaml_io.load_calibration(path, slot=body.get("slot"))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
 
 
 @router.post("/recording/save")

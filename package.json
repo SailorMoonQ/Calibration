@@ -64,7 +64,7 @@
       ],
       "category": "Science",
       "icon": "build/icon-1024.png",
-      "artifactName": "${productName}-${version}-${arch}.${ext}"
+      "artifactName": "Calibration_Workbench-${version}-${arch}.${ext}"
     },
     "win": {
       "target": [

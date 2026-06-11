@@ -51,6 +51,19 @@ function cameraSlotFromSource(...sources) {
   return null;
 }
 
+function guidedDeltaText(sig, m, circle) {
+  if (!sig || !m) return null;
+  const parts = [];
+  if (m.tilt != null && sig.tilt != null) parts.push();
+  if (m.roll != null && sig.roll != null) parts.push();
+  if (m.scale != null && sig.scale != null) parts.push();
+  if (m.centroid && sig.centroid && circle?.r) {
+    const dp = Math.hypot(m.centroid.x - sig.centroid.x, m.centroid.y - sig.centroid.y) / circle.r;
+    parts.push();
+  }
+  return parts.length ? parts.join(' · ') : null;
+}
+
 export function FisheyeTab({ tweaks }) {
   const { t } = useTranslation();
   const [board, setBoard] = useState(DEFAULT_CHESS_BOARD);
@@ -852,7 +865,12 @@ export function FisheyeTab({ tweaks }) {
     let extra = '', extraErr = false;
     if (slot) {
       try {
-        const r = await api.exportCameraIntrix({ slot, K: result.K, D: result.D ?? [] });
+        const r = await api.exportCameraIntrix({
+          slot,
+          K: result.K,
+          D: result.D ?? [],
+          image_size: result.image_size ?? null,
+        });
         extra = ' · ' + t('fisheye.wroteCameraIntrix', { slot, path: r.path });
       } catch (e) {
         extra = ' · ' + t('fisheye.cameraIntrixFailed', { error: e.message });
@@ -986,17 +1004,17 @@ export function FisheyeTab({ tweaks }) {
         return (
           <div style={{
             position: 'absolute', top: 10, left: '50%', transform: 'translateX(-50%)',
-            background: 'rgba(8,10,14,0.82)', border: `1.5px solid ${color}`, borderRadius: 7,
-            padding: '7px 13px', display: 'flex', flexDirection: 'column', gap: 5, minWidth: 168,
-            fontFamily: 'JetBrains Mono', fontSize: 12.5, fontWeight: 600, color,
-            boxShadow: '0 3px 14px rgba(0,0,0,0.55)', backdropFilter: 'blur(3px)',
-            textShadow: '0 1px 2px rgba(0,0,0,0.7)',
+            background: 'rgba(3,6,10,0.94)', border: `1.5px solid ${color}`, borderRadius: 7,
+            padding: '8px 14px', display: 'flex', flexDirection: 'column', gap: 5, minWidth: 196,
+            fontFamily: 'JetBrains Mono', fontSize: 12.5, fontWeight: 600, color: 'var(--text)',
+            boxShadow: '0 8px 24px rgba(0,0,0,0.72)', backdropFilter: 'blur(6px)',
+            textShadow: '0 1px 3px rgba(0,0,0,0.9)',
           }}>
             {autoHud.guidedLabel && (
               <div style={{ color: 'var(--text)', fontSize: 12, fontWeight: 700 }}>{autoHud.guidedLabel}</div>
             )}
-            <div>⦿ {t('fisheye.autoCapture')} · {t(`fisheye.auto_${r}`)}
-              {typeof autoHud.tilt === 'number' && <span style={{ color: 'var(--text-2)', fontWeight: 500 }}>  ∠{autoHud.tilt.toFixed(0)}°</span>}
+            <div><span style={{ color }}>⦿ {t('fisheye.autoCapture')} · {t(`fisheye.auto_${r}`)}</span>
+              {typeof autoHud.tilt === 'number' && <span style={{ color: 'var(--text-2)', fontWeight: 600 }}>  ∠{autoHud.tilt.toFixed(0)}°</span>}
             </div>
             <div style={{ height: 4, background: 'rgba(255,255,255,0.18)', borderRadius: 2, overflow: 'hidden' }}>
               <div style={{ height: '100%', width: `${Math.round((autoHud.dwell || 0) * 100)}%`, background: 'var(--ok)', transition: 'width 80ms linear' }}/>

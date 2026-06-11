@@ -36,6 +36,13 @@ _METHOD_FLAGS = {
 }
 
 
+def _distortion_model(req: HandEyeRequest) -> str:
+    model = str(getattr(req, "distortion_model", "pinhole") or "pinhole").lower()
+    if "fish" in model or "kannala" in model or "equidistant" in model:
+        return "fisheye"
+    return "pinhole"
+
+
 def _split_poses(Ts: list[np.ndarray]) -> tuple[list[np.ndarray], list[np.ndarray]]:
     R = [T[:3, :3] for T in Ts]
     t = [T[:3, 3].reshape(3, 1) for T in Ts]
@@ -97,6 +104,7 @@ def _build_A_from_dataset(req: HandEyeRequest) -> tuple[list[np.ndarray], list[s
         raise ValueError("dataset_path has no images")
     K = np.array(req.K, dtype=np.float64)
     D = np.array(req.D, dtype=np.float64).reshape(-1, 1)
+    distortion_model = _distortion_model(req)
     A: list[np.ndarray] = []
     names: list[str] = []
     for p in paths:
@@ -108,10 +116,23 @@ def _build_A_from_dataset(req: HandEyeRequest) -> tuple[list[np.ndarray], list[s
         if res is None:
             continue
         img, obj = res
+        img_pts = img.reshape(-1, 1, 2).astype(np.float64)
+        dist = D
+        if distortion_model == "fisheye":
+            if D.size < 4:
+                continue
+            D4 = D.reshape(-1, 1)[:4]
+            img_pts = cv2.fisheye.undistortPoints(
+                img_pts,
+                K,
+                D4,
+                P=K,
+            )
+            dist = np.zeros((4, 1), dtype=np.float64)
         ok, rv, tv = cv2.solvePnP(
             obj.reshape(-1, 1, 3).astype(np.float64),
-            img.reshape(-1, 1, 2).astype(np.float64),
-            K, D, flags=cv2.SOLVEPNP_ITERATIVE,
+            img_pts,
+            K, dist, flags=cv2.SOLVEPNP_ITERATIVE,
         )
         if not ok:
             continue

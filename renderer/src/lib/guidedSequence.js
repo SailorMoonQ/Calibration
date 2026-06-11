@@ -14,7 +14,7 @@
 import { boardTiltDeg } from './polarCoverage.js';
 
 // ── Pose / scale acceptance thresholds (heuristic, no intrinsics needed) ──────
-const TILT_FRONTAL_MAX = 8;    // a "正对" frame must be flatter than this (deg)
+const TILT_FRONTAL_MAX = 12;   // a "正对" frame must be flatter than this (deg)
 // Tilt/yaw acceptance (boardTiltDeg proxy). Kept LOW on purpose. The board is
 // geometrically detectable to ~33° (verified against /tmp/1 saved frames — even
 // the downscaled live pass finds it), so this is NOT a detection ceiling. The
@@ -177,15 +177,16 @@ export function poseOk(step, m) {
 // duplicate. A nudge in tilt, roll, or position all count.
 export function differsEnough(sig, m, circle) {
   if (!sig || !m) return true;
-  if (m.tilt != null && sig.tilt != null && Math.abs(m.tilt - sig.tilt) >= 3) return true;
-  if (m.roll != null && sig.roll != null && Math.abs(m.roll - sig.roll) >= 3) return true;
+  if (m.tilt != null && sig.tilt != null && Math.abs(m.tilt - sig.tilt) >= 2) return true;
+  if (m.roll != null && sig.roll != null && Math.abs(m.roll - sig.roll) >= 2) return true;
+  if (m.scale != null && sig.scale != null && Math.abs(m.scale - sig.scale) >= 0.025) return true;
   if (m.centroid && sig.centroid && circle?.r) {
-    if (Math.hypot(m.centroid.x - sig.centroid.x, m.centroid.y - sig.centroid.y) >= circle.r * 0.05) return true;
+    if (Math.hypot(m.centroid.x - sig.centroid.x, m.centroid.y - sig.centroid.y) >= circle.r * 0.03) return true;
   }
   return false;
 }
 
 // A signature of a captured shot, for the differsEnough check on the next one.
 export function shotSignature(m) {
-  return m ? { tilt: m.tilt, roll: m.roll, centroid: m.centroid } : null;
+  return m ? { tilt: m.tilt, roll: m.roll, scale: m.scale, centroid: m.centroid } : null;
 }

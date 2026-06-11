@@ -115,7 +115,7 @@ export const api = {
   }),
   saveCalibration: (body) => request('/calibration/save', { method: 'POST', body: JSON.stringify(body) }),
   exportCameraIntrix: (body) => request('/calibration/export_camera_intrix', { method: 'POST', body: JSON.stringify(body) }),
-  loadCalibration: (path) => request('/calibration/load', { method: 'POST', body: JSON.stringify({ path }) }),
+  loadCalibration: (path, opts = {}) => request('/calibration/load', { method: 'POST', body: JSON.stringify({ path, ...opts }) }),
 };
 
 export const recording = {
