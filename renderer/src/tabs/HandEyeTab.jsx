@@ -234,9 +234,13 @@ export function HandEyeTab({ solvePattern, setSolvePattern, tweaks }) {
     return m;
   }, [result]);
 
-  const frames = useMemo(() => datasetFiles.map((p, i) => ({
-    id: i + 1, err: errByPath?.get(basename(p)) ?? 0, tx: 0, ty: 0, rot: 0,
-  })), [datasetFiles, errByPath]);
+  // err is null for frames the solver didn't use (board not detected / no pose) —
+  // the strip renders those as a grey "—", never a green 0.00 (which would read
+  // as "perfect" when it actually means "not measured").
+  const frames = useMemo(() => datasetFiles.map((p, i) => {
+    const e = errByPath?.get(basename(p));
+    return { id: i + 1, err: e == null ? null : e, tx: 0, ty: 0, rot: 0 };
+  }), [datasetFiles, errByPath]);
   const [selected, setSelected] = useState(1);
 
   const cam = useCameraSource({
@@ -779,7 +783,7 @@ export function HandEyeTab({ solvePattern, setSolvePattern, tweaks }) {
           onSelect={(id) => { setSelected(id); setViewMode('frame'); }}
           coverage={coverage.percent}
           okBelow={HE_TRANS_OK} warnBelow={HE_TRANS_WARN}
-          errUnit=" mm" errHint={t('handeye.perFrameErrHint')}/>
+          errUnit=" mm" errHint={t('handeye.perFrameErrHint')} colorMode="mid-good"/>
         <div className="vp-body" style={{ gridTemplateColumns: '1fr 0.7fr', gap: 1, background: 'var(--view-border)' }}>
           <div className="vp-cell">
             <span className="vp-label">{t('handeye.sceneLabel')}</span>

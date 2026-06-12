@@ -86,6 +86,7 @@
     "frames": "帧",
     "coverage": "覆盖率",
     "add": "+ 添加",
+    "frameUnused": "该帧未参与求解（未检测到棋盘或无位姿）",
     "reprojectionError": "重投影误差",
     "rmsOverFrames": "各帧 RMS",
     "mean": "均值",
@@ -302,7 +303,7 @@
     "voicePlayFailed": "语音播放被拦截（{{name}}）：{{error}}"
   },
   "handeye": {
-    "perFrameErrHint": "该帧相对参考帧的平移偏差（毫米）",
+    "perFrameErrHint": "该帧一致性偏差（毫米）· 有偏差属正常，接近 0 反而可疑（多为未参与/重复/基准帧），偏大才需留意",
     "railTitlePrefix": "手眼 · 相机 ↔ {{tracker}}",
     "trackerHmd": "HMD",
     "trackerController": "控制器",

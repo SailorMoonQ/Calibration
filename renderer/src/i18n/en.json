@@ -86,6 +86,7 @@
     "frames": "frames",
     "coverage": "coverage",
     "add": "+ add",
+    "frameUnused": "frame not used in solve (board undetected or no pose)",
     "reprojectionError": "Reprojection Error",
     "rmsOverFrames": "RMS over frames",
     "mean": "mean",
@@ -302,7 +303,7 @@
     "voicePlayFailed": "voice playback blocked ({{name}}): {{error}}"
   },
   "handeye": {
-    "perFrameErrHint": "this frame's translation deviation vs the reference frame (mm)",
+    "perFrameErrHint": "this frame's consistency deviation (mm) · some deviation is normal; near-0 is suspicious (unused/duplicate/reference frame), only large values warrant a look",
     "railTitlePrefix": "Hand-Eye · cam ↔ {{tracker}}",
     "trackerHmd": "HMD",
     "trackerController": "controller",

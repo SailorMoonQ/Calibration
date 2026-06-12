@@ -75,13 +75,42 @@ def chess_object_points(cols: int, rows: int, sq: float) -> np.ndarray:
 
 
 def detect_chessboard(gray: np.ndarray, cols: int, rows: int) -> np.ndarray | None:
-    """Returns (N, 2) float32 corners or None. Uses the SB (sector-based) detector
-    which is sub-pixel accurate without needing cornerSubPix."""
-    flags = cv2.CALIB_CB_EXHAUSTIVE | cv2.CALIB_CB_ACCURACY
-    found, corners = cv2.findChessboardCornersSB(gray, (cols, rows), flags)
+    """Returns (N, 2) float32 corners or None.
+
+    Primary: the SB (sector-based) detector — sub-pixel accurate without
+    cornerSubPix. SB is precise but strict: on fisheye-periphery distortion or
+    slight motion blur it often reports "not found", silently dropping otherwise
+    usable frames (observed: 5/15 dropped on an arm-mounted fisheye set).
+
+    Fallback: when SB misses, retry with the classic ADAPTIVE_THRESH detector +
+    cornerSubPix. It tolerates the harder frames; sub-pixel refinement keeps the
+    corners accurate enough for the solver. This recovers frames that would
+    otherwise show up as "unused" (0.00) in the strip.
+    """
+    found, corners = cv2.findChessboardCornersSB(
+        gray, (cols, rows), cv2.CALIB_CB_EXHAUSTIVE | cv2.CALIB_CB_ACCURACY
+    )
+    if found:
+        return corners.reshape(-1, 2).astype(np.float32)
+
+    found, corners = cv2.findChessboardCorners(
+        gray, (cols, rows),
+        cv2.CALIB_CB_ADAPTIVE_THRESH | cv2.CALIB_CB_NORMALIZE_IMAGE,
+    )
     if not found:
         return None
-    return corners.reshape(-1, 2).astype(np.float32)
+    corners = cv2.cornerSubPix(
+        gray, corners, (5, 5), (-1, -1),
+        (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 0.01),
+    )
+    # CRITICAL: the classic detector enumerates corners from the OPPOSITE corner
+    # vs SB — its order is the exact reverse (verified <1px reversed-match on every
+    # frame where both succeed). chess_object_points() is built in SB's order, so a
+    # fallback frame's corners must be reversed to line up; otherwise solvePnP gives
+    # a 180°-flipped pose that, mixed with SB frames, wrecks the hand-eye solve
+    # (observed 0.96° → 144°).
+    corners = corners.reshape(-1, 2).astype(np.float32)[::-1]
+    return np.ascontiguousarray(corners)
 
 
 def _find_sb_live(gray: np.ndarray, cols: int, rows: int, max_dim: int) -> np.ndarray | None:
