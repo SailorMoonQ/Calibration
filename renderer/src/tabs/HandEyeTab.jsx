@@ -7,7 +7,7 @@ import { LiveDetectedFrame } from '../components/LiveDetectedFrame.jsx';
 import { Ros2TopicPicker } from '../components/Ros2TopicPicker.jsx';
 import { useCameraSource, CameraSourcePanel } from '../components/CameraSource.jsx';
 import {
-  Scene3D, Frustum3D, HMD3D, Controller3D, Chessboard3D, RigidLink3D,
+  Scene3D, Frustum3D, HMD3D, Controller3D, Flange3D, Chessboard3D, RigidLink3D,
 } from '../components/scene3d.jsx';
 import {
   FrameStrip, ErrorPanel, TargetPanel,
@@ -48,13 +48,15 @@ export function HandEyeTab({ solvePattern, setSolvePattern, tweaks }) {
   const isHMD = kind === 'hmd';
   const trackerLabel = isHMD ? t('handeye.trackerHmd') : t('handeye.trackerController');
   const xmatLabel = isHMD ? 'T_hmd_cam' : 'T_ctrl_cam';
-  const TrackerGlyph = isHMD ? HMD3D : Controller3D;
 
   const [board, setBoard] = useState(DEFAULT_BOARD);
   const [method, setMethod] = useState('park');
   const [showBoard, setShowBoard] = useState(true);
 
   const [trackerSource, setTrackerSource] = useState('file');
+  // 3D glyph for the live pose: ARX is an arm end-flange, VR sources are
+  // headset/controller. Falls back to kind (hmd vs ctrl) for non-arx sources.
+  const TrackerGlyph = trackerSource === 'arx' ? Flange3D : (isHMD ? HMD3D : Controller3D);
   const [oculusDevice, setOculusDevice] = useState('');
   const [picoDevice, setPicoDevice] = useState('');
   const [arxDevice, setArxDevice] = useState('arx_ee_r');
@@ -308,6 +310,14 @@ export function HandEyeTab({ solvePattern, setSolvePattern, tweaks }) {
       if (!lp) { setStatus(t('handeye.noPoseYet')); return; }
       const ageMs = Math.round((Date.now() / 1000 - lp.ts) * 1000);
       if (ageMs > 200) { setStatus(t('handeye.poseStale', { ms: ageMs })); return; }
+      // Reject degenerate poses: a pose source that just connected (e.g. ARX
+      // before /arx/dual_arm_status streams real readings) can report the
+      // origin / identity. Such a frame poisons AX=XB — the end-effector is
+      // physically never at the base origin. Translation magnitude in metres;
+      // < 2 cm from base origin means the reading hasn't populated yet.
+      const T = lp.T;
+      const tNorm = Math.hypot(T[0][3], T[1][3], T[2][3]);
+      if (tNorm < 0.02) { setStatus(t('handeye.poseDegenerate')); say('solveFail'); return; }
     }
 
     let imagePath;
@@ -768,7 +778,8 @@ export function HandEyeTab({ solvePattern, setSolvePattern, tweaks }) {
         <FrameStrip frames={frames} selected={selected}
           onSelect={(id) => { setSelected(id); setViewMode('frame'); }}
           coverage={coverage.percent}
-          okBelow={HE_TRANS_OK} warnBelow={HE_TRANS_WARN}/>
+          okBelow={HE_TRANS_OK} warnBelow={HE_TRANS_WARN}
+          errUnit=" mm" errHint={t('handeye.perFrameErrHint')}/>
         <div className="vp-body" style={{ gridTemplateColumns: '1fr 0.7fr', gap: 1, background: 'var(--view-border)' }}>
           <div className="vp-cell">
             <span className="vp-label">{t('handeye.sceneLabel')}</span>

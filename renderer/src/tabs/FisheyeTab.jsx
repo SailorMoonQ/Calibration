@@ -1167,7 +1167,8 @@ export function FisheyeTab({ tweaks }) {
             {result?.ok ? <>rms <b style={{color: trafficColor(rmsKind)}}>{result.rms.toFixed(3)}</b> px</> : <>{t('fisheye.noCalibrationYet')}</>}
           </div>
         </div>
-        <FrameStrip frames={frames} selected={selected} onSelect={(id) => { setSelected(id); setViewMode('frame'); }} coverage={coverage.percent}/>
+        <FrameStrip frames={frames} selected={selected} onSelect={(id) => { setSelected(id); setViewMode('frame'); }} coverage={coverage.percent}
+          errUnit=" px" errHint={t('fisheye.perFrameErrHint')}/>
         {(() => {
           // Pick which cells to render. Until we have intrinsics, the rectified cell is
           // not meaningful — collapse to the raw cell at full width regardless of view mode.

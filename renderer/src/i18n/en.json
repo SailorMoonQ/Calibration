@@ -214,6 +214,7 @@
     "rmsResult": "rms {{rms}} px · {{message}}"
   },
   "fisheye": {
+    "perFrameErrHint": "this frame's reprojection error (pixels)",
     "railTitle": "Fish-eye Intrinsics",
     "dataset": "Dataset",
     "projectionModel": "Projection model",
@@ -301,6 +302,7 @@
     "voicePlayFailed": "voice playback blocked ({{name}}): {{error}}"
   },
   "handeye": {
+    "perFrameErrHint": "this frame's translation deviation vs the reference frame (mm)",
     "railTitlePrefix": "Hand-Eye · cam ↔ {{tracker}}",
     "trackerHmd": "HMD",
     "trackerController": "controller",
@@ -375,6 +377,7 @@
     "intrinsicsLoadFailed": "intrinsics load failed: {{error}}",
     "noPoseYet": "no pose yet — wait for tracker stream",
     "poseStale": "pose stale (Δt = {{ms}} ms) — check tracker",
+    "poseDegenerate": "pose near origin (likely zero/not-ready) — snap rejected; move the arm so the pose refreshes",
     "imagePoseAppendFailed": "image saved, pose append failed: {{error}}",
     "snappedPose": "snapped+pose → {{name}}",
     "snapImageOnly": "snap (image only — connect tracker for pose) → {{name}}",

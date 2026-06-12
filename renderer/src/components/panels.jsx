@@ -18,7 +18,7 @@ function FrameThumb({ f }) {
   );
 }
 
-export function FrameStrip({ frames, selected, onSelect, coverage, okBelow = 0.35, warnBelow = 0.6 }) {
+export function FrameStrip({ frames, selected, onSelect, coverage, okBelow = 0.35, warnBelow = 0.6, errUnit = '', errHint = '' }) {
   const { t } = useTranslation();
   const activeRef = useRef(null);
   // Whenever the selection changes, slide the strip so the active thumb is centered.
@@ -53,10 +53,11 @@ export function FrameStrip({ frames, selected, onSelect, coverage, okBelow = 0.3
           <div key={f.id}
                ref={isActive ? activeRef : null}
                className={"frame-thumb" + (isActive ? ' active' : '')}
+               title={errHint ? `${errHint}: ${f.err.toFixed(2)}${errUnit}` : undefined}
                onClick={() => onSelect(f.id)}>
             <FrameThumb f={f}/>
             <span className="fnum">#{f.id.toString().padStart(2,'0')}</span>
-            <span className="ferr" style={{ color: numColor }}>{f.err.toFixed(2)}</span>
+            <span className="ferr" style={{ color: numColor }}>{f.err.toFixed(2)}{errUnit}</span>
             <span className="fbar" style={{ width: barPct + '%', background: barColor }}/>
           </div>
         );
