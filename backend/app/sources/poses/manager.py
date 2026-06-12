@@ -34,10 +34,17 @@ def _build_pico(**kw) -> PoseSource:
     return PicoPoseSource()
 
 
+def _build_arx(**kw) -> PoseSource:
+    # Subscribes to /arx/dual_arm_status on the shared rclpy node.
+    from app.sources.poses.arx import ArxPoseSource
+    return ArxPoseSource()
+
+
 _BUILDERS: dict[str, Callable[..., PoseSource]] = {
     "oculus":  _build_oculus,
     "steamvr": _build_steamvr,
     "pico":    _build_pico,
+    "arx":     _build_arx,
 }
 
 

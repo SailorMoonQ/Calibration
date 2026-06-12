@@ -34,6 +34,7 @@ function cameraSlotFromSource(...sources) {
 }
 
 const TRACKER_SOURCES = [
+  { value: 'arx',     label: 'ARX 双臂' },
   { value: 'oculus',  label: 'Oculus Reader' },
   { value: 'pico',    label: 'PICO' },
   { value: 'ros2',    label: 'ROS2 topic' },
@@ -56,6 +57,7 @@ export function HandEyeTab({ solvePattern, setSolvePattern, tweaks }) {
   const [trackerSource, setTrackerSource] = useState('file');
   const [oculusDevice, setOculusDevice] = useState('');
   const [picoDevice, setPicoDevice] = useState('');
+  const [arxDevice, setArxDevice] = useState('arx_ee_r');
   const [trackerRos2Topic, setTrackerRos2Topic] = useState('');
   const [steamvrSerial, setSteamvrSerial] = useState('');
 
@@ -104,6 +106,7 @@ export function HandEyeTab({ solvePattern, setSolvePattern, tweaks }) {
   const poseTickWindowRef = useRef([]); // last ~1s of wall_ts for fps calc
 
   const trackerDeviceKey = () => {
+    if (trackerSource === 'arx')     return arxDevice || 'arx_ee_r';
     if (trackerSource === 'oculus')  return oculusDevice || (kind === 'ctrl' ? 'controller_R' : 'hmd');
     if (trackerSource === 'pico')    return picoDevice || (kind === 'ctrl' ? 'pico_ctrl_r' : 'pico_hmd');
     if (trackerSource === 'steamvr') return steamvrSerial || (kind === 'ctrl' ? 'controller_R' : 'tracker_0');
@@ -150,7 +153,7 @@ export function HandEyeTab({ solvePattern, setSolvePattern, tweaks }) {
         while (win.length && win[0] < cutoff) win.shift();
       };
     } catch (e) { setStatus(t('handeye.connectFailed', { error: e.message })); }
-  }, [trackerSource, oculusDevice, picoDevice, steamvrSerial, kind]);
+  }, [trackerSource, oculusDevice, picoDevice, arxDevice, steamvrSerial, kind]);
 
   const onDisconnectTracker = useCallback(() => {
     const ws = wsRef.current;
@@ -455,11 +458,10 @@ export function HandEyeTab({ solvePattern, setSolvePattern, tweaks }) {
 
   const onRun = async () => {
     if (!datasetPath) { setStatus(t('handeye.pickDatasetFolder'), true); say('solveFail'); return; }
-    if (trackerSource !== 'file') {
-      setStatus(t('handeye.liveSourceNotWired', { source: trackerSource }), true);
-      say('solveFail');
-      return;
-    }
+    // Any tracker source works for solving — live capture (oculus/pico/steamvr)
+    // already writes poses.json next to the images and points posesPath at it,
+    // so the solver consumes it exactly like a hand-picked JSON file. The only
+    // hard requirement is that some poses.json exists, checked next.
     if (!posesPath) { setStatus(t('handeye.pickPosesJson'), true); say('solveFail'); return; }
     if (!camInt) { setStatus(t('handeye.loadCamIntrinsics'), true); say('solveFail'); return; }
     setBusy(true); setStatus(t('handeye.solvingAxxb')); say('solveStart');
@@ -589,22 +591,44 @@ export function HandEyeTab({ solvePattern, setSolvePattern, tweaks }) {
             title={t('handeye.trackerSource')}
             hint={
               trackerSource === 'file'    ? (posesPath ? basename(posesPath) : t('handeye.pickJson')) :
+              trackerSource === 'arx'     ? (arxDevice || t('handeye.pickDevice')) :
               trackerSource === 'oculus'  ? (oculusDevice || t('handeye.pickDevice')) :
               trackerSource === 'pico'    ? (picoDevice || t('handeye.pickDevice')) :
               trackerSource === 'ros2'    ? (trackerRos2Topic || t('handeye.pickTopic')) :
                                             (steamvrSerial || t('handeye.pickTracker'))
             }
-            right={connected ? null : <Seg value={trackerSource} onChange={setTrackerSource} options={
-              TRACKER_SOURCES.map(s => ({ value: s.value, label: s.label.split(' ')[0].toLowerCase() }))
-            }/>}
           >
-            <Field label={t('handeye.body')}>
-              <select className="select" value={kind} disabled={connected}
-                onChange={e => setKind(e.target.value)}>
-                <option value="hmd">HMD</option>
-                <option value="ctrl">{t('handeye.trackerController')}</option>
+            <Field label={t('handeye.source')}>
+              <select className="select" value={trackerSource} disabled={connected}
+                onChange={e => setTrackerSource(e.target.value)}>
+                {TRACKER_SOURCES.map(s => (
+                  <option key={s.value} value={s.value}>{s.label}</option>
+                ))}
               </select>
             </Field>
+            {trackerSource !== 'arx' && (
+              <Field label={t('handeye.body')}>
+                <select className="select" value={kind} disabled={connected}
+                  onChange={e => setKind(e.target.value)}>
+                  <option value="hmd">HMD</option>
+                  <option value="ctrl">{t('handeye.trackerController')}</option>
+                </select>
+              </Field>
+            )}
+            {trackerSource === 'arx' && (
+              <>
+                <Field label={t('handeye.arm')}>
+                  <select className="select" value={arxDevice} disabled={connected}
+                    onChange={e => setArxDevice(e.target.value)}>
+                    <option value="arx_ee_r">{t('handeye.armRight')}</option>
+                    <option value="arx_ee_l">{t('handeye.armLeft')}</option>
+                  </select>
+                </Field>
+                <div className="mono" style={{ fontSize: 10.5, color: 'var(--text-3)' }}>
+                  {t('handeye.arxHint')}
+                </div>
+              </>
+            )}
             {trackerSource === 'oculus' && (
               <>
                 <Field label={t('handeye.device')}>
@@ -662,7 +686,7 @@ export function HandEyeTab({ solvePattern, setSolvePattern, tweaks }) {
                 <button className="btn" onClick={onPickPoses}>{t('handeye.pickJsonBtn')}</button>
               </>
             )}
-            {(trackerSource === 'oculus' || trackerSource === 'pico' || trackerSource === 'steamvr') && (
+            {(trackerSource === 'arx' || trackerSource === 'oculus' || trackerSource === 'pico' || trackerSource === 'steamvr') && (
               <>
                 <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:6 }}>
                   {!connected
