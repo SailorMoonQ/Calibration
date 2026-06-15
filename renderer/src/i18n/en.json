@@ -26,9 +26,13 @@
     "comfy": "comfy",
     "accentHue": "accent hue",
     "voice": "voice",
-    "voiceCommands": "voice commands (snap / calibrate)",
+    "voiceCommands": "voice control (phone mic)",
     "voicePrompts": "spoken prompts",
     "voiceUnsupported": "speech recognition not available in this build",
+    "voiceStarting": "starting mobile entry…",
+    "voiceQrAlt": "mobile voice control QR code",
+    "voiceHttpsHint": "Scan on the phone; accept the self-signed HTTPS warning on first open. Recognizes: calibrate, photo, capture.",
+    "voiceStartFailed": "voice control failed to start: {{error}}",
     "reset": "reset"
   },
   "footer": {
@@ -278,6 +282,7 @@
       }
     },
     "voiceError": "speech recognition error: {{error}}",
+    "voiceCaptureStarted": "voice capture enabled · say photo to snap, say calibrate to solve",
     "noCalibrationYet": "no calibration yet",
     "rawDistorted": "raw · distorted",
     "liveLabel": "live · {{device}}",
@@ -387,6 +392,7 @@
     "pickPosesJson": "pick the tracker-poses JSON",
     "loadCamIntrinsics": "load camera intrinsics YAML",
     "solvingAxxb": "solving AX=XB…",
+    "voiceCaptureStarted": "voice capture enabled · say photo to snap image/pose, say calibrate to solve",
     "rmsResult": "rot {{rot}}° · trans {{trans}} mm · {{message}}"
   },
   "link": {

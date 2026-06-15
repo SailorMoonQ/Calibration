@@ -37,6 +37,7 @@ from app.sources import manager as source_manager
 from app.sources import opencv as opencv_source
 from app.sources import ros2_context
 from app.utils import yaml_io
+from app import voice
 
 log = logging.getLogger("calib.api")
 router = APIRouter()
@@ -56,6 +57,27 @@ def _safe_name(s: object) -> str:
 @router.get("/health")
 async def health() -> dict:
     return {"ok": True, "version": __version__, "platform": platform.platform()}
+
+
+@router.get("/voice/info")
+async def voice_info() -> dict:
+    return voice.info()
+
+
+@router.post("/voice/stop")
+async def voice_stop() -> dict:
+    voice.stop_mobile_server()
+    return {"ok": True}
+
+
+@router.get("/voice/events")
+async def voice_events() -> StreamingResponse:
+    return voice.events_response()
+
+
+@router.get("/voice/qrcode.svg")
+async def voice_qrcode() -> Response:
+    return voice.qrcode_svg_response()
 
 
 @router.get("/sources")

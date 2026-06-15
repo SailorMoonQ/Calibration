@@ -1,15 +1,36 @@
+import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Field, Seg, Chk } from './primitives.jsx';
+import { api, voiceQrUrl } from '../api/client.js';
 
 export const TWEAKS_DEFAULTS = {
   theme: 'dark',
   density: 'comfortable',
   accentHue: 295,
+  voiceCommands: false,   // phone microphone over LAN
   voicePrompts: false,    // spoken cues (Edge-TTS clips, zh)
 };
 
 export function TweaksPanel({ visible, tweaks, setTweaks, onClose }) {
   const { t } = useTranslation();
+  const [voiceInfo, setVoiceInfo] = useState(null);
+  const [qrSrc, setQrSrc] = useState('');
+
+  useEffect(() => {
+    if (!visible || !tweaks.voiceCommands) return undefined;
+    let cancelled = false;
+    Promise.all([api.voiceInfo(), voiceQrUrl()])
+      .then(([info, qr]) => {
+        if (cancelled) return;
+        setVoiceInfo(info);
+        setQrSrc(qr);
+      })
+      .catch((e) => {
+        if (!cancelled) setVoiceInfo({ ok: false, error: e.message });
+      });
+    return () => { cancelled = true; };
+  }, [visible, tweaks.voiceCommands]);
+
   if (!visible) return null;
   return (
     <div className="tweaks-panel">
@@ -34,6 +55,26 @@ export function TweaksPanel({ visible, tweaks, setTweaks, onClose }) {
         <div className="tweaks-section-label" style={{ fontSize: 10.5, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '0.05em', marginTop: 8, marginBottom: 2 }}>
           {t('tweaks.voice')}
         </div>
+        <Chk checked={tweaks.voiceCommands} onChange={v => setTweaks({ ...tweaks, voiceCommands: v })}>
+          {t('tweaks.voiceCommands')}
+        </Chk>
+        {tweaks.voiceCommands && (
+          <div className="voice-pair">
+            {voiceInfo?.ok ? (
+              <>
+                <div className="voice-qr">
+                  {qrSrc ? <img src={qrSrc} alt={t('tweaks.voiceQrAlt')}/> : <span>{t('tweaks.voiceStarting')}</span>}
+                </div>
+                <div className="voice-url mono">{voiceInfo.url}</div>
+                <div className="voice-hint">{t('tweaks.voiceHttpsHint')}</div>
+              </>
+            ) : (
+              <div className="voice-hint err">
+                {voiceInfo ? t('tweaks.voiceStartFailed', { error: voiceInfo.error || 'unknown' }) : t('tweaks.voiceStarting')}
+              </div>
+            )}
+          </div>
+        )}
         <Chk checked={tweaks.voicePrompts} onChange={v => setTweaks({ ...tweaks, voicePrompts: v })}>
           {t('tweaks.voicePrompts')}
         </Chk>

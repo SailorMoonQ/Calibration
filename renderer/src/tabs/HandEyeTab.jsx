@@ -19,6 +19,7 @@ import { DEFAULT_BOARD } from '../lib/board.js';
 import { computeCoverage, cellIndexFor } from '../lib/coverage.js';
 import { api, pickFolder, pickSaveFile, pickOpenFile, openPath, posesWsUrl } from '../api/client.js';
 import { speak } from '../lib/voice.js';
+import { useVoiceCommands } from '../lib/voiceControl.js';
 
 const UNDO_LIMIT = 20;
 const basename = (p) => (p || '').split('/').pop();
@@ -42,7 +43,7 @@ const TRACKER_SOURCES = [
   { value: 'file',    label: 'JSON file' },
 ];
 
-export function HandEyeTab({ solvePattern, setSolvePattern, tweaks }) {
+export function HandEyeTab({ active, solvePattern, setSolvePattern, tweaks }) {
   const { t } = useTranslation();
   const [kind, setKind] = useState('hmd');
   const isHMD = kind === 'hmd';
@@ -198,6 +199,33 @@ export function HandEyeTab({ solvePattern, setSolvePattern, tweaks }) {
   const onSnapRef = useRef(null);
   const onDropRef = useRef(null);
   const onUndoRef = useRef(null);
+  const onRunRef = useRef(null);
+  const lastVoiceCommandRef = useRef({ command: '', ts: 0 });
+
+  const acceptVoiceCommand = useCallback((command) => {
+    const now = performance.now();
+    const last = lastVoiceCommandRef.current;
+    if (last.command === command && now - last.ts < 1200) return false;
+    lastVoiceCommandRef.current = { command, ts: now };
+    return true;
+  }, []);
+
+  const voiceHandlers = useMemo(() => ({
+    calibrate: () => {
+      if (!acceptVoiceCommand('calibrate')) return;
+      onRunRef.current?.();
+    },
+    photo: () => {
+      if (!acceptVoiceCommand('snap')) return;
+      onSnapRef.current?.();
+    },
+    capture: () => {
+      if (!acceptVoiceCommand('snap')) return;
+      onSnapRef.current?.();
+    },
+  }), [acceptVoiceCommand, t]);
+
+  useVoiceCommands(active === 'handeye' && !!tweaks?.voiceCommands, voiceHandlers);
 
   // Undo stack — bounded LIFO, entries: { kind:'snap'|'drop', path, trashPath? }
   const undoStackRef = useRef([]);
@@ -495,6 +523,7 @@ export function HandEyeTab({ solvePattern, setSolvePattern, tweaks }) {
       say(res.ok ? 'solveOk' : 'solveFail');
     } catch (e) { setStatus(t('common.error', { error: e.message }), true); say('solveFail'); } finally { setBusy(false); }
   };
+  useEffect(() => { onRunRef.current = onRun; });
 
   const onSaveYaml = async () => {
     if (!result?.ok) { setStatus(t('common.nothingToSave')); return; }

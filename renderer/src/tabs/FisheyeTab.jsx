@@ -18,6 +18,7 @@ import {
   differsEnough, shotSignature,
 } from '../lib/guidedSequence.js';
 import { speak } from '../lib/voice.js';
+import { useVoiceCommands } from '../lib/voiceControl.js';
 
 // A snapped board only counts as covering a (polar) cell when at least this many
 // of its corners land in that cell — so a board merely clipping a cell's edge
@@ -51,20 +52,7 @@ function cameraSlotFromSource(...sources) {
   return null;
 }
 
-function guidedDeltaText(sig, m, circle) {
-  if (!sig || !m) return null;
-  const parts = [];
-  if (m.tilt != null && sig.tilt != null) parts.push();
-  if (m.roll != null && sig.roll != null) parts.push();
-  if (m.scale != null && sig.scale != null) parts.push();
-  if (m.centroid && sig.centroid && circle?.r) {
-    const dp = Math.hypot(m.centroid.x - sig.centroid.x, m.centroid.y - sig.centroid.y) / circle.r;
-    parts.push();
-  }
-  return parts.length ? parts.join(' · ') : null;
-}
-
-export function FisheyeTab({ tweaks }) {
+export function FisheyeTab({ active, tweaks }) {
   const { t } = useTranslation();
   const [board, setBoard] = useState(DEFAULT_CHESS_BOARD);
   const [model, setModel] = useState('equidistant');
@@ -260,8 +248,34 @@ export function FisheyeTab({ tweaks }) {
   const onUndoRef = useRef(null);
   const onDropRef = useRef(null);
   const onRunRef = useRef(null);
+  const lastVoiceCommandRef = useRef({ command: '', ts: 0 });
   const datasetCountRef = useRef(0);
   useEffect(() => { datasetCountRef.current = datasetFiles.length; }, [datasetFiles.length]);
+
+  const acceptVoiceCommand = useCallback((command) => {
+    const now = performance.now();
+    const last = lastVoiceCommandRef.current;
+    if (last.command === command && now - last.ts < 1200) return false;
+    lastVoiceCommandRef.current = { command, ts: now };
+    return true;
+  }, []);
+
+  const voiceHandlers = useMemo(() => ({
+    calibrate: () => {
+      if (!acceptVoiceCommand('calibrate')) return;
+      onRunRef.current?.();
+    },
+    photo: () => {
+      if (!acceptVoiceCommand('snap')) return;
+      onSnapRef.current?.();
+    },
+    capture: () => {
+      if (!acceptVoiceCommand('snap')) return;
+      onSnapRef.current?.();
+    },
+  }), [acceptVoiceCommand, t]);
+
+  useVoiceCommands(active === 'fisheye' && !!tweaks?.voiceCommands, voiceHandlers);
 
   // Undo stack: bounded LIFO of {kind: 'snap'|'drop', path, trashPath?}.
   // - snap: undo deletes (trashes) the just-snapped file

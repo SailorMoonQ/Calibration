@@ -10,6 +10,8 @@ import { IntrinsicsTab } from './tabs/IntrinsicsTab.jsx';
 import { FisheyeTab } from './tabs/FisheyeTab.jsx';
 import { HandEyeTab } from './tabs/HandEyeTab.jsx';
 import { LinkCalibTab } from './tabs/LinkCalibTab.jsx';
+import { api, voiceEventsUrl } from './api/client.js';
+import { dispatchVoiceCommand } from './lib/voiceControl.js';
 
 // label/sub are resolved per-render via i18n (see buildTabs); id/num/badge/Comp
 // are language-independent.
@@ -41,6 +43,33 @@ export function App() {
   useEffect(() => { localStorage.setItem('calib_tab', active); }, [active]);
   useEffect(() => { localStorage.setItem('calib_handeye_pattern', solvePattern); }, [solvePattern]);
   useEffect(() => { localStorage.setItem('calib_tweaks', JSON.stringify(tweaks)); }, [tweaks]);
+
+  useEffect(() => {
+    if (!tweaks.voiceCommands) {
+      api.voiceStop?.().catch(() => {});
+      return undefined;
+    }
+    let es = null;
+    let cancelled = false;
+    api.voiceInfo().catch((e) => console.warn('voice mobile entry failed', e));
+    voiceEventsUrl().then((url) => {
+      if (cancelled) return;
+      es = new EventSource(url);
+      es.onmessage = (event) => {
+        let msg;
+        try { msg = JSON.parse(event.data); } catch { return; }
+        if (msg.kind === 'command' && msg.command) {
+          dispatchVoiceCommand(msg);
+        }
+      };
+    }).catch((e) => {
+      console.warn('voice command stream failed', e);
+    });
+    return () => {
+      cancelled = true;
+      if (es) es.close();
+    };
+  }, [tweaks.voiceCommands]);
 
   useEffect(() => {
     const root = document.documentElement;
@@ -80,7 +109,7 @@ export function App() {
           onToggleSettings={() => setTweaksVisible(v => !v)}
           onCloseSettings={() => setTweaksVisible(false)}/>
         <Tabs tabs={tabs} value={active} onChange={setActive}/>
-        <ActiveComp solvePattern={solvePattern} setSolvePattern={setSolvePattern} tweaks={tweaks}/>
+        <ActiveComp active={active} solvePattern={solvePattern} setSolvePattern={setSolvePattern} tweaks={tweaks}/>
         <LogStrip lines={[]}/>
         <ConfirmHost/>
       </div>

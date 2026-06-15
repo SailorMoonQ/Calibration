@@ -26,9 +26,13 @@
     "comfy": "宽松",
     "accentHue": "强调色相",
     "voice": "语音",
-    "voiceCommands": "语音指令（拍照 / 标定）",
+    "voiceCommands": "语音控制（手机麦克风）",
     "voicePrompts": "语音提示播报",
     "voiceUnsupported": "当前环境不支持语音识别",
+    "voiceStarting": "正在启动手机入口…",
+    "voiceQrAlt": "手机语音控制二维码",
+    "voiceHttpsHint": "手机扫码访问；首次打开自签名 HTTPS 时请选择继续前往。只识别：标定、拍照、采集。",
+    "voiceStartFailed": "语音控制启动失败：{{error}}",
     "reset": "重置"
   },
   "footer": {
@@ -278,6 +282,7 @@
       }
     },
     "voiceError": "语音识别错误：{{error}}",
+    "voiceCaptureStarted": "语音采集已开启 · 说“拍照”可立即抓拍，说“标定”运行求解",
     "noCalibrationYet": "尚未标定",
     "rawDistorted": "原始 · 畸变",
     "liveLabel": "实时 · {{device}}",
@@ -387,6 +392,7 @@
     "pickPosesJson": "选择追踪器位姿 JSON",
     "loadCamIntrinsics": "加载相机内参 YAML",
     "solvingAxxb": "求解 AX=XB…",
+    "voiceCaptureStarted": "语音采集已开启 · 说“拍照”抓拍图像/位姿，说“标定”运行求解",
     "rmsResult": "旋转 {{rot}}° · 平移 {{trans}} mm · {{message}}"
   },
   "link": {
