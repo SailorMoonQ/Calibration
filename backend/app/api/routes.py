@@ -37,6 +37,7 @@ from app.sources import manager as source_manager
 from app.sources import opencv as opencv_source
 from app.sources import ros2_context
 from app.utils import yaml_io
+from app import voice
 
 log = logging.getLogger("calib.api")
 router = APIRouter()
@@ -56,6 +57,27 @@ def _safe_name(s: object) -> str:
 @router.get("/health")
 async def health() -> dict:
     return {"ok": True, "version": __version__, "platform": platform.platform()}
+
+
+@router.get("/voice/info")
+async def voice_info() -> dict:
+    return voice.info()
+
+
+@router.post("/voice/stop")
+async def voice_stop() -> dict:
+    voice.stop_mobile_server()
+    return {"ok": True}
+
+
+@router.get("/voice/events")
+async def voice_events() -> StreamingResponse:
+    return voice.events_response()
+
+
+@router.get("/voice/qrcode.svg")
+async def voice_qrcode() -> Response:
+    return voice.qrcode_svg_response()
 
 
 @router.get("/sources")
@@ -632,11 +654,12 @@ async def calibration_export_camera_intrix(body: dict) -> dict:
     slot = body.get("slot")
     K = body.get("K")
     D = body.get("D") or []
+    image_size = body.get("image_size")
     path = body.get("path")
     if not slot:
         raise HTTPException(status_code=400, detail="missing camera slot")
     try:
-        res = yaml_io.export_camera_intrinsics(slot, K, D, path=path)
+        res = yaml_io.export_camera_intrinsics(slot, K, D, image_size=image_size, path=path)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     return {"ok": True, **res}
@@ -647,7 +670,10 @@ async def calibration_load(body: dict) -> CalibrationLoadResponse:
     path = body.get("path")
     if not path or not os.path.isfile(path):
         raise HTTPException(status_code=404, detail="yaml not found")
-    return yaml_io.load_calibration(path)
+    try:
+        return yaml_io.load_calibration(path, slot=body.get("slot"))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
 
 
 @router.post("/recording/save")

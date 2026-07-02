@@ -155,6 +155,37 @@ export function Controller3D({ T, cam, color = "#b78cff", label = "ctrl" }) {
   );
 }
 
+// Robot arm end-flange: a mounting disc (octagon) on the tool plane plus a short
+// link stub along -Z, so an arm-mounted camera source (ARX) reads as a flange,
+// not a VR headset. Local frame matches the pose convention used elsewhere
+// (tool/optical axis = +Z), so the disc lies in the XY plane.
+export function Flange3D({ T, cam, color = "#7fd6a0", label = "flange", r = 0.03, stub = 0.05 }) {
+  const ring = [];
+  const N = 8;
+  for (let i = 0; i < N; i++) {
+    const a0 = (i / N) * Math.PI * 2, a1 = ((i + 1) / N) * Math.PI * 2;
+    const p0 = project(applyT(T, [r * Math.cos(a0), r * Math.sin(a0), 0]), cam);
+    const p1 = project(applyT(T, [r * Math.cos(a1), r * Math.sin(a1), 0]), cam);
+    ring.push(<line key={'r' + i} x1={p0.x} y1={p0.y} x2={p1.x} y2={p1.y} stroke={color} strokeWidth="1.2"/>);
+  }
+  // link stub: four rails from the disc rim back along -Z to a smaller rim
+  const rails = [];
+  for (let i = 0; i < 4; i++) {
+    const a = (i / 4) * Math.PI * 2;
+    const rim = project(applyT(T, [r * 0.7 * Math.cos(a), r * 0.7 * Math.sin(a), 0]), cam);
+    const back = project(applyT(T, [r * 0.5 * Math.cos(a), r * 0.5 * Math.sin(a), -stub]), cam);
+    rails.push(<line key={'s' + i} x1={rim.x} y1={rim.y} x2={back.x} y2={back.y} stroke={color} strokeWidth="1" opacity="0.7"/>);
+  }
+  const c = project(applyT(T, [0, 0, 0]), cam);
+  return (
+    <g>
+      {ring}{rails}
+      <circle cx={c.x} cy={c.y} r="2" fill={color}/>
+      <Axes3D T={T} cam={cam} len={0.04} label={label} thick={1.5}/>
+    </g>
+  );
+}
+
 export function Tracker3D({ T, cam, color = "#ffa95a", label = "tracker" }) {
   const r = 0.025;
   const pts = [

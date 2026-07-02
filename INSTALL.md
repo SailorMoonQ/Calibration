@@ -17,7 +17,9 @@ pip3 install --user \
   pydantic>=2.9 \
   'numpy>=1.26,<2' \
   'opencv-python-headless>=4.10' \
-  ruamel.yaml>=0.18
+  ruamel.yaml>=0.18 \
+  cryptography>=42 \
+  qrcode>=7.4
 ```
 
 > **OpenCV — use `opencv-python-headless`, not contrib.** The backend only

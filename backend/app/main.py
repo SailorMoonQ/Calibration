@@ -9,6 +9,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.routes import router as api_router
+from app import voice
 
 log = logging.getLogger("calib")
 
@@ -22,6 +23,11 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
     app.include_router(api_router)
+
+    @app.on_event("shutdown")
+    async def _shutdown_voice() -> None:
+        voice.stop_mobile_server()
+
     return app
 
 

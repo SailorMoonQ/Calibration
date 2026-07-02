@@ -7,7 +7,7 @@ import { LiveDetectedFrame } from '../components/LiveDetectedFrame.jsx';
 import { Ros2TopicPicker } from '../components/Ros2TopicPicker.jsx';
 import { useCameraSource, CameraSourcePanel } from '../components/CameraSource.jsx';
 import {
-  Scene3D, Frustum3D, HMD3D, Controller3D, Chessboard3D, RigidLink3D,
+  Scene3D, Frustum3D, HMD3D, Controller3D, Flange3D, Chessboard3D, RigidLink3D,
 } from '../components/scene3d.jsx';
 import {
   FrameStrip, ErrorPanel, TargetPanel,
@@ -18,10 +18,24 @@ import { makeT, applyT, composeT } from '../lib/math3d.js';
 import { DEFAULT_BOARD } from '../lib/board.js';
 import { computeCoverage, cellIndexFor } from '../lib/coverage.js';
 import { api, pickFolder, pickSaveFile, pickOpenFile, openPath, posesWsUrl } from '../api/client.js';
+import { speak } from '../lib/voice.js';
+import { useVoiceCommands } from '../lib/voiceControl.js';
 
+const UNDO_LIMIT = 20;
 const basename = (p) => (p || '').split('/').pop();
+const CAMERA_INTRIX_PATH = '/mibot_env/configs/camera_intrix.yaml';
+const CAMERA_SLOT_RE = /(?:^|\/)(head|left|right|back)(?:\/|$)/;
+
+function cameraSlotFromSource(...sources) {
+  for (const s of sources) {
+    const m = CAMERA_SLOT_RE.exec(s || '');
+    if (m) return m[1];
+  }
+  return null;
+}
 
 const TRACKER_SOURCES = [
+  { value: 'arx',     label: 'ARX 双臂' },
   { value: 'oculus',  label: 'Oculus Reader' },
   { value: 'pico',    label: 'PICO' },
   { value: 'ros2',    label: 'ROS2 topic' },
@@ -29,34 +43,61 @@ const TRACKER_SOURCES = [
   { value: 'file',    label: 'JSON file' },
 ];
 
-export function HandEyeTab({ solvePattern, setSolvePattern }) {
+export function HandEyeTab({ active, solvePattern, setSolvePattern, tweaks }) {
   const { t } = useTranslation();
   const [kind, setKind] = useState('hmd');
   const isHMD = kind === 'hmd';
   const trackerLabel = isHMD ? t('handeye.trackerHmd') : t('handeye.trackerController');
   const xmatLabel = isHMD ? 'T_hmd_cam' : 'T_ctrl_cam';
-  const TrackerGlyph = isHMD ? HMD3D : Controller3D;
 
   const [board, setBoard] = useState(DEFAULT_BOARD);
   const [method, setMethod] = useState('park');
   const [showBoard, setShowBoard] = useState(true);
 
   const [trackerSource, setTrackerSource] = useState('file');
+  // 3D glyph for the live pose: ARX is an arm end-flange, VR sources are
+  // headset/controller. Falls back to kind (hmd vs ctrl) for non-arx sources.
+  const TrackerGlyph = trackerSource === 'arx' ? Flange3D : (isHMD ? HMD3D : Controller3D);
   const [oculusDevice, setOculusDevice] = useState('');
   const [picoDevice, setPicoDevice] = useState('');
+  const [arxDevice, setArxDevice] = useState('arx_ee_r');
   const [trackerRos2Topic, setTrackerRos2Topic] = useState('');
   const [steamvrSerial, setSteamvrSerial] = useState('');
 
   const [datasetPath, setDatasetPath] = useState('');
   const [datasetFiles, setDatasetFiles] = useState([]);
   const [posesPath, setPosesPath] = useState('');
-  const [camInt, setCamInt] = useState(null); // { K, D, path }
+  const [camInt, setCamInt] = useState(null); // { K, D, path, distortion_model }
 
   const [viewMode, setViewMode] = useState('live');
 
   const [result, setResult] = useState(null);
   const [busy, setBusy] = useState(false);
-  const [status, setStatus] = useState('');
+  // status carries a message plus an explicit error flag so the solver-status
+  // colour is language-independent (no regex-matching the localized text).
+  const [status, setStatusMsg] = useState('');
+  const [statusErr, setStatusErr] = useState(false);
+  const setStatus = (msg, isErr = false) => { setStatusMsg(msg); setStatusErr(isErr); };
+
+  // Spoken cues (Edge-TTS clips, Chinese), reused from the fisheye capture loop.
+  // Gated by the ⚙ settings; failures surface in the status bar de-duped so a
+  // persistent autoplay block doesn't overwrite it on every cue.
+  const voicePrompts = !!tweaks?.voicePrompts;
+  const lastSpokeRef = useRef({});
+  const voiceErrRef = useRef('');
+  const say = useCallback((name, minGapMs = 0) => {
+    if (!voicePrompts) return;
+    const now = Date.now();
+    if (minGapMs && now - (lastSpokeRef.current[name] || 0) < minGapMs) return;
+    lastSpokeRef.current[name] = now;
+    speak(name).catch((e) => {
+      if (e?.name === 'AbortError') return;  // a newer cue cut this one off — expected
+      const msg = e?.message || e?.name || 'play blocked';
+      if (msg === voiceErrRef.current) return;
+      voiceErrRef.current = msg;
+      setStatus(t('fisheye.voicePlayFailed', { name, error: msg }), true);
+    });
+  }, [voicePrompts, t]);
 
   // Live tracker stream (used to attach pose to each captured image).
   const [connected, setConnected] = useState(false);
@@ -68,6 +109,7 @@ export function HandEyeTab({ solvePattern, setSolvePattern }) {
   const poseTickWindowRef = useRef([]); // last ~1s of wall_ts for fps calc
 
   const trackerDeviceKey = () => {
+    if (trackerSource === 'arx')     return arxDevice || 'arx_ee_r';
     if (trackerSource === 'oculus')  return oculusDevice || (kind === 'ctrl' ? 'controller_R' : 'hmd');
     if (trackerSource === 'pico')    return picoDevice || (kind === 'ctrl' ? 'pico_ctrl_r' : 'pico_hmd');
     if (trackerSource === 'steamvr') return steamvrSerial || (kind === 'ctrl' ? 'controller_R' : 'tracker_0');
@@ -114,7 +156,7 @@ export function HandEyeTab({ solvePattern, setSolvePattern }) {
         while (win.length && win[0] < cutoff) win.shift();
       };
     } catch (e) { setStatus(t('handeye.connectFailed', { error: e.message })); }
-  }, [trackerSource, oculusDevice, picoDevice, steamvrSerial, kind]);
+  }, [trackerSource, oculusDevice, picoDevice, arxDevice, steamvrSerial, kind]);
 
   const onDisconnectTracker = useCallback(() => {
     const ws = wsRef.current;
@@ -152,9 +194,56 @@ export function HandEyeTab({ solvePattern, setSolvePattern }) {
   const [autoCaptureRate, setAutoCaptureRate] = useState(0.5);  // seconds between snaps
   const [recordedCount, setRecordedCount] = useState(0);
 
-  // Hold the latest onSnap in a ref so the auto-capture timer always calls
-  // through to the up-to-date closure without resubscribing on every state tick.
+  // Hold the latest onSnap/onDrop/onUndo in refs so the keyboard handler always
+  // calls the up-to-date closure without resubscribing on every state tick.
   const onSnapRef = useRef(null);
+  const onDropRef = useRef(null);
+  const onUndoRef = useRef(null);
+  const onRunRef = useRef(null);
+  const lastVoiceCommandRef = useRef({ command: '', ts: 0 });
+
+  const acceptVoiceCommand = useCallback((command) => {
+    const now = performance.now();
+    const last = lastVoiceCommandRef.current;
+    if (last.command === command && now - last.ts < 1200) return false;
+    lastVoiceCommandRef.current = { command, ts: now };
+    return true;
+  }, []);
+
+  const voiceHandlers = useMemo(() => ({
+    calibrate: () => {
+      if (!acceptVoiceCommand('calibrate')) return;
+      onRunRef.current?.();
+    },
+    photo: () => {
+      if (!acceptVoiceCommand('snap')) return;
+      onSnapRef.current?.();
+    },
+    capture: () => {
+      if (!acceptVoiceCommand('snap')) return;
+      onSnapRef.current?.();
+    },
+  }), [acceptVoiceCommand, t]);
+
+  useVoiceCommands(active === 'handeye' && !!tweaks?.voiceCommands, voiceHandlers);
+
+  // Undo stack — bounded LIFO, entries: { kind:'snap'|'drop', path, trashPath? }
+  const undoStackRef = useRef([]);
+  const pushUndo = (entry) => {
+    undoStackRef.current = [entry, ...undoStackRef.current].slice(0, UNDO_LIMIT);
+  };
+
+  // Keep a ref-shadowed count so the keyboard handler can read it without
+  // closing over stale state.
+  const datasetCountRef = useRef(0);
+  useEffect(() => { datasetCountRef.current = datasetFiles.length; }, [datasetFiles.length]);
+
+  const refreshDataset = async () => {
+    if (!datasetPath) return [];
+    const r = await api.listDataset(datasetPath);
+    setDatasetFiles(r.files);
+    return r.files;
+  };
 
   // Coverage tracking. snappedCellsRef holds the grid cells that already
   // contributed a frame this session — auto-capture skips frames whose
@@ -173,9 +262,13 @@ export function HandEyeTab({ solvePattern, setSolvePattern }) {
     return m;
   }, [result]);
 
-  const frames = useMemo(() => datasetFiles.map((p, i) => ({
-    id: i + 1, err: errByPath?.get(basename(p)) ?? 0, tx: 0, ty: 0, rot: 0,
-  })), [datasetFiles, errByPath]);
+  // err is null for frames the solver didn't use (board not detected / no pose) —
+  // the strip renders those as a grey "—", never a green 0.00 (which would read
+  // as "perfect" when it actually means "not measured").
+  const frames = useMemo(() => datasetFiles.map((p, i) => {
+    const e = errByPath?.get(basename(p));
+    return { id: i + 1, err: e == null ? null : e, tx: 0, ty: 0, rot: 0 };
+  }), [datasetFiles, errByPath]);
   const [selected, setSelected] = useState(1);
 
   const cam = useCameraSource({
@@ -214,11 +307,22 @@ export function HandEyeTab({ solvePattern, setSolvePattern }) {
     const p = await pickOpenFile({});
     if (!p) return;
     try {
-      const resp = await api.loadCalibration(p);
+      const isCameraIntrix = p === CAMERA_INTRIX_PATH || p.endsWith(CAMERA_INTRIX_PATH);
+      const slot = isCameraIntrix ? cameraSlotFromSource(liveDevice, datasetPath) : null;
+      const resp = await api.loadCalibration(p, slot ? { slot } : {});
       const d = resp.data || {};
       if (!d.K || !d.D) { setStatus(t('handeye.noKdInYaml', { name: basename(p) })); return; }
-      setCamInt({ K: d.K, D: d.D, path: p });
-      setStatus(t('handeye.intrinsicsLoaded', { name: basename(p) }));
+      const distortionModel = (d.distortion_model || d.model || 'pinhole').toLowerCase();
+      setCamInt({
+        K: d.K,
+        D: d.D,
+        path: p,
+        distortion_model: distortionModel.includes('fish') || distortionModel.includes('equidistant') ? 'fisheye' : 'pinhole',
+        camera_slot: d.camera_slot || slot || null,
+        image_size: d.image_size || null,
+      });
+      const name = d.camera_slot ? `${basename(p)}:${d.camera_slot}` : basename(p);
+      setStatus(t('handeye.intrinsicsLoaded', { name }));
     } catch (e) { setStatus(t('handeye.intrinsicsLoadFailed', { error: e.message })); }
   };
 
@@ -238,6 +342,14 @@ export function HandEyeTab({ solvePattern, setSolvePattern }) {
       if (!lp) { setStatus(t('handeye.noPoseYet')); return; }
       const ageMs = Math.round((Date.now() / 1000 - lp.ts) * 1000);
       if (ageMs > 200) { setStatus(t('handeye.poseStale', { ms: ageMs })); return; }
+      // Reject degenerate poses: a pose source that just connected (e.g. ARX
+      // before /arx/dual_arm_status streams real readings) can report the
+      // origin / identity. Such a frame poisons AX=XB — the end-effector is
+      // physically never at the base origin. Translation magnitude in metres;
+      // < 2 cm from base origin means the reading hasn't populated yet.
+      const T = lp.T;
+      const tNorm = Math.hypot(T[0][3], T[1][3], T[2][3]);
+      if (tNorm < 0.02) { setStatus(t('handeye.poseDegenerate')); say('solveFail'); return; }
     }
 
     let imagePath;
@@ -266,9 +378,13 @@ export function HandEyeTab({ solvePattern, setSolvePattern }) {
           }
         }
       }
-      if (appended) setStatus(t('handeye.snappedPose', { name: fname }));
+      if (appended) {
+        pushUndo({ kind: 'snap', path: imagePath });
+        setStatus(t('handeye.snappedPose', { name: fname })); say('captured', 600);
+      }
     } else {
-      setStatus(t('handeye.snapImageOnly', { name: fname }));
+      pushUndo({ kind: 'snap', path: imagePath });
+      setStatus(t('handeye.snapImageOnly', { name: fname })); say('captured', 600);
     }
 
     if (dir === datasetPath) {
@@ -280,6 +396,76 @@ export function HandEyeTab({ solvePattern, setSolvePattern }) {
     }
   };
   onSnapRef.current = onSnap;
+
+  const onDrop = async () => {
+    if (!selectedPath) { setStatus(t('common.noFrameSelected')); return; }
+    const name = selectedPath.split('/').pop();
+    try {
+      const r = await api.deleteFrame(selectedPath);
+      pushUndo({ kind: 'drop', path: selectedPath, trashPath: r.trash_path });
+      const files = await refreshDataset();
+      const newLen = files?.length ?? 0;
+      setSelected(Math.min(Math.max(1, selected), Math.max(1, newLen)));
+      if (newLen === 0) setViewMode('live');
+      setStatus(t('common.dropped', { name }));
+    } catch (e) { setStatus(t('common.dropFailed', { error: e.message }), true); }
+  };
+  onDropRef.current = onDrop;
+
+  const onUndo = async () => {
+    const stack = undoStackRef.current;
+    if (!stack.length) { setStatus(t('common.nothingToUndo')); return; }
+    const entry = stack.pop();
+    try {
+      if (entry.kind === 'snap') {
+        await api.deleteFrame(entry.path);
+        const files = await refreshDataset();
+        const newLen = files?.length ?? 0;
+        setSelected(Math.min(Math.max(1, selected), Math.max(1, newLen)));
+        if (newLen === 0) setViewMode('live');
+        setStatus(t('common.undidSnap', { name: entry.path.split('/').pop() }));
+      } else if (entry.kind === 'drop') {
+        await api.restoreFrame(entry.trashPath, entry.path);
+        const files = await refreshDataset();
+        const idx = files.findIndex(p => p === entry.path);
+        if (idx >= 0) { setSelected(idx + 1); setViewMode('frame'); }
+        setStatus(t('common.undidDrop', { name: entry.path.split('/').pop() }));
+      }
+    } catch (e) {
+      stack.push(entry);
+      setStatus(t('common.undoFailed', { error: e.message }), true);
+    }
+  };
+  onUndoRef.current = onUndo;
+
+  // Keyboard shortcuts: ←/→ frame nav, Space=snap, Ctrl+Z=undo, Del/Bksp=drop.
+  // Mirror the FisheyeTab handler exactly so muscle memory transfers.
+  useEffect(() => {
+    const handler = (e) => {
+      const tag = (e.target?.tagName || '').toUpperCase();
+      if (tag === 'INPUT' || tag === 'SELECT' || tag === 'BUTTON' || tag === 'TEXTAREA') return;
+      if (e.key === 'ArrowLeft') {
+        e.preventDefault();
+        setSelected(s => Math.max(1, s - 1));
+        setViewMode('frame');
+      } else if (e.key === 'ArrowRight') {
+        e.preventDefault();
+        setSelected(s => Math.min(datasetCountRef.current || 1, s + 1));
+        setViewMode('frame');
+      } else if (e.key === ' ') {
+        e.preventDefault();
+        onSnapRef.current?.();
+      } else if ((e.key === 'z' || e.key === 'Z') && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault();
+        onUndoRef.current?.();
+      } else if (e.key === 'Delete' || e.key === 'Backspace') {
+        e.preventDefault();
+        onDropRef.current?.();
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, []);
 
   // Auto-capture, cell-aware. LiveDetectedFrame fires onMeta on every
   // detected tick; we snap only if (a) auto-capture is on, (b) we're
@@ -313,14 +499,14 @@ export function HandEyeTab({ solvePattern, setSolvePattern }) {
   }, [autoCapture, autoCaptureRate, liveDevice, datasetPath]);
 
   const onRun = async () => {
-    if (!datasetPath) { setStatus(t('handeye.pickDatasetFolder')); return; }
-    if (trackerSource !== 'file') {
-      setStatus(t('handeye.liveSourceNotWired', { source: trackerSource }));
-      return;
-    }
-    if (!posesPath) { setStatus(t('handeye.pickPosesJson')); return; }
-    if (!camInt) { setStatus(t('handeye.loadCamIntrinsics')); return; }
-    setBusy(true); setStatus(t('handeye.solvingAxxb'));
+    if (!datasetPath) { setStatus(t('handeye.pickDatasetFolder'), true); say('solveFail'); return; }
+    // Any tracker source works for solving — live capture (oculus/pico/steamvr)
+    // already writes poses.json next to the images and points posesPath at it,
+    // so the solver consumes it exactly like a hand-picked JSON file. The only
+    // hard requirement is that some poses.json exists, checked next.
+    if (!posesPath) { setStatus(t('handeye.pickPosesJson'), true); say('solveFail'); return; }
+    if (!camInt) { setStatus(t('handeye.loadCamIntrinsics'), true); say('solveFail'); return; }
+    setBusy(true); setStatus(t('handeye.solvingAxxb')); say('solveStart');
     try {
       const res = await api.calibrate('handeye', {
         method, kind, pattern: solvePattern,
@@ -328,13 +514,16 @@ export function HandEyeTab({ solvePattern, setSolvePattern }) {
         dataset_path: datasetPath,
         poses_path: posesPath,
         K: camInt.K, D: camInt.D,
+        distortion_model: camInt.distortion_model,
       });
       setResult(res);
       setStatus(res.ok
         ? t('handeye.rmsResult', { rot: res.rms.toFixed(3), trans: res.final_cost.toFixed(2), message: res.message })
-        : t('common.failed', { message: res.message }));
-    } catch (e) { setStatus(t('common.error', { error: e.message })); } finally { setBusy(false); }
+        : t('common.failed', { message: res.message }), !res.ok);
+      say(res.ok ? 'solveOk' : 'solveFail');
+    } catch (e) { setStatus(t('common.error', { error: e.message }), true); say('solveFail'); } finally { setBusy(false); }
   };
+  useEffect(() => { onRunRef.current = onRun; });
 
   const onSaveYaml = async () => {
     if (!result?.ok) { setStatus(t('common.nothingToSave')); return; }
@@ -445,22 +634,44 @@ export function HandEyeTab({ solvePattern, setSolvePattern }) {
             title={t('handeye.trackerSource')}
             hint={
               trackerSource === 'file'    ? (posesPath ? basename(posesPath) : t('handeye.pickJson')) :
+              trackerSource === 'arx'     ? (arxDevice || t('handeye.pickDevice')) :
               trackerSource === 'oculus'  ? (oculusDevice || t('handeye.pickDevice')) :
               trackerSource === 'pico'    ? (picoDevice || t('handeye.pickDevice')) :
               trackerSource === 'ros2'    ? (trackerRos2Topic || t('handeye.pickTopic')) :
                                             (steamvrSerial || t('handeye.pickTracker'))
             }
-            right={connected ? null : <Seg value={trackerSource} onChange={setTrackerSource} options={
-              TRACKER_SOURCES.map(s => ({ value: s.value, label: s.label.split(' ')[0].toLowerCase() }))
-            }/>}
           >
-            <Field label={t('handeye.body')}>
-              <select className="select" value={kind} disabled={connected}
-                onChange={e => setKind(e.target.value)}>
-                <option value="hmd">HMD</option>
-                <option value="ctrl">{t('handeye.trackerController')}</option>
+            <Field label={t('handeye.source')}>
+              <select className="select" value={trackerSource} disabled={connected}
+                onChange={e => setTrackerSource(e.target.value)}>
+                {TRACKER_SOURCES.map(s => (
+                  <option key={s.value} value={s.value}>{s.label}</option>
+                ))}
               </select>
             </Field>
+            {trackerSource !== 'arx' && (
+              <Field label={t('handeye.body')}>
+                <select className="select" value={kind} disabled={connected}
+                  onChange={e => setKind(e.target.value)}>
+                  <option value="hmd">HMD</option>
+                  <option value="ctrl">{t('handeye.trackerController')}</option>
+                </select>
+              </Field>
+            )}
+            {trackerSource === 'arx' && (
+              <>
+                <Field label={t('handeye.arm')}>
+                  <select className="select" value={arxDevice} disabled={connected}
+                    onChange={e => setArxDevice(e.target.value)}>
+                    <option value="arx_ee_r">{t('handeye.armRight')}</option>
+                    <option value="arx_ee_l">{t('handeye.armLeft')}</option>
+                  </select>
+                </Field>
+                <div className="mono" style={{ fontSize: 10.5, color: 'var(--text-3)' }}>
+                  {t('handeye.arxHint')}
+                </div>
+              </>
+            )}
             {trackerSource === 'oculus' && (
               <>
                 <Field label={t('handeye.device')}>
@@ -518,7 +729,7 @@ export function HandEyeTab({ solvePattern, setSolvePattern }) {
                 <button className="btn" onClick={onPickPoses}>{t('handeye.pickJsonBtn')}</button>
               </>
             )}
-            {(trackerSource === 'oculus' || trackerSource === 'pico' || trackerSource === 'steamvr') && (
+            {(trackerSource === 'arx' || trackerSource === 'oculus' || trackerSource === 'pico' || trackerSource === 'steamvr') && (
               <>
                 <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:6 }}>
                   {!connected
@@ -572,11 +783,16 @@ export function HandEyeTab({ solvePattern, setSolvePattern }) {
           <CaptureControls
             autoCapture={autoCapture} onAuto={setAutoCapture}
             autoRate={autoCaptureRate} onAutoRate={setAutoCaptureRate}
-            onSnap={onSnap}
+            onSnap={onSnap} onDrop={onDrop}
             coverage={coverage.percent} coverageCells={coverage.cells}/>
-          {status && <div className="mono" style={{ fontSize: 10.5, color: 'var(--text-3)', padding: '0 2px' }}>{status}</div>}
         </div>
-        <SolverButton onSolve={onRun} busy={busy} label={t('handeye.solveAxxb')}/>
+        <SolverButton onSolve={onRun} busy={busy} label={t('handeye.solveAxxb')}
+          status={status}
+          statusKind={
+            !status ? undefined :
+            statusErr ? 'err' :
+            result?.ok ? 'ok' : 'warn'
+          }/>
       </div>
 
       <div className="viewport">
@@ -595,7 +811,8 @@ export function HandEyeTab({ solvePattern, setSolvePattern }) {
         <FrameStrip frames={frames} selected={selected}
           onSelect={(id) => { setSelected(id); setViewMode('frame'); }}
           coverage={coverage.percent}
-          okBelow={HE_TRANS_OK} warnBelow={HE_TRANS_WARN}/>
+          okBelow={HE_TRANS_OK} warnBelow={HE_TRANS_WARN}
+          errUnit=" mm" errHint={t('handeye.perFrameErrHint')} colorMode="mid-good"/>
         <div className="vp-body" style={{ gridTemplateColumns: '1fr 0.7fr', gap: 1, background: 'var(--view-border)' }}>
           <div className="vp-cell">
             <span className="vp-label">{t('handeye.sceneLabel')}</span>

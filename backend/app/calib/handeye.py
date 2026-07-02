@@ -36,6 +36,13 @@ _METHOD_FLAGS = {
 }
 
 
+def _distortion_model(req: HandEyeRequest) -> str:
+    model = str(getattr(req, "distortion_model", "pinhole") or "pinhole").lower()
+    if "fish" in model or "kannala" in model or "equidistant" in model:
+        return "fisheye"
+    return "pinhole"
+
+
 def _split_poses(Ts: list[np.ndarray]) -> tuple[list[np.ndarray], list[np.ndarray]]:
     R = [T[:3, :3] for T in Ts]
     t = [T[:3, 3].reshape(3, 1) for T in Ts]
@@ -97,6 +104,7 @@ def _build_A_from_dataset(req: HandEyeRequest) -> tuple[list[np.ndarray], list[s
         raise ValueError("dataset_path has no images")
     K = np.array(req.K, dtype=np.float64)
     D = np.array(req.D, dtype=np.float64).reshape(-1, 1)
+    distortion_model = _distortion_model(req)
     A: list[np.ndarray] = []
     names: list[str] = []
     for p in paths:
@@ -108,10 +116,23 @@ def _build_A_from_dataset(req: HandEyeRequest) -> tuple[list[np.ndarray], list[s
         if res is None:
             continue
         img, obj = res
+        img_pts = img.reshape(-1, 1, 2).astype(np.float64)
+        dist = D
+        if distortion_model == "fisheye":
+            if D.size < 4:
+                continue
+            D4 = D.reshape(-1, 1)[:4]
+            img_pts = cv2.fisheye.undistortPoints(
+                img_pts,
+                K,
+                D4,
+                P=K,
+            )
+            dist = np.zeros((4, 1), dtype=np.float64)
         ok, rv, tv = cv2.solvePnP(
             obj.reshape(-1, 1, 3).astype(np.float64),
-            img.reshape(-1, 1, 2).astype(np.float64),
-            K, D, flags=cv2.SOLVEPNP_ITERATIVE,
+            img_pts,
+            K, dist, flags=cv2.SOLVEPNP_ITERATIVE,
         )
         if not ok:
             continue
@@ -140,23 +161,48 @@ def _match_AB(req: HandEyeRequest) -> tuple[list[np.ndarray], list[np.ndarray], 
     return A, B, [f"frame_{i:04d}" for i in range(len(A))]
 
 
-def _consistency(X: np.ndarray, A: list[np.ndarray], B: list[np.ndarray]) -> tuple[float, float]:
-    """With X fixed, T_base_board = B_i · X · A_i should be identical across frames.
-    Returns (rot_rms_deg, trans_rms_mm) across frames vs the median pose."""
-    if len(A) < 2:
-        return 0.0, 0.0
+def _mean_pose(worlds: list[np.ndarray]) -> np.ndarray:
+    """Average of a set of SE(3) poses: arithmetic mean of translations, and the
+    rotation whose matrix is the orthonormalized (via SVD) mean of the rotation
+    matrices. Used as the consistency reference instead of picking one frame —
+    a single-frame reference makes that frame's residual identically 0, which
+    reads as a (misleading) green 0.00 and shifts to a different frame whenever
+    the user deletes one. The mean belongs to no single frame, so every frame
+    gets a real, stable deviation."""
+    t = np.mean([W[:3, 3] for W in worlds], axis=0)
+    R_sum = np.sum([W[:3, :3] for W in worlds], axis=0)
+    U, _S, Vt = np.linalg.svd(R_sum)
+    R = U @ Vt
+    if np.linalg.det(R) < 0:                 # reflect back to a proper rotation
+        U[:, -1] *= -1.0
+        R = U @ Vt
+    ref = np.eye(4)
+    ref[:3, :3] = R
+    ref[:3, 3] = t
+    return ref
+
+
+def _frame_deviations(X: np.ndarray, A: list[np.ndarray], B: list[np.ndarray]) -> tuple[list[float], list[float]]:
+    """Per-frame (rot_deg, trans_mm) deviation of T_base_board = B·X·A from the
+    mean pose across all frames. Shared by the RMS summary and the per-frame strip
+    so they agree on the same reference."""
     worlds = [B_i @ X @ A_i for A_i, B_i in zip(A, B, strict=False)]
-    ref = worlds[len(worlds) // 2]
+    ref = _mean_pose(worlds)
     rot_errs: list[float] = []
     trans_errs: list[float] = []
     for W in worlds:
         dR = ref[:3, :3].T @ W[:3, :3]
-        # angle from trace (clipped for numerical safety)
         c = (np.trace(dR) - 1.0) * 0.5
-        ang = float(np.degrees(np.arccos(np.clip(c, -1.0, 1.0))))
-        rot_errs.append(ang)
-        dt = ref[:3, 3] - W[:3, 3]
-        trans_errs.append(float(np.linalg.norm(dt) * 1000.0))  # mm
+        rot_errs.append(float(np.degrees(np.arccos(np.clip(c, -1.0, 1.0)))))
+        trans_errs.append(float(np.linalg.norm(ref[:3, 3] - W[:3, 3]) * 1000.0))  # mm
+    return rot_errs, trans_errs
+
+
+def _consistency(X: np.ndarray, A: list[np.ndarray], B: list[np.ndarray]) -> tuple[float, float]:
+    """RMS rotational (deg) and translational (mm) consistency vs the mean pose."""
+    if len(A) < 2:
+        return 0.0, 0.0
+    rot_errs, trans_errs = _frame_deviations(X, A, B)
     rot_rms = float(np.sqrt(np.mean(np.square(rot_errs))))
     trans_rms = float(np.sqrt(np.mean(np.square(trans_errs))))
     return rot_rms, trans_rms
@@ -193,13 +239,12 @@ def calibrate(req: HandEyeRequest) -> CalibrationResult:
     X = _to_T(R_X, t_X)
     rot_rms, trans_rms = _consistency(X, A, B)
 
-    # per-frame "error" surfaced via per_frame_err = |W_i - ref| in mm for a quick histogram.
+    # per-frame "error" = translational deviation (mm) from the MEAN base→board
+    # pose. Mean-referenced (not a single frame), so no frame is ever forced to
+    # 0.00 and the values stay stable when frames are added/removed.
     per_frame_err: list[float] = []
     if len(A) >= 2:
-        worlds = [B_i @ X @ A_i for A_i, B_i in zip(A, B, strict=False)]
-        ref = worlds[len(worlds) // 2]
-        for W in worlds:
-            per_frame_err.append(float(np.linalg.norm(ref[:3, 3] - W[:3, 3]) * 1000.0))
+        _rot_dev, per_frame_err = _frame_deviations(X, A, B)
 
     log.info("handeye(%s/%s/%s) pairs=%d · rot_rms=%.3f° trans_rms=%.2fmm",
              req.kind, req.method, req.pattern, len(A), rot_rms, trans_rms)

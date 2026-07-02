@@ -74,6 +74,8 @@ function invalidateStreamInfo(device) {
 
 export const api = {
   health: () => request('/health'),
+  voiceInfo: () => request('/voice/info'),
+  voiceStop: () => request('/voice/stop', { method: 'POST' }),
   listSources: () => request('/sources'),
   listStreamDevices: () => request('/stream/devices'),
   listRos2Topics: () => request('/stream/ros2_topics'),
@@ -115,8 +117,18 @@ export const api = {
   }),
   saveCalibration: (body) => request('/calibration/save', { method: 'POST', body: JSON.stringify(body) }),
   exportCameraIntrix: (body) => request('/calibration/export_camera_intrix', { method: 'POST', body: JSON.stringify(body) }),
-  loadCalibration: (path) => request('/calibration/load', { method: 'POST', body: JSON.stringify({ path }) }),
+  loadCalibration: (path, opts = {}) => request('/calibration/load', { method: 'POST', body: JSON.stringify({ path, ...opts }) }),
 };
+
+export async function voiceEventsUrl() {
+  const { baseUrl } = await info();
+  return `${baseUrl}/voice/events`;
+}
+
+export async function voiceQrUrl() {
+  const { baseUrl } = await info();
+  return `${baseUrl}/voice/qrcode.svg?t=${Date.now()}`;
+}
 
 export const recording = {
   save: ({ kind, samples, path, session, name, unique }) =>

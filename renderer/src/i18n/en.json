@@ -26,9 +26,14 @@
     "comfy": "comfy",
     "accentHue": "accent hue",
     "voice": "voice",
-    "voiceCommands": "voice commands (snap / calibrate)",
+    "voiceCommands": "voice control (phone mic)",
     "voicePrompts": "spoken prompts",
     "voiceUnsupported": "speech recognition not available in this build",
+    "voiceStarting": "starting mobile entry…",
+    "voiceQrAlt": "mobile voice control QR code",
+    "voiceQrLoadFailed": "QR code failed to load; open the address below directly",
+    "voiceHttpsHint": "Scan on the phone; accept the self-signed HTTPS warning on first open. Recognizes: calibrate, photo, capture.",
+    "voiceStartFailed": "voice control failed to start: {{error}}",
     "reset": "reset"
   },
   "footer": {
@@ -86,6 +91,7 @@
     "frames": "frames",
     "coverage": "coverage",
     "add": "+ add",
+    "frameUnused": "frame not used in solve (board undetected or no pose)",
     "reprojectionError": "Reprojection Error",
     "rmsOverFrames": "RMS over frames",
     "mean": "mean",
@@ -214,6 +220,7 @@
     "rmsResult": "rms {{rms}} px · {{message}}"
   },
   "fisheye": {
+    "perFrameErrHint": "this frame's reprojection error (pixels)",
     "railTitle": "Fish-eye Intrinsics",
     "dataset": "Dataset",
     "projectionModel": "Projection model",
@@ -276,6 +283,7 @@
       }
     },
     "voiceError": "speech recognition error: {{error}}",
+    "voiceCaptureStarted": "voice capture enabled · say photo to snap, say calibrate to solve",
     "noCalibrationYet": "no calibration yet",
     "rawDistorted": "raw · distorted",
     "liveLabel": "live · {{device}}",
@@ -301,10 +309,16 @@
     "voicePlayFailed": "voice playback blocked ({{name}}): {{error}}"
   },
   "handeye": {
+    "perFrameErrHint": "this frame's consistency deviation (mm) · some deviation is normal; near-0 is suspicious (unused/duplicate/reference frame), only large values warrant a look",
     "railTitlePrefix": "Hand-Eye · cam ↔ {{tracker}}",
     "trackerHmd": "HMD",
     "trackerController": "controller",
     "trackerSource": "Tracker source",
+    "source": "Source",
+    "arm": "Arm",
+    "armRight": "Right arm (arx_ee_r)",
+    "armLeft": "Left arm (arx_ee_l)",
+    "arxHint": "Subscribes /arx/dual_arm_status · end-flange pose",
     "pickJson": "pick json",
     "pickDevice": "pick device",
     "pickTopic": "pick topic",
@@ -370,6 +384,7 @@
     "intrinsicsLoadFailed": "intrinsics load failed: {{error}}",
     "noPoseYet": "no pose yet — wait for tracker stream",
     "poseStale": "pose stale (Δt = {{ms}} ms) — check tracker",
+    "poseDegenerate": "pose near origin (likely zero/not-ready) — snap rejected; move the arm so the pose refreshes",
     "imagePoseAppendFailed": "image saved, pose append failed: {{error}}",
     "snappedPose": "snapped+pose → {{name}}",
     "snapImageOnly": "snap (image only — connect tracker for pose) → {{name}}",
@@ -378,6 +393,7 @@
     "pickPosesJson": "pick the tracker-poses JSON",
     "loadCamIntrinsics": "load camera intrinsics YAML",
     "solvingAxxb": "solving AX=XB…",
+    "voiceCaptureStarted": "voice capture enabled · say photo to snap image/pose, say calibrate to solve",
     "rmsResult": "rot {{rot}}° · trans {{trans}} mm · {{message}}"
   },
   "link": {

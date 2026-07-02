@@ -26,9 +26,14 @@
     "comfy": "宽松",
     "accentHue": "强调色相",
     "voice": "语音",
-    "voiceCommands": "语音指令（拍照 / 标定）",
+    "voiceCommands": "语音控制（手机麦克风）",
     "voicePrompts": "语音提示播报",
     "voiceUnsupported": "当前环境不支持语音识别",
+    "voiceStarting": "正在启动手机入口…",
+    "voiceQrAlt": "手机语音控制二维码",
+    "voiceQrLoadFailed": "二维码加载失败，请直接打开下方地址",
+    "voiceHttpsHint": "手机扫码访问；首次打开自签名 HTTPS 时请选择继续前往。只识别：标定、拍照、采集。",
+    "voiceStartFailed": "语音控制启动失败：{{error}}",
     "reset": "重置"
   },
   "footer": {
@@ -86,6 +91,7 @@
     "frames": "帧",
     "coverage": "覆盖率",
     "add": "+ 添加",
+    "frameUnused": "该帧未参与求解（未检测到棋盘或无位姿）",
     "reprojectionError": "重投影误差",
     "rmsOverFrames": "各帧 RMS",
     "mean": "均值",
@@ -214,6 +220,7 @@
     "rmsResult": "rms {{rms}} px · {{message}}"
   },
   "fisheye": {
+    "perFrameErrHint": "该帧重投影误差（像素）",
     "railTitle": "鱼眼内参",
     "dataset": "数据集",
     "projectionModel": "投影模型",
@@ -276,6 +283,7 @@
       }
     },
     "voiceError": "语音识别错误：{{error}}",
+    "voiceCaptureStarted": "语音采集已开启 · 说“拍照”可立即抓拍，说“标定”运行求解",
     "noCalibrationYet": "尚未标定",
     "rawDistorted": "原始 · 畸变",
     "liveLabel": "实时 · {{device}}",
@@ -301,10 +309,16 @@
     "voicePlayFailed": "语音播放被拦截（{{name}}）：{{error}}"
   },
   "handeye": {
+    "perFrameErrHint": "该帧一致性偏差（毫米）· 有偏差属正常，接近 0 反而可疑（多为未参与/重复/基准帧），偏大才需留意",
     "railTitlePrefix": "手眼 · 相机 ↔ {{tracker}}",
     "trackerHmd": "HMD",
     "trackerController": "控制器",
     "trackerSource": "追踪器源",
+    "source": "来源",
+    "arm": "手臂",
+    "armRight": "右臂 (arx_ee_r)",
+    "armLeft": "左臂 (arx_ee_l)",
+    "arxHint": "订阅 /arx/dual_arm_status · 末端法兰位姿",
     "pickJson": "选择 json",
     "pickDevice": "选择设备",
     "pickTopic": "选择话题",
@@ -370,6 +384,7 @@
     "intrinsicsLoadFailed": "内参加载失败：{{error}}",
     "noPoseYet": "尚无位姿 — 等待追踪器数据流",
     "poseStale": "位姿过期（Δt = {{ms}} ms）— 请检查追踪器",
+    "poseDegenerate": "位姿接近原点（疑似零位/未就绪）— 已拒绝采集，请先活动一下机械臂等位姿刷新",
     "imagePoseAppendFailed": "图像已保存，位姿追加失败：{{error}}",
     "snappedPose": "已抓拍+位姿 → {{name}}",
     "snapImageOnly": "抓拍（仅图像 — 连接追踪器以获取位姿）→ {{name}}",
@@ -378,6 +393,7 @@
     "pickPosesJson": "选择追踪器位姿 JSON",
     "loadCamIntrinsics": "加载相机内参 YAML",
     "solvingAxxb": "求解 AX=XB…",
+    "voiceCaptureStarted": "语音采集已开启 · 说“拍照”抓拍图像/位姿，说“标定”运行求解",
     "rmsResult": "旋转 {{rot}}° · 平移 {{trans}} mm · {{message}}"
   },
   "link": {

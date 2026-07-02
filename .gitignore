@@ -560,3 +560,6 @@ docs/*.html
 !/build/
 !/build/**
 
+
+# codegraph local index
+.codegraph/

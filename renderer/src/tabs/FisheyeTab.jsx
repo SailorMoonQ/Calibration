@@ -18,6 +18,7 @@ import {
   differsEnough, shotSignature,
 } from '../lib/guidedSequence.js';
 import { speak } from '../lib/voice.js';
+import { useVoiceCommands } from '../lib/voiceControl.js';
 
 // A snapped board only counts as covering a (polar) cell when at least this many
 // of its corners land in that cell — so a board merely clipping a cell's edge
@@ -51,7 +52,7 @@ function cameraSlotFromSource(...sources) {
   return null;
 }
 
-export function FisheyeTab({ tweaks }) {
+export function FisheyeTab({ active, tweaks }) {
   const { t } = useTranslation();
   const [board, setBoard] = useState(DEFAULT_CHESS_BOARD);
   const [model, setModel] = useState('equidistant');
@@ -247,8 +248,34 @@ export function FisheyeTab({ tweaks }) {
   const onUndoRef = useRef(null);
   const onDropRef = useRef(null);
   const onRunRef = useRef(null);
+  const lastVoiceCommandRef = useRef({ command: '', ts: 0 });
   const datasetCountRef = useRef(0);
   useEffect(() => { datasetCountRef.current = datasetFiles.length; }, [datasetFiles.length]);
+
+  const acceptVoiceCommand = useCallback((command) => {
+    const now = performance.now();
+    const last = lastVoiceCommandRef.current;
+    if (last.command === command && now - last.ts < 1200) return false;
+    lastVoiceCommandRef.current = { command, ts: now };
+    return true;
+  }, []);
+
+  const voiceHandlers = useMemo(() => ({
+    calibrate: () => {
+      if (!acceptVoiceCommand('calibrate')) return;
+      onRunRef.current?.();
+    },
+    photo: () => {
+      if (!acceptVoiceCommand('snap')) return;
+      onSnapRef.current?.();
+    },
+    capture: () => {
+      if (!acceptVoiceCommand('snap')) return;
+      onSnapRef.current?.();
+    },
+  }), [acceptVoiceCommand, t]);
+
+  useVoiceCommands(active === 'fisheye' && !!tweaks?.voiceCommands, voiceHandlers);
 
   // Undo stack: bounded LIFO of {kind: 'snap'|'drop', path, trashPath?}.
   // - snap: undo deletes (trashes) the just-snapped file
@@ -852,7 +879,12 @@ export function FisheyeTab({ tweaks }) {
     let extra = '', extraErr = false;
     if (slot) {
       try {
-        const r = await api.exportCameraIntrix({ slot, K: result.K, D: result.D ?? [] });
+        const r = await api.exportCameraIntrix({
+          slot,
+          K: result.K,
+          D: result.D ?? [],
+          image_size: result.image_size ?? null,
+        });
         extra = ' · ' + t('fisheye.wroteCameraIntrix', { slot, path: r.path });
       } catch (e) {
         extra = ' · ' + t('fisheye.cameraIntrixFailed', { error: e.message });
@@ -986,17 +1018,17 @@ export function FisheyeTab({ tweaks }) {
         return (
           <div style={{
             position: 'absolute', top: 10, left: '50%', transform: 'translateX(-50%)',
-            background: 'rgba(8,10,14,0.82)', border: `1.5px solid ${color}`, borderRadius: 7,
-            padding: '7px 13px', display: 'flex', flexDirection: 'column', gap: 5, minWidth: 168,
-            fontFamily: 'JetBrains Mono', fontSize: 12.5, fontWeight: 600, color,
-            boxShadow: '0 3px 14px rgba(0,0,0,0.55)', backdropFilter: 'blur(3px)',
-            textShadow: '0 1px 2px rgba(0,0,0,0.7)',
+            background: 'rgba(3,6,10,0.94)', border: `1.5px solid ${color}`, borderRadius: 7,
+            padding: '8px 14px', display: 'flex', flexDirection: 'column', gap: 5, minWidth: 196,
+            fontFamily: 'JetBrains Mono', fontSize: 12.5, fontWeight: 600, color: 'var(--text)',
+            boxShadow: '0 8px 24px rgba(0,0,0,0.72)', backdropFilter: 'blur(6px)',
+            textShadow: '0 1px 3px rgba(0,0,0,0.9)',
           }}>
             {autoHud.guidedLabel && (
               <div style={{ color: 'var(--text)', fontSize: 12, fontWeight: 700 }}>{autoHud.guidedLabel}</div>
             )}
-            <div>⦿ {t('fisheye.autoCapture')} · {t(`fisheye.auto_${r}`)}
-              {typeof autoHud.tilt === 'number' && <span style={{ color: 'var(--text-2)', fontWeight: 500 }}>  ∠{autoHud.tilt.toFixed(0)}°</span>}
+            <div><span style={{ color }}>⦿ {t('fisheye.autoCapture')} · {t(`fisheye.auto_${r}`)}</span>
+              {typeof autoHud.tilt === 'number' && <span style={{ color: 'var(--text-2)', fontWeight: 600 }}>  ∠{autoHud.tilt.toFixed(0)}°</span>}
             </div>
             <div style={{ height: 4, background: 'rgba(255,255,255,0.18)', borderRadius: 2, overflow: 'hidden' }}>
               <div style={{ height: '100%', width: `${Math.round((autoHud.dwell || 0) * 100)}%`, background: 'var(--ok)', transition: 'width 80ms linear' }}/>
@@ -1149,7 +1181,8 @@ export function FisheyeTab({ tweaks }) {
             {result?.ok ? <>rms <b style={{color: trafficColor(rmsKind)}}>{result.rms.toFixed(3)}</b> px</> : <>{t('fisheye.noCalibrationYet')}</>}
           </div>
         </div>
-        <FrameStrip frames={frames} selected={selected} onSelect={(id) => { setSelected(id); setViewMode('frame'); }} coverage={coverage.percent}/>
+        <FrameStrip frames={frames} selected={selected} onSelect={(id) => { setSelected(id); setViewMode('frame'); }} coverage={coverage.percent}
+          errUnit=" px" errHint={t('fisheye.perFrameErrHint')}/>
         {(() => {
           // Pick which cells to render. Until we have intrinsics, the rectified cell is
           // not meaningful — collapse to the raw cell at full width regardless of view mode.

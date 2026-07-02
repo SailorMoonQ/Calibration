@@ -18,7 +18,25 @@ function FrameThumb({ f }) {
   );
 }
 
-export function FrameStrip({ frames, selected, onSelect, coverage, okBelow = 0.35, warnBelow = 0.6 }) {
+// Per-frame colour kind.
+//   'lower-better' (fisheye reprojection px): small = ok/green, large = err/red.
+//   'mid-good'     (hand-eye consistency mm): near-zero is SUSPICIOUS (frame
+//                  unused, duplicate, or the reference baseline) → red; a normal
+//                  spread is healthy → green; an outlier far above the batch →
+//                  amber "look at me", not necessarily delete.
+function frameErrKind(err, { colorMode, okBelow, warnBelow, zeroBelow, outlierAbove }) {
+  if (err == null || !Number.isFinite(err)) return 'idle';
+  if (colorMode === 'mid-good') {
+    if (err < zeroBelow) return 'err';        // ≈0 → red (suspicious)
+    if (err > outlierAbove) return 'warn';    // far outlier → amber
+    return 'ok';                              // healthy spread → green
+  }
+  if (err < okBelow) return 'ok';
+  if (err < warnBelow) return 'warn';
+  return 'err';
+}
+
+export function FrameStrip({ frames, selected, onSelect, coverage, okBelow = 0.35, warnBelow = 0.6, errUnit = '', errHint = '', colorMode = 'lower-better' }) {
   const { t } = useTranslation();
   const activeRef = useRef(null);
   // Whenever the selection changes, slide the strip so the active thumb is centered.
@@ -33,7 +51,15 @@ export function FrameStrip({ frames, selected, onSelect, coverage, okBelow = 0.3
   // doesn't matter — the longest bar is "worst frame in this batch", the shortest
   // is "best". The traffic-light thresholds for the numeric label still come from
   // the caller (defaults are pixel-domain, HandEye overrides with mm-domain).
-  const barMax = Math.max(warnBelow * 2, ...frames.map(f => f.err || 0)) || 1;
+  const measured = frames.map(f => f.err).filter(e => e != null && Number.isFinite(e));
+  const barMax = Math.max(warnBelow * 2, ...measured) || 1;
+  // mid-good thresholds (hand-eye): "≈0" guard and a batch-relative outlier line.
+  // median × 2.2 flags the genuine outliers without painting normal spread amber.
+  const sorted = [...measured].sort((a, b) => a - b);
+  const median = sorted.length ? sorted[Math.floor(sorted.length / 2)] : 0;
+  const zeroBelow = 0.5;                       // mm — below this, consistency is suspiciously perfect
+  const outlierAbove = Math.max(warnBelow, median * 2.2);
+  const kindOpts = { colorMode, okBelow, warnBelow, zeroBelow, outlierAbove };
 
   return (
     <div className="framestrip">
@@ -44,20 +70,26 @@ export function FrameStrip({ frames, selected, onSelect, coverage, okBelow = 0.3
       <div style={{ width: 1, height: 38, background: 'var(--border-soft)' }}/>
       {frames.map(f => {
         const isActive = selected === f.id;
-        const kind = trafficKindForRms(f.err, okBelow, warnBelow);
-        const numColor = kind === 'err' ? 'oklch(0.75 0.17 25)' : kind === 'warn' ? 'oklch(0.8 0.15 70)' : 'oklch(0.82 0.14 150)';
+        const unused = f.err == null || !Number.isFinite(f.err);
+        const kind = frameErrKind(f.err, kindOpts);
+        const numColor = unused ? 'var(--text-4)'
+          : kind === 'err' ? 'oklch(0.75 0.17 25)' : kind === 'warn' ? 'oklch(0.8 0.15 70)' : 'oklch(0.82 0.14 150)';
         const barColor = kind === 'err' ? 'var(--err)' : kind === 'warn' ? 'var(--warn)' : 'var(--ok)';
         // Bar shrinks as error grows: 100% when err=0, 0% when err≥barMax.
-        const barPct = Math.max(0, (1 - Math.min(1, f.err / barMax))) * 100;
+        const barPct = unused ? 0 : Math.max(0, (1 - Math.min(1, f.err / barMax))) * 100;
+        const title = unused
+          ? t('panels.frameUnused')
+          : errHint ? `${errHint}: ${f.err.toFixed(2)}${errUnit}` : undefined;
         return (
           <div key={f.id}
                ref={isActive ? activeRef : null}
                className={"frame-thumb" + (isActive ? ' active' : '')}
+               title={title}
                onClick={() => onSelect(f.id)}>
             <FrameThumb f={f}/>
             <span className="fnum">#{f.id.toString().padStart(2,'0')}</span>
-            <span className="ferr" style={{ color: numColor }}>{f.err.toFixed(2)}</span>
-            <span className="fbar" style={{ width: barPct + '%', background: barColor }}/>
+            <span className="ferr" style={{ color: numColor }}>{unused ? '—' : `${f.err.toFixed(2)}${errUnit}`}</span>
+            {!unused && <span className="fbar" style={{ width: barPct + '%', background: barColor }}/>}
           </div>
         );
       })}
