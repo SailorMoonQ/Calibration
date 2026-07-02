@@ -31,6 +31,7 @@
     "voiceUnsupported": "当前环境不支持语音识别",
     "voiceStarting": "正在启动手机入口…",
     "voiceQrAlt": "手机语音控制二维码",
+    "voiceQrLoadFailed": "二维码加载失败，请直接打开下方地址",
     "voiceHttpsHint": "手机扫码访问；首次打开自签名 HTTPS 时请选择继续前往。只识别：标定、拍照、采集。",
     "voiceStartFailed": "语音控制启动失败：{{error}}",
     "reset": "重置"

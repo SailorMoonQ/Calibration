@@ -15,6 +15,7 @@ export function TweaksPanel({ visible, tweaks, setTweaks, onClose }) {
   const { t } = useTranslation();
   const [voiceInfo, setVoiceInfo] = useState(null);
   const [qrSrc, setQrSrc] = useState('');
+  const [qrError, setQrError] = useState('');
 
   useEffect(() => {
     if (!visible || !tweaks.voiceCommands) return undefined;
@@ -24,6 +25,7 @@ export function TweaksPanel({ visible, tweaks, setTweaks, onClose }) {
         if (cancelled) return;
         setVoiceInfo(info);
         setQrSrc(qr);
+        setQrError('');
       })
       .catch((e) => {
         if (!cancelled) setVoiceInfo({ ok: false, error: e.message });
@@ -63,10 +65,18 @@ export function TweaksPanel({ visible, tweaks, setTweaks, onClose }) {
             {voiceInfo?.ok ? (
               <>
                 <div className="voice-qr">
-                  {qrSrc ? <img src={qrSrc} alt={t('tweaks.voiceQrAlt')}/> : <span>{t('tweaks.voiceStarting')}</span>}
+                  {qrSrc && !qrError ? (
+                    <img
+                      src={qrSrc}
+                      alt={t('tweaks.voiceQrAlt')}
+                      onError={() => setQrError(t('tweaks.voiceQrLoadFailed'))}
+                    />
+                  ) : (
+                    <span>{qrError || t('tweaks.voiceStarting')}</span>
+                  )}
                 </div>
                 <div className="voice-url mono">{voiceInfo.url}</div>
-                <div className="voice-hint">{t('tweaks.voiceHttpsHint')}</div>
+                <div className={`voice-hint${qrError ? ' err' : ''}`}>{qrError || t('tweaks.voiceHttpsHint')}</div>
               </>
             ) : (
               <div className="voice-hint err">

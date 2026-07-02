@@ -31,6 +31,7 @@
     "voiceUnsupported": "speech recognition not available in this build",
     "voiceStarting": "starting mobile entry…",
     "voiceQrAlt": "mobile voice control QR code",
+    "voiceQrLoadFailed": "QR code failed to load; open the address below directly",
     "voiceHttpsHint": "Scan on the phone; accept the self-signed HTTPS warning on first open. Recognizes: calibrate, photo, capture.",
     "voiceStartFailed": "voice control failed to start: {{error}}",
     "reset": "reset"

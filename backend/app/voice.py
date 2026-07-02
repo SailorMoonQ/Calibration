@@ -383,31 +383,17 @@ def qrcode_svg_response() -> Response:
     try:
         import qrcode
         import qrcode.image.svg
+        factory = qrcode.image.svg.SvgPathImage
+        img = qrcode.make(data["url"], image_factory=factory)
+        buf = io.BytesIO()
+        img.save(buf)
+        content = buf.getvalue()
     except Exception:
-        escaped = (
-            data["url"]
-            .replace("&", "&amp;")
-            .replace("<", "&lt;")
-            .replace(">", "&gt;")
-            .replace('"', "&quot;")
-        )
-        svg = f"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 240">
-<rect width="240" height="240" fill="#fff"/>
-<text x="120" y="104" text-anchor="middle" font-family="monospace" font-size="13" fill="#111">QR unavailable</text>
-<text x="120" y="128" text-anchor="middle" font-family="monospace" font-size="10" fill="#333">{escaped}</text>
-</svg>"""
-        return Response(
-            content=svg.encode("utf-8"),
-            media_type="image/svg+xml",
-            headers={"Cache-Control": "no-cache, no-store"},
-        )
+        from app.utils.qr_svg import qrcode_svg
 
-    factory = qrcode.image.svg.SvgPathImage
-    img = qrcode.make(data["url"], image_factory=factory)
-    buf = io.BytesIO()
-    img.save(buf)
+        content = qrcode_svg(data["url"])
     return Response(
-        content=buf.getvalue(),
+        content=content,
         media_type="image/svg+xml",
         headers={"Cache-Control": "no-cache, no-store"},
     )
