@@ -10,7 +10,14 @@ if [[ ! -d backend/.venv ]]; then
   echo "[dev] creating Python venv at backend/.venv"
   python3 -m venv backend/.venv
   ./backend/.venv/bin/pip install -U pip
+fi
+
+REQ_STAMP="backend/.venv/.requirements.sha256"
+REQ_HASH="$(sha256sum backend/requirements.txt | awk '{print $1}')"
+if [[ ! -f "$REQ_STAMP" ]] || [[ "$(cat "$REQ_STAMP")" != "$REQ_HASH" ]]; then
+  echo "[dev] installing Python requirements"
   ./backend/.venv/bin/pip install -r backend/requirements.txt
+  printf '%s\n' "$REQ_HASH" > "$REQ_STAMP"
 fi
 
 export CALIB_PYTHON="$ROOT/backend/.venv/bin/python"
