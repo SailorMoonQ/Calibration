@@ -12,14 +12,20 @@ import {
   CaptureControls, SolverButton, SolverPanel,
   trafficKindForRms, trafficColor,
 } from '../components/panels.jsx';
-import { computeCoverage, cellIndexFor } from '../lib/coverage.js';
+import { computeCoverage } from '../lib/coverage.js';
+import { extentFromImageSize } from '../lib/boardMetrics.js';
+import { GUIDED_STEPS, PINHOLE_PROFILE } from '../lib/guidedSequence.js';
+import { makeRectGeometry } from '../lib/smartCapture/geometry.js';
+import { useSmartCapture } from '../lib/smartCapture/useSmartCapture.js';
+import { speak } from '../lib/voice.js';
+import { useVoiceCommands } from '../lib/voiceControl.js';
 import { DEFAULT_CHESS_BOARD } from '../lib/board.js';
 import { confirm } from '../components/confirm.jsx';
 import { api, pickFolder, pickSaveFile, pickOpenFile } from '../api/client.js';
 
 const ZERO_K = [[0,0,0,0],[0,0,0,0],[0,0,0,0],[0,0,0,1]];
 
-export function IntrinsicsTab() {
+export function IntrinsicsTab({ active, tweaks }) {
   const { t } = useTranslation();
   const [board, setBoard] = useState(DEFAULT_CHESS_BOARD);
   const [autoCapture, setAuto] = useState(false);
@@ -44,6 +50,16 @@ export function IntrinsicsTab() {
 
   const [viewMode, setViewMode] = useState('live');          // 'live' | 'frame'
   const [liveDetect, setLiveDetect] = useState(false);
+  // 二选一的自动检测/叠加模式：'sweep' 矩形覆盖网格（手持扫覆盖），
+  // 'guided' 文档引导序列（按手册清单逐个位置/动作各拍两张）。跨会话记住。
+  const [captureMode, setCaptureMode] = useState(() => localStorage.getItem('calib_intrinsics_capmode') || 'sweep');
+  const guidedMode = captureMode === 'guided';
+  const [showFootprint, setShowFootprint] = useState(false);   // 检测可达足迹热力
+  // 镜像翻转：仅用于实时预览画面，不影响抓拍帧/校正视图/保存的原图。
+  const [mirror, setMirror] = useState(() => localStorage.getItem('calib_intrinsics_mirror') === '1');
+
+  useEffect(() => { localStorage.setItem('calib_intrinsics_capmode', captureMode); }, [captureMode]);
+  useEffect(() => { localStorage.setItem('calib_intrinsics_mirror', mirror ? '1' : '0'); }, [mirror]);
 
   // per-detected-path maps so FrameStrip / DetectedFrame align even when some frames skipped.
   const errByPath = useMemo(() => {
@@ -59,11 +75,6 @@ export function IntrinsicsTab() {
     (result.detected_paths || []).forEach((p, i) => m.set(p, result.per_frame_residuals?.[i]));
     return m;
   }, [result]);
-
-  const coverage = useMemo(
-    () => computeCoverage(result?.per_frame_residuals, result?.image_size),
-    [result],
-  );
 
   const frames = useMemo(() => datasetFiles.map((p, i) => ({
     id: i + 1, err: errByPath?.get(p) ?? 0, tx: 0, ty: 0, rot: 0,
@@ -84,7 +95,7 @@ export function IntrinsicsTab() {
   const cam = useCameraSource({
     pollEnabled: viewMode === 'live' || datasetFiles.length === 0,
   });
-  const { liveDevice } = cam;
+  const { liveDevice, streamInfo } = cam;
 
   const calibrated = !!(result?.ok && result?.K && D.length);
   const selectedPath = datasetFiles[selectedFrame - 1];
@@ -109,8 +120,26 @@ export function IntrinsicsTab() {
   const onSnapRef = useRef(null);
   const onUndoRef = useRef(null);
   const onDropRef = useRef(null);
+  const onRunRef = useRef(null);
+  const lastVoiceCommandRef = useRef({ command: '', ts: 0 });
   const datasetCountRef = useRef(0);
   useEffect(() => { datasetCountRef.current = datasetFiles.length; }, [datasetFiles.length]);
+
+  const acceptVoiceCommand = useCallback((command) => {
+    const now = performance.now();
+    const last = lastVoiceCommandRef.current;
+    if (last.command === command && now - last.ts < 1200) return false;
+    lastVoiceCommandRef.current = { command, ts: now };
+    return true;
+  }, []);
+
+  const voiceHandlers = useMemo(() => ({
+    calibrate: () => { if (acceptVoiceCommand('calibrate')) onRunRef.current?.(); },
+    photo: () => { if (acceptVoiceCommand('snap')) onSnapRef.current?.(); },
+    capture: () => { if (acceptVoiceCommand('snap')) onSnapRef.current?.(); },
+  }), [acceptVoiceCommand]);
+
+  useVoiceCommands(active === 'intrinsics' && !!tweaks?.voiceCommands, voiceHandlers);
 
   // Bounded undo stack of {kind: 'snap'|'drop', path, trashPath?}.
   const UNDO_LIMIT = 20;
@@ -121,11 +150,28 @@ export function IntrinsicsTab() {
     if (stack.length > UNDO_LIMIT) stack.shift();
   };
 
-  // Auto-capture state: claimed coverage cells (so we don't spam) + debounce + inflight gate.
-  const snappedCellsRef = useRef(new Set());
-  const lastAutoSnapRef = useRef(0);
-  const autoSnapInFlightRef = useRef(false);
-  useEffect(() => { snappedCellsRef.current = new Set(); }, [datasetPath]);
+  // Voice prompts (Edge-TTS clips, Chinese). Gated by settings; the per-snap
+  // "captured" cue is rate-limited so rapid auto-captures don't stutter the audio.
+  const voicePrompts = !!tweaks?.voicePrompts;
+  const lastSpokeRef = useRef({});
+  const voiceErrRef = useRef('');
+  const say = useCallback((name, minGapMs = 0) => {
+    if (!voicePrompts) return;
+    const now = performance.now();
+    if (minGapMs && now - (lastSpokeRef.current[name] || 0) < minGapMs) return;
+    lastSpokeRef.current[name] = now;
+    speak(name).catch((e) => {
+      // AbortError ("play() interrupted by a new load request") is EXPECTED: a
+      // newer cue intentionally cut this one off (one shared <audio>). Only
+      // surface genuine blocks, de-duped so a persistent block doesn't overwrite
+      // the status bar on every cue.
+      if (e?.name === 'AbortError') return;
+      const msg = e?.message || e?.name || 'play blocked';
+      if (msg === voiceErrRef.current) return;
+      voiceErrRef.current = msg;
+      setStatus(t('intrinsics.voicePlayFailed', { name, error: msg }), true);
+    });
+  }, [voicePrompts, t]);
 
   const onPickFolder = async () => {
     const p = await pickFolder(datasetPath || undefined);
@@ -176,58 +222,6 @@ export function IntrinsicsTab() {
       setStatus(t('common.dropped', { name }));
     } catch (e) { setStatus(t('common.dropFailed', { error: e.message }), true); }
   };
-  const onAutoMeta = useCallback((meta) => {
-    if (!autoCapture || !liveDevice || !datasetPath) return;
-    const corners = meta?.corners;
-    const size = meta?.image_size;
-    if (!corners || corners.length < 4 || !size) return;
-    const now = performance.now();
-    if (now - lastAutoSnapRef.current < autoRate * 1000) return;
-    if (autoSnapInFlightRef.current) return;
-    let sx = 0, sy = 0;
-    for (const c of corners) { sx += c[0]; sy += c[1]; }
-    const cx = sx / corners.length, cy = sy / corners.length;
-    const idx = cellIndexFor(cx, cy, size);
-    if (idx == null) return;
-    if (snappedCellsRef.current.has(idx)) return;
-    autoSnapInFlightRef.current = true;
-    lastAutoSnapRef.current = now;
-    snappedCellsRef.current.add(idx);
-    (async () => {
-      try {
-        const r = await api.snap(liveDevice, datasetPath);
-        pushUndo({ kind: 'snap', path: r.path });
-        setStatus(t('common.autoSnapped', { name: r.path.split('/').pop(), cell: idx }));
-        const files = await refreshDataset();
-        if (files) setSelected(files.length);
-      } catch (e) {
-        snappedCellsRef.current.delete(idx);
-        setStatus(t('common.autoSnapFailed', { error: e.message }), true);
-      } finally {
-        autoSnapInFlightRef.current = false;
-      }
-    })();
-  }, [autoCapture, liveDevice, datasetPath, autoRate]);
-
-  const onSnap = async () => {
-    let dir = datasetPath;
-    if (!dir) {
-      const picked = await pickFolder();
-      if (!picked) { setStatus(t('common.pickSessionFolder'), true); return; }
-      setDatasetPath(picked);
-      dir = picked;
-    }
-    if (!liveDevice) { setStatus(t('common.pickCamera'), true); return; }
-    try {
-      const r = await api.snap(liveDevice, dir);
-      pushUndo({ kind: 'snap', path: r.path });
-      setStatus(t('common.snapped', { name: r.path.split('/').pop() }));
-      if (dir === datasetPath) {
-        const files = await refreshDataset();
-        if (files) { setSelected(files.length); setViewMode('frame'); }
-      }
-    } catch (e) { setStatus(t('common.snapFailed', { error: e.message }), true); }
-  };
 
   const onUndo = async () => {
     const stack = undoStackRef.current;
@@ -252,11 +246,6 @@ export function IntrinsicsTab() {
       setStatus(t('common.undoFailed', { error: e.message }), true);
     }
   };
-
-  // Keep refs pointed at the latest closures so the keydown handler always sees fresh.
-  useEffect(() => { onSnapRef.current = onSnap; });
-  useEffect(() => { onUndoRef.current = onUndo; });
-  useEffect(() => { onDropRef.current = onDrop; });
 
   useEffect(() => {
     const onKey = (e) => {
@@ -298,6 +287,104 @@ export function IntrinsicsTab() {
     marker: board.marker ?? null,
     dictionary: 'DICT_5X5_100',
   });
+
+  // The region the capture grid is laid over: the whole frame. A pinhole lens has
+  // no image circle to detect, so this comes straight from the stream/solve size.
+  const imgW = result?.image_size?.[0] ?? (streamInfo?.open ? streamInfo.width : null);
+  const imgH = result?.image_size?.[1] ?? (streamInfo?.open ? streamInfo.height : null);
+  const imgSizeForCov = imgW && imgH ? [imgW, imgH] : null;
+  const geometry = useMemo(() => makeRectGeometry(imgSizeForCov), [imgW, imgH]);
+  const guidedExtent = useMemo(() => extentFromImageSize(imgSizeForCov), [imgW, imgH]);
+
+  // `guidance` reaches the state machine one render late (it only drives the
+  // spoken direction, never a capture decision) — this ref breaks the cycle
+  // between "counts feed coverage" and "coverage feeds guidance".
+  const guidanceRef = useRef(null);
+
+  // Capture-only: save the frame and make it undoable. Resolves as soon as the
+  // path is known — deliberately does NOT touch the dataset listing, so the
+  // hook can tally coverage against the pose that was actually captured
+  // (against the freshest `latestMetaRef`) before an `api.listDataset`
+  // round-trip gives the live stream time to move the board off that pose.
+  const snapOnce = useCallback(async () => {
+    const r = await api.snap(liveDevice, datasetPath);
+    pushUndo({ kind: 'snap', path: r.path });
+    return r;
+  }, [liveDevice, datasetPath]);
+
+  // Runs AFTER the hook has already tallied coverage, advanced the guided
+  // step, spoken the cue, and set the "captured" status for this frame. A
+  // failure here must not undo any of that — the hook catches it separately
+  // and reports it as its own error rather than autoSnapFailed.
+  const onCaptured = useCallback(async () => {
+    const files = await refreshDataset();
+    if (files) setSelected(files.length);
+  }, [datasetPath]);
+
+  const capture = useSmartCapture({
+    enabled: autoCapture,
+    liveDevice, datasetPath, autoRate,
+    board, geometry, profile: PINHOLE_PROFILE,
+    mode: guidedMode ? 'guided' : 'sweep',
+    mirror,
+    guidance: guidanceRef.current,
+    doSnap: snapOnce,
+    onCaptured,
+    say, t, setStatus,
+  });
+
+  // Coverage. Two sources, picked by phase:
+  //   • after a solve → bin the per-frame residuals into the grid, which also
+  //     yields per-cell quality (mean reprojection error) for colouring.
+  //   • during capture → the live capture tally, so the grid fills in real time as
+  //     the user snaps. `guidance` flags the emptiest cell.
+  const coverage = useMemo(() => {
+    if (result?.per_frame_residuals?.length) {
+      return { ...computeCoverage(result.per_frame_residuals, result.image_size), guidance: null };
+    }
+    const cells = capture.counts.map(c => c > 0);
+    const filled = cells.reduce((n, on) => n + (on ? 1 : 0), 0);
+    const total = geometry.totalCells;
+    return {
+      cells, counts: capture.counts, meanErr: null, mask: null,
+      guidance: geometry.pickGuidance(capture.counts),
+      filled, total, percent: Math.round((filled / total) * 100),
+    };
+  }, [result, capture.counts, geometry]);
+
+  useEffect(() => { guidanceRef.current = coverage.guidance; }, [coverage.guidance]);
+
+  const onSnap = async () => {
+    let dir = datasetPath;
+    if (!dir) {
+      const picked = await pickFolder();
+      if (!picked) { setStatus(t('common.pickSessionFolder'), true); return; }
+      setDatasetPath(picked);
+      dir = picked;
+    }
+    if (!liveDevice) { setStatus(t('common.pickCamera'), true); return; }
+    await capture.withSnapLock(async () => {
+      try {
+        const r = await api.snap(liveDevice, dir);
+        pushUndo({ kind: 'snap', path: r.path });
+        capture.markFromManualSnap({ silent: guidedMode });
+        if (guidedMode) { capture.advanceGuidedShot(); say('captured', 600); }
+        setStatus(t('common.snapped', { name: r.path.split('/').pop() }));
+        // Refresh the listing but keep the live view — the user is mid-capture and
+        // shouldn't have the frame jump to the just-saved still. Click a thumbnail
+        // in the FrameStrip to inspect a saved frame.
+        if (dir === datasetPath) await refreshDataset();
+      } catch (e) {
+        setStatus(t('common.snapFailed', { error: e.message }), true);
+      }
+    });
+  };
+  // Keep refs pointed at the latest closures so the global keydown handler
+  // always invokes the up-to-date functions (which close over liveDevice / datasetPath).
+  useEffect(() => { onSnapRef.current = onSnap; });
+  useEffect(() => { onUndoRef.current = onUndo; });
+  useEffect(() => { onDropRef.current = onDrop; });
+  useEffect(() => { onRunRef.current = onRun; });
 
   const onSave = async () => {
     if (!result?.ok) { setStatus(t('common.nothingToSave')); return; }
@@ -373,6 +460,17 @@ export function IntrinsicsTab() {
     }}>{text}</div>
   );
 
+  // Guided overlay descriptor for the live frame: the active step's region + pose
+  // glyph, or {done:true} once the checklist is exhausted. null in sweep mode.
+  const guidedStepNow = GUIDED_STEPS[capture.guidedProgress.step];
+  const guidedOverlay = guidedMode
+    ? (guidedStepNow
+        ? { region: guidedStepNow.region, glyph: guidedStepNow.glyph,
+            pose: guidedStepNow.pose, scale: guidedStepNow.scale ?? null,
+            group: guidedStepNow.group, done: false }
+        : { done: true })
+    : null;
+
   const rawCell = (
     <div className="vp-cell" key="raw">
       <span className="vp-label">
@@ -386,8 +484,15 @@ export function IntrinsicsTab() {
         liveDetect
           ? <LiveDetectedFrame device={liveDevice} board={board}
                 showCorners={showBoard} showOrigin={showOrigin}
-                onMeta={onAutoMeta}/>
-          : <LivePreview device={liveDevice}/>
+                onMeta={capture.onMeta}
+                coverageCells={coverage.cells}
+                coverageCounts={coverage.counts}
+                showCoverageGrid={!guidedMode}
+                guided={guidedOverlay}
+                guidedExtent={guidedExtent}
+                showFootprint={showFootprint}
+                mirror={mirror}/>
+          : <LivePreview device={liveDevice} mirror={mirror}/>
       ) : datasetFiles.length > 0 && selectedPath ? (
         <DetectedFrame
           path={selectedPath}
@@ -399,6 +504,30 @@ export function IntrinsicsTab() {
       ) : (
         emptyCell(t('intrinsics.connectOrLoad'))
       )}
+      {showLive && liveDetect && autoCapture && capture.autoHud && (() => {
+        const r = capture.autoHud.reason;
+        const color = r === 'capturing' ? 'var(--ok)' : r === 'blurry' || r === 'noBoard' ? 'var(--warn)' : 'var(--text-2)';
+        return (
+          <div style={{
+            position: 'absolute', top: 10, left: '50%', transform: 'translateX(-50%)',
+            background: 'rgba(3,6,10,0.94)', border: `1.5px solid ${color}`, borderRadius: 7,
+            padding: '8px 14px', display: 'flex', flexDirection: 'column', gap: 5, minWidth: 196,
+            fontFamily: 'JetBrains Mono', fontSize: 12.5, fontWeight: 600, color: 'var(--text)',
+            boxShadow: '0 8px 24px rgba(0,0,0,0.72)', backdropFilter: 'blur(6px)',
+            textShadow: '0 1px 3px rgba(0,0,0,0.9)',
+          }}>
+            {capture.autoHud.guidedLabel && (
+              <div style={{ color: 'var(--text)', fontSize: 12, fontWeight: 700 }}>{capture.autoHud.guidedLabel}</div>
+            )}
+            <div><span style={{ color }}>⦿ {t('intrinsics.autoCapture')} · {t(`intrinsics.auto_${r}`)}</span>
+              {typeof capture.autoHud.tilt === 'number' && <span style={{ color: 'var(--text-2)', fontWeight: 600 }}>  ∠{capture.autoHud.tilt.toFixed(0)}°</span>}
+            </div>
+            <div style={{ height: 4, background: 'rgba(255,255,255,0.18)', borderRadius: 2, overflow: 'hidden' }}>
+              <div style={{ height: '100%', width: `${Math.round((capture.autoHud.dwell || 0) * 100)}%`, background: 'var(--ok)', transition: 'width 80ms linear' }}/>
+            </div>
+          </div>
+        );
+      })()}
       <div className="vp-corner-read">
         <div>fx <b>{K[0][0].toFixed(2)}</b>  fy <b>{K[1][1].toFixed(2)}</b></div>
         <div>cx <b>{K[0][2].toFixed(2)}</b>  cy <b>{K[1][2].toFixed(2)}</b></div>
@@ -477,7 +606,13 @@ export function IntrinsicsTab() {
             autoRate={autoRate}
             onAutoRate={setAutoRate}
             onSnap={onSnap} onDrop={onDrop}
-            coverage={coverage.percent} coverageCells={coverage.cells}/>
+            coverage={coverage.percent}
+            coverageCells={coverage.cells}
+            coverageCounts={coverage.counts}
+            coverageMeanErr={coverage.meanErr}
+            coverageMask={coverage.mask}
+            coverageGuidance={coverage.guidance}
+            okBelow={PX_OK} warnBelow={PX_WARN}/>
         </div>
         <SolverButton onSolve={onRun} busy={busy}
           status={status}
@@ -502,6 +637,12 @@ export function IntrinsicsTab() {
           <Chk checked={showOrigin} onChange={setShowOrigin}>{t('intrinsics.origin')}</Chk>
           <Chk checked={showResid} onChange={setShowResid}>{t('intrinsics.residuals')}</Chk>
           <Chk checked={liveDetect} onChange={setLiveDetect}>{t('intrinsics.detectLive')}</Chk>
+          <Seg value={captureMode} onChange={(v) => { setCaptureMode(v); setLiveDetect(true); }} options={[
+            {value:'sweep',label:t('intrinsics.captureModeSweep')},
+            {value:'guided',label:t('intrinsics.captureModeGuided')},
+          ]}/>
+          <Chk checked={showFootprint} onChange={(v) => { setShowFootprint(v); if (v) setLiveDetect(true); }}>{t('intrinsics.footprint')}</Chk>
+          <Chk checked={mirror} onChange={setMirror}>{t('intrinsics.mirror')}</Chk>
           <div className="spacer"/>
           <div className="read">
             {datasetFiles.length > 0 && <>{t('intrinsics.frame')} <b>#{selectedFrame.toString().padStart(2,'0')}</b> · </>}
