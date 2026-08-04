@@ -9,7 +9,7 @@
     "dev:vite": "vite --config renderer/vite.config.js",
     "dev:electron": "wait-on http://localhost:5173 && cross-env NODE_ENV=development electron .",
     "i18n:check": "node scripts/check-i18n-keys.mjs",
-    "test": "node --test renderer/src",
+    "test": "node scripts/run-tests.mjs",
     "build:renderer": "npm run i18n:check && vite build --config renderer/vite.config.js",
     "build:backend": "bash scripts/build-backend.sh",
     "build:linux": "npm run build:renderer && electron-builder --linux",
