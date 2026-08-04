@@ -108,3 +108,48 @@ export function cellIndexFor(x, y, imageSize, cols = COVERAGE_COLS, rows = COVER
   const ri = Math.min(rows - 1, Math.floor((y / h) * rows));
   return ri * cols + ci;
 }
+
+// Centre of every cell, in image-pixel coords — the cartesian twin of
+// polarCellGeometry. Used to steer the board toward a target cell.
+export function cellGeometry(imageSize, cols = COVERAGE_COLS, rows = COVERAGE_ROWS) {
+  if (!imageSize) return [];
+  const [w, h] = imageSize;
+  if (!w || !h) return [];
+  const out = [];
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      out.push({ index: r * cols + c, x: ((c + 0.5) / cols) * w, y: ((r + 0.5) / rows) * h });
+    }
+  }
+  return out;
+}
+
+// How far out a cell sits, 0 (centre) … 2 (edge). The cartesian stand-in for the
+// polar grid's ring index, used only to break guidance ties.
+function cellRing(index, cols, rows) {
+  const ci = index % cols, ri = Math.floor(index / cols);
+  const nx = Math.abs((ci + 0.5) / cols - 0.5) * 2;   // 0…1
+  const ny = Math.abs((ri + 0.5) / rows - 0.5) * 2;
+  const d = Math.max(nx, ny);
+  return d < 1 / 3 ? 0 : d < 2 / 3 ? 1 : 2;
+}
+
+// Pick the cell to guide the user toward next: the emptiest cell, breaking ties
+// toward the outer ring (the edge of the frame carries the most distortion
+// information and is the hardest to fill). Mirrors pickGuidanceCell in
+// polarCoverage.js, including its "stop nagging once nothing is empty" rule.
+// `mask` (optional) marks cells that can never be covered; they are skipped.
+export function pickGuidanceCell(counts, mask = null, cols = COVERAGE_COLS, rows = COVERAGE_ROWS) {
+  if (!counts?.length) return null;
+  let best = null, bestScore = Infinity;
+  for (let i = 0; i < cols * rows; i++) {
+    if (mask && !mask[i]) continue;
+    const n = counts[i] ?? 0;
+    // lower count wins; among equal counts, the outer ring wins → subtract ring.
+    const score = n * 100 - cellRing(i, cols, rows);
+    if (score < bestScore) { bestScore = score; best = i; }
+  }
+  if (best == null) return null;
+  // Only guide while something is still empty; once all covered, stop nagging.
+  return (counts[best] ?? 0) === 0 ? best : null;
+}
