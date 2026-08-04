@@ -119,8 +119,13 @@ export function CoverageGrid({
       return { fill: color, opacity: 0.5 };
     }
     // During capture: deepen with the number of captures, like the dartboard.
-    const n = counts ? counts[idx] : 1;
-    return { fill: 'var(--accent)', opacity: Math.min(0.6, 0.3 + (n - 1) * 0.1) };
+    // Callers that pass no counts keep the original flat tint, so grids that
+    // predate capture-depth shading (Hand-Eye) look exactly as they did.
+    const n = counts ? counts[idx] : null;
+    return {
+      fill: 'var(--accent)',
+      opacity: n == null ? 0.45 : Math.min(0.6, 0.3 + (n - 1) * 0.1),
+    };
   };
   return (
     <svg width={w} height={h}>
