@@ -192,6 +192,11 @@ export function LiveDetectedFrame({
   // Guided-sequence overlay (doc-driven mode): { region, glyph, done } for the
   // active checklist step, or null in polar mode. Shares the image-circle detection.
   guided = null,
+  // Explicit region geometry for the guided overlay, as {cx, cy, rx, ry}. When
+  // given we use it and skip circle auto-detection entirely — a pinhole frame
+  // has no dark border, so detectCircleFromImageData would return a meaningless
+  // disk, and running it costs a full-frame getImageData every 1.2s.
+  guidedExtent = null,
   onCircle,               // optional: called with {cx,cy,r} when the circle is detected
   mirror = false,         // display-only horizontal flip (does not affect saved frames)
 }) {
@@ -218,10 +223,10 @@ export function LiveDetectedFrame({
       cells: coverageCells, counts: coverageCounts, fovMask,
       cols: covCols, rows: covRows, showGrid: showCoverageGrid, showFootprint,
       showPolar: showPolarGrid, polarCells, polarCounts, polarGuidance, target: polarTarget, rings, sectors,
-      guided,
+      guided, guidedExtent,
     };
   }, [coverageCells, coverageCounts, fovMask, covCols, covRows, showCoverageGrid, showFootprint,
-      showPolarGrid, polarCells, polarCounts, polarGuidance, polarTarget, rings, sectors, guided]);
+      showPolarGrid, polarCells, polarCounts, polarGuidance, polarTarget, rings, sectors, guided, guidedExtent]);
   // Persistent detection-footprint accumulator (reset when the stream restarts).
   const footprintRef = useRef(new Float32Array(FP_COLS * FP_ROWS));
   // det_seq of the last detection already folded into the footprint, so the same
@@ -282,8 +287,9 @@ export function LiveDetectedFrame({
       const phase = performance.now() / 1000;   // animation clock for the live hints
 
       // ── Auto-detect the fisheye image circle (throttled, from the clean frame
-      // BEFORE any overlay is painted) ──────────────────────────────────────
-      if (cov?.showPolar || cov?.guided) {
+      // BEFORE any overlay is painted). Skipped when the caller supplied an
+      // explicit guidedExtent and no polar dartboard is being drawn. ──────────
+      if (cov?.showPolar || (cov?.guided && !cov.guidedExtent)) {
         const sizeKey = `${w}x${h}`;
         const now = performance.now();
         let cc = circleRef.current;
@@ -501,62 +507,68 @@ export function LiveDetectedFrame({
       // shown, not just a static outline — mirroring docs/fisheye-howto §2. A marching
       // arrow points from the live board to the target; the live board's own quad is
       // outlined and tinted by how much of the frame it fills (doc §3 size guidance).
-      if (cov?.guided && circleRef.current?.circle) {
-        const circle = circleRef.current.circle;
-        const extent = extentFromCircle(circle);
-        const g = cov.guided;
-        // FOV circle (dashed, faint) — the fisheye image boundary, matches the doc figures
-        ctx.save();
-        ctx.setLineDash([cornerR * 2, cornerR * 2]);
-        ctx.strokeStyle = 'oklch(0.85 0.03 230 / 0.4)';
-        ctx.lineWidth = Math.max(1, cornerR * 0.3);
-        ctx.beginPath(); ctx.arc(circle.cx, circle.cy, circle.r, 0, Math.PI * 2); ctx.stroke();
-        ctx.restore();
+      if (cov?.guided) {
+        const extent = cov.guidedExtent || extentFromCircle(circleRef.current?.circle);
+        if (extent) {
+          const g = cov.guided;
+          // Region boundary (dashed, faint) — the fisheye image circle, or the
+          // pinhole frame's inscribed ellipse. Matches the doc figures. (A
+          // fisheye extent always has rx === ry, so this ellipse renders the
+          // same circle the old ctx.arc(cx, cy, r, ...) did.)
+          ctx.save();
+          ctx.setLineDash([cornerR * 2, cornerR * 2]);
+          ctx.strokeStyle = 'oklch(0.85 0.03 230 / 0.4)';
+          ctx.lineWidth = Math.max(1, cornerR * 0.3);
+          ctx.beginPath();
+          ctx.ellipse(extent.cx, extent.cy, extent.rx, extent.ry, 0, 0, Math.PI * 2);
+          ctx.stroke();
+          ctx.restore();
 
-        if (!g.done) {
-          const tgt = regionTarget(g.region, extent);
-          const ts = tgt ? targetHalfSize(g, extent, bCols, bRows) : null;
-          // live board centroid + outer quad (only a full detection has the quad)
-          let cenX = null, cenY = null, quad = null;
-          if (corners.length) {
-            let sx = 0, sy = 0;
-            for (const [x, y] of corners) { sx += x; sy += y; }
-            cenX = sx / corners.length; cenY = sy / corners.length;
-            const nb = bCols * bRows;
-            if (corners.length >= nb) {
-              quad = [corners[0], corners[bCols - 1], corners[nb - 1], corners[bCols * (bRows - 1)]];
+          if (!g.done) {
+            const tgt = regionTarget(g.region, extent);
+            const ts = tgt ? targetHalfSize(g, extent, bCols, bRows) : null;
+            // live board centroid + outer quad (only a full detection has the quad)
+            let cenX = null, cenY = null, quad = null;
+            if (corners.length) {
+              let sx = 0, sy = 0;
+              for (const [x, y] of corners) { sx += x; sy += y; }
+              cenX = sx / corners.length; cenY = sy / corners.length;
+              const nb = bCols * bRows;
+              if (corners.length >= nb) {
+                quad = [corners[0], corners[bCols - 1], corners[nb - 1], corners[bCols * (bRows - 1)]];
+              }
             }
-          }
 
-          if (tgt && ts) {
-            drawTargetBoard(ctx, tgt.x, tgt.y, ts.halfW, ts.halfH, g, cornerR, phase);
-            // reinforce poses the rect shape doesn't already convey (frontal / near-far)
-            if (g.pose === 'frontal' || g.pose === 'dist') {
-              drawGuidedGlyph(ctx, tgt.x, tgt.y, Math.min(ts.halfW, ts.halfH), g.glyph, cornerR, phase);
+            if (tgt && ts) {
+              drawTargetBoard(ctx, tgt.x, tgt.y, ts.halfW, ts.halfH, g, cornerR, phase);
+              // reinforce poses the rect shape doesn't already convey (frontal / near-far)
+              if (g.pose === 'frontal' || g.pose === 'dist') {
+                drawGuidedGlyph(ctx, tgt.x, tgt.y, Math.min(ts.halfW, ts.halfH), g.glyph, cornerR, phase);
+              }
+              // marching "go here" arrow while the board is away from the target zone
+              if (cenX != null && Math.hypot(cenX - tgt.x, cenY - tgt.y) > tgt.acceptR) {
+                drawSteerArrow(ctx, cenX, cenY, tgt.x, tgt.y, cornerR, phase);
+              }
             }
-            // marching "go here" arrow while the board is away from the target zone
-            if (cenX != null && Math.hypot(cenX - tgt.x, cenY - tgt.y) > tgt.acceptR) {
-              drawSteerArrow(ctx, cenX, cenY, tgt.x, tgt.y, cornerR, phase);
-            }
-          }
 
-          // Live board outline, tinted by ABSOLUTE frame-fill quality (doc §3): green
-          // when it occupies a good fraction of the FOV, amber when too big (outer
-          // corners get clipped) or too small (corners blur), blue in between. A
-          // step-relative band was tried but read WORSE on the /tmp/1+/tmp/4 captures
-          // (real boards cluster ~0.24–0.58 regardless of step), so this fixed band —
-          // which the sample sets validate at 35/38 correctly-placed frames green — stays.
-          if (quad) {
-            const sc = boardScale(corners, bCols, bRows, extentFromCircle(circle));
-            let qc = 'oklch(0.8 0.16 235 / 0.95)';                       // blue: detected, transitional size
-            if (sc != null) {
-              if (sc > 0.66 || sc < 0.24) qc = 'oklch(0.72 0.18 35 / 0.95)';        // 太大/太小
-              else if (sc >= 0.30 && sc <= 0.60) qc = 'oklch(0.78 0.16 150 / 0.95)'; // 合适
+            // Live board outline, tinted by ABSOLUTE frame-fill quality (doc §3): green
+            // when it occupies a good fraction of the FOV, amber when too big (outer
+            // corners get clipped) or too small (corners blur), blue in between. A
+            // step-relative band was tried but read WORSE on the /tmp/1+/tmp/4 captures
+            // (real boards cluster ~0.24–0.58 regardless of step), so this fixed band —
+            // which the sample sets validate at 35/38 correctly-placed frames green — stays.
+            if (quad) {
+              const sc = boardScale(corners, bCols, bRows, extent);
+              let qc = 'oklch(0.8 0.16 235 / 0.95)';                       // blue: detected, transitional size
+              if (sc != null) {
+                if (sc > 0.66 || sc < 0.24) qc = 'oklch(0.72 0.18 35 / 0.95)';        // 太大/太小
+                else if (sc >= 0.30 && sc <= 0.60) qc = 'oklch(0.78 0.16 150 / 0.95)'; // 合适
+              }
+              drawBoardQuad(ctx, quad, qc, cornerR);
+            } else if (cenX != null) {
+              ctx.fillStyle = 'oklch(0.8 0.16 235 / 0.95)';
+              ctx.beginPath(); ctx.arc(cenX, cenY, cornerR * 2.2, 0, Math.PI * 2); ctx.fill();
             }
-            drawBoardQuad(ctx, quad, qc, cornerR);
-          } else if (cenX != null) {
-            ctx.fillStyle = 'oklch(0.8 0.16 235 / 0.95)';
-            ctx.beginPath(); ctx.arc(cenX, cenY, cornerR * 2.2, 0, Math.PI * 2); ctx.fill();
           }
         }
       }
