@@ -102,16 +102,25 @@ export function FrameStrip({ frames, selected, onSelect, coverage, okBelow = 0.3
 // present, captured cells are coloured by quality (green/amber/red) against the
 // okBelow/warnBelow thresholds instead of the flat accent tint. During capture
 // (meanErr null) it falls back to the simple captured/empty fill.
-export function CoverageGrid({ cells, meanErr = null, mask = null, okBelow = 0.25, warnBelow = 0.5, w = 110, h = 72 }) {
+export function CoverageGrid({
+  cells, counts = null, meanErr = null, mask = null, guidance = null,
+  okBelow = 0.25, warnBelow = 0.5, w = 110, h = 72,
+}) {
   const cols = 8, rows = 5;
   const cellFill = (on, idx) => {
-    // Outside the fisheye FOV — never coverable, so render as N/A, not "missing".
+    // Outside the FOV — never coverable, so render as N/A, not "missing".
     if (mask && !mask[idx]) return { fill: 'var(--text-4)', opacity: 0.18, na: true };
+    // The cell to fill next — amber, so it reads the same as the on-frame target.
+    if (idx === guidance) return { fill: 'var(--warn)', opacity: 0.55 };
     if (!on) return { fill: 'transparent', opacity: 1 };
     const e = meanErr?.[idx];
-    if (e == null) return { fill: 'var(--accent)', opacity: 0.45 };
-    const color = e < okBelow ? 'var(--ok)' : e < warnBelow ? 'var(--warn)' : 'var(--err)';
-    return { fill: color, opacity: 0.5 };
+    if (e != null) {
+      const color = e < okBelow ? 'var(--ok)' : e < warnBelow ? 'var(--warn)' : 'var(--err)';
+      return { fill: color, opacity: 0.5 };
+    }
+    // During capture: deepen with the number of captures, like the dartboard.
+    const n = counts ? counts[idx] : 1;
+    return { fill: 'var(--accent)', opacity: Math.min(0.6, 0.3 + (n - 1) * 0.1) };
   };
   return (
     <svg width={w} height={h}>
@@ -268,7 +277,8 @@ export function CaptureControls({
   autoCapture, onAuto,
   autoRate, onAutoRate,
   onSnap, onDrop,
-  coverage, coverageCells, coverageMeanErr = null, coverageMask = null, okBelow, warnBelow,
+  coverage, coverageCells, coverageCounts = null, coverageMeanErr = null,
+  coverageMask = null, coverageGuidance = null, okBelow, warnBelow,
   polar = null,   // when provided, render the fisheye dartboard instead of the cartesian grid
 }) {
   const { t } = useTranslation();
@@ -301,12 +311,16 @@ export function CaptureControls({
           ? <PolarCoverageGrid cells={polar.cells} counts={polar.counts} meanErr={polar.meanErr}
                 guidance={polar.guidance} rings={polar.rings} sectors={polar.sectors}
                 okBelow={okBelow} warnBelow={warnBelow}/>
-          : <CoverageGrid cells={coverageCells} meanErr={coverageMeanErr} mask={coverageMask} okBelow={okBelow} warnBelow={warnBelow}/>}
+          : <CoverageGrid cells={coverageCells} counts={coverageCounts} meanErr={coverageMeanErr}
+                mask={coverageMask} guidance={coverageGuidance}
+                okBelow={okBelow} warnBelow={warnBelow}/>}
         <div style={{ fontSize: 11, color: 'var(--text-2)', lineHeight: 1.45 }}>
           <div style={{ fontSize: 10.5, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{t('panels.coverage')}</div>
           <div style={{ fontFamily: 'JetBrains Mono', fontSize: 16, fontWeight: 500, color: 'var(--text)' }}>{coverage}%</div>
           <div style={{ fontSize: 10.5, color: 'var(--text-3)' }}>
-            {polar && polar.guidance != null ? t('panels.captureGuide') : <>{t('panels.captureMoreLine1')}<br/>{t('panels.captureMoreLine2')}</>}
+            {(polar && polar.guidance != null) || coverageGuidance != null
+              ? t('panels.captureGuide')
+              : <>{t('panels.captureMoreLine1')}<br/>{t('panels.captureMoreLine2')}</>}
           </div>
         </div>
       </div>
