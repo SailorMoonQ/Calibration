@@ -12,7 +12,8 @@ import {
   CaptureControls, SolverButton, SolverPanel,
   trafficKindForRms, trafficColor,
 } from '../components/panels.jsx';
-import { binPolar, pickGuidanceCell, totalPolarCells, polarCellAt, polarCellGeometry, boardTiltDeg, RINGS, SECTORS } from '../lib/polarCoverage.js';
+import { binPolar, pickGuidanceCell, totalPolarCells, polarCellAt, polarCellGeometry, RINGS, SECTORS } from '../lib/polarCoverage.js';
+import { boardTiltDeg } from '../lib/boardMetrics.js';
 import {
   GUIDED_STEPS, analyzeBoard, regionTarget, regionOk, poseOk,
   differsEnough, shotSignature,

@@ -11,7 +11,11 @@
 // whether the live board matches — driving the on-frame guidance overlay and the
 // guided auto-capture state machine in FisheyeTab.
 
-import { boardTiltDeg } from './polarCoverage.js';
+import { analyzeBoard, boardScale } from './boardMetrics.js';
+
+// Re-exported so existing consumers (LiveDetectedFrame, FisheyeTab) keep one
+// import site for "the guided sequence's view of the board".
+export { analyzeBoard, boardScale };
 
 // ── Pose / scale acceptance thresholds (heuristic, no intrinsics needed) ──────
 const TILT_FRONTAL_MAX = 12;   // a "正对" frame must be flatter than this (deg)
@@ -85,52 +89,6 @@ export const GUIDED_STEPS = [
 ];
 
 export const GUIDED_TOTAL_SHOTS = GUIDED_STEPS.reduce((n, s) => n + s.shots, 0);
-
-// Centroid of the detected corners ([[x,y],…]).
-export function cornersCentroid(corners) {
-  if (!corners?.length) return null;
-  let sx = 0, sy = 0;
-  for (const c of corners) { sx += c[0]; sy += c[1]; }
-  return { x: sx / corners.length, y: sy / corners.length };
-}
-
-// In-plane rotation (roll) proxy in degrees, |angle| ∈ [0,45]. From the board's
-// top edge (corner 0 → corner cols-1) measured against the image horizontal.
-// A chessboard reads the same every 90°, so we fold into [-45,45] and take |·|.
-// Unlike boardTiltDeg (which only sees perspective skew), this catches a board
-// rotated like a clock face while staying fronto-parallel.
-export function boardRollDeg(corners, cols) {
-  if (!corners || corners.length < cols) return null;
-  const a = corners[0], b = corners[cols - 1];
-  let deg = (Math.atan2(b[1] - a[1], b[0] - a[0]) * 180) / Math.PI;  // -180…180
-  deg = ((deg % 90) + 90) % 90;          // 0…90
-  if (deg > 45) deg -= 90;               // -45…45
-  return Math.abs(deg);
-}
-
-// Apparent board size: span of the four outer corners / image-circle diameter.
-// ~1 means the board fills the circle; small means it's far away.
-export function boardScale(corners, cols, rows, circle) {
-  const n = cols * rows;
-  if (!corners || corners.length < n || !circle?.r) return null;
-  const quad = [corners[0], corners[cols - 1], corners[n - 1], corners[cols * (rows - 1)]];
-  let maxD = 0;
-  for (let i = 0; i < 4; i++) for (let j = i + 1; j < 4; j++) {
-    maxD = Math.max(maxD, Math.hypot(quad[i][0] - quad[j][0], quad[i][1] - quad[j][1]));
-  }
-  return maxD / (2 * circle.r);
-}
-
-// One-shot analysis of the live board for the guided gates + overlay.
-export function analyzeBoard(corners, board, circle) {
-  const cols = board?.cols ?? 9, rows = board?.rows ?? 6;
-  return {
-    centroid: cornersCentroid(corners),
-    tilt: boardTiltDeg(corners, cols, rows),
-    roll: boardRollDeg(corners, cols),
-    scale: boardScale(corners, cols, rows, circle),
-  };
-}
 
 // Target point for a step's region, in image-pixel coords, plus the acceptance
 // radius (px). Returns null without a circle.
