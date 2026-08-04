@@ -14,7 +14,14 @@ export const CAPTURE_MIN_CORNERS = 3;
 // after a short dwell, so you can sweep the board around and let it capture
 // itself. None of these depend on the lens: the circle-vs-rectangle difference
 // lives entirely in the injected `geometry` adapter.
-const TARGET_PER_CELL = 5;     // stop auto-snapping a cell once it has this many
+// Captures-per-cell that counts as "this cell is done". Belongs to the CALLER,
+// not to this file, because the right number scales with how many cells the
+// geometry has: the fisheye dartboard is 17 cells, the pinhole grid is 40, and
+// one snap fills several cells at once. Asking for 5 in each of 40 cells is
+// roughly 67 frames on a pinhole — far past the 15–30 a pinhole solve wants.
+// The default is the fisheye value, so an omission errs toward MORE samples,
+// never fewer.
+const DEFAULT_TARGET_PER_CELL = 5;
 const DWELL_MS = 500;          // must hold the good pose this long before it fires
 const SHARP_REL = 0.40;        // reject if blurrier than this fraction of the session-best
 const SHARP_ABS = 40;          // absolute Laplacian-variance floor
@@ -23,6 +30,7 @@ const TILT_MIN_DIFF = 4;       // a follow-up capture in a cell must differ in t
 export function useSmartCapture({
   enabled, liveDevice, datasetPath, autoRate = 0.5,
   board, geometry, profile, mode = 'sweep', mirror = false, guidance = null,
+  targetPerCell = DEFAULT_TARGET_PER_CELL,
   doSnap, onCaptured, say, t, setStatus,
 }) {
   // `poseOk` defaults its profile arg to FISHEYE_PROFILE — a caller that forgets
@@ -43,6 +51,7 @@ export function useSmartCapture({
   const modeRef = useRef(mode);
   const mirrorRef = useRef(mirror);
   const profileRef = useRef(profile);
+  const targetRef = useRef(targetPerCell);
   const countsRef = useRef(counts);
   const guidanceRef = useRef(guidance);
   const enabledRef = useRef(enabled);
@@ -56,6 +65,7 @@ export function useSmartCapture({
   useEffect(() => { modeRef.current = mode; }, [mode]);
   useEffect(() => { mirrorRef.current = mirror; }, [mirror]);
   useEffect(() => { profileRef.current = profile; }, [profile]);
+  useEffect(() => { targetRef.current = targetPerCell; }, [targetPerCell]);
   useEffect(() => { countsRef.current = counts; }, [counts]);
   useEffect(() => { guidanceRef.current = guidance; }, [guidance]);
   useEffect(() => { enabledRef.current = enabled; }, [enabled]);
@@ -415,11 +425,12 @@ export function useSmartCapture({
     const cnts = countsRef.current;
     const tilt = boardTiltDeg(corners, b.cols, b.rows);
     const perCell = geom.bin(corners);
-    let cell = null, cellCount = TARGET_PER_CELL;
+    const target = targetRef.current;
+    let cell = null, cellCount = target;
     for (let i = 0; i < perCell.length; i++) {
       if (perCell[i] < CAPTURE_MIN_CORNERS) continue;
       const n = cnts[i] ?? 0;
-      if (n < TARGET_PER_CELL && (cell == null || n < cellCount || (n === cellCount && i > cell))) {
+      if (n < target && (cell == null || n < cellCount || (n === cellCount && i > cell))) {
         cell = i; cellCount = n;
       }
     }

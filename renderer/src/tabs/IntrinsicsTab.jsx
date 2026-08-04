@@ -25,6 +25,14 @@ import { api, pickFolder, pickSaveFile, pickOpenFile } from '../api/client.js';
 
 const ZERO_K = [[0,0,0,0],[0,0,0,0],[0,0,0,0],[0,0,0,1]];
 
+// Captures-per-cell that counts as "this cell is done". Deliberately lower than
+// the fisheye tab's 5: this grid has 40 cells to the dartboard's 17, and a board
+// spanning ~1/3 of the frame only fills 2–3 of them per snap. Asking for 5 each
+// would be ~67 frames, far past the 15–30 a pinhole solve wants; 2 lands near 27.
+// Feeds BOTH the capture logic (useSmartCapture) and the on-frame "done" shading
+// (LiveDetectedFrame's gridTarget); they must stay equal.
+const TARGET_PER_CELL = 2;
+
 export function IntrinsicsTab({ active, tweaks }) {
   const { t } = useTranslation();
   const [board, setBoard] = useState(DEFAULT_CHESS_BOARD);
@@ -340,6 +348,7 @@ export function IntrinsicsTab({ active, tweaks }) {
     board, geometry, profile: PINHOLE_PROFILE,
     mode: guidedMode ? 'guided' : 'sweep',
     mirror,
+    targetPerCell: TARGET_PER_CELL,
     guidance: guidanceRef.current,
     doSnap: snapOnce,
     onCaptured,
@@ -516,6 +525,7 @@ export function IntrinsicsTab({ active, tweaks }) {
                 coverageCells={coverage.cells}
                 coverageCounts={coverage.counts}
                 gridGuidance={coverage.guidance}
+                gridTarget={TARGET_PER_CELL}
                 showCoverageGrid={!guidedMode}
                 guided={guidedOverlay}
                 guidedExtent={guidedExtent}

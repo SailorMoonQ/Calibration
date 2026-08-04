@@ -179,6 +179,8 @@ export function LiveDetectedFrame({
   coverageCounts = null,  // int[]  — how many captures landed in each cell (depth of green)
   fovMask = null,         // bool[] — false = cell outside fisheye FOV (drawn N/A, not red)
   gridGuidance = null,    // int|null — cartesian cell to steer the board toward next
+  gridTarget = 5,         // captures-per-cell that reads as "done" (deep green).
+                          // Must match the caller's useSmartCapture targetPerCell.
   covCols = 8, covRows = 5,
   showCoverageGrid = false,
   showFootprint = false,  // accumulate + draw the detection-reachable heat
@@ -222,12 +224,12 @@ export function LiveDetectedFrame({
   const covRef = useRef(null);
   useEffect(() => {
     covRef.current = {
-      cells: coverageCells, counts: coverageCounts, fovMask, gridGuidance,
+      cells: coverageCells, counts: coverageCounts, fovMask, gridGuidance, gridTarget,
       cols: covCols, rows: covRows, showGrid: showCoverageGrid, showFootprint,
       showPolar: showPolarGrid, polarCells, polarCounts, polarGuidance, target: polarTarget, rings, sectors,
       guided, guidedExtent,
     };
-  }, [coverageCells, coverageCounts, fovMask, gridGuidance, covCols, covRows, showCoverageGrid, showFootprint,
+  }, [coverageCells, coverageCounts, fovMask, gridGuidance, gridTarget, covCols, covRows, showCoverageGrid, showFootprint,
       showPolarGrid, polarCells, polarCounts, polarGuidance, polarTarget, rings, sectors, guided, guidedExtent]);
   // Persistent detection-footprint accumulator (reset when the stream restarts).
   const footprintRef = useRef(new Float32Array(FP_COLS * FP_ROWS));
@@ -355,6 +357,9 @@ export function LiveDetectedFrame({
         const cols = cov.cols, rows = cov.rows;
         const mask = cov.fovMask;
         const counts = cov.counts;
+        // Read through `cov`, not the prop: this closure is built once per stream
+        // and that effect does not depend on gridTarget, so the prop would be stale.
+        const doneAt = cov.gridTarget ?? 5;
         const gw = w / cols, gh = h / rows;
 
         // The live board's current cell — but only flag it when the board
@@ -400,8 +405,14 @@ export function LiveDetectedFrame({
           const on = cov.cells[k];
           if (on) {
             const n = counts ? counts[k] : 1;
-            const a = Math.min(0.42, 0.16 + (n - 1) * 0.1);   // deeper green with more captures
-            ctx.fillStyle = `oklch(0.72 0.16 150 / ${a.toFixed(3)})`;
+            if (n >= doneAt) {
+              // 采够 — persistent deep green, so a finished cell reads as done at
+              // a glance instead of just "slightly darker". Mirrors the dartboard.
+              ctx.fillStyle = 'oklch(0.52 0.17 150 / 0.62)';
+            } else {
+              const a = Math.min(0.42, 0.16 + (n - 1) * 0.1);   // deeper green with more captures
+              ctx.fillStyle = `oklch(0.72 0.16 150 / ${a.toFixed(3)})`;
+            }
             ctx.fillRect(x0, y0, gw, gh);
           }
           ctx.strokeStyle = on ? 'oklch(0.78 0.15 150 / 0.55)' : 'oklch(0.7 0.13 30 / 0.4)';

@@ -24,6 +24,13 @@ import { api, pickFolder, pickSaveFile, pickOpenFile } from '../api/client.js';
 
 const ZERO_K = [[0,0,0,0],[0,0,0,0],[0,0,0,0],[0,0,0,1]];
 
+// Captures-per-cell that counts as "this sector is done". The polar dartboard is
+// 17 cells (1 centre + 2 rings × 8 sectors) and one snap fills a couple of them,
+// so 5 lands at roughly 20–30 frames — the right size for a fisheye solve.
+// Feeds BOTH the capture logic (useSmartCapture) and the on-frame shading
+// (LiveDetectedFrame's polarTarget); they must stay equal.
+const TARGET_PER_CELL = 5;
+
 // Camera mount inferred from a ROS2 image source like
 // "ros2:/camera/head/color/image_rect_compressed" → "head". When present, saving
 // writes straight into the robot's shared camera_intrix.yaml under that mount.
@@ -300,6 +307,7 @@ export function FisheyeTab({ active, tweaks }) {
     board, geometry, profile: FISHEYE_PROFILE,
     mode: captureMode === 'guided' ? 'guided' : 'sweep',
     mirror,
+    targetPerCell: TARGET_PER_CELL,
     guidance: guidanceRef.current,
     doSnap: snapOnce,
     onCaptured,
@@ -590,6 +598,7 @@ export function FisheyeTab({ active, tweaks }) {
                 polarCells={coverage.cells}
                 polarCounts={coverage.counts}
                 polarGuidance={coverage.guidance}
+                polarTarget={TARGET_PER_CELL}
                 rings={RINGS} sectors={SECTORS}
                 guided={guidedOverlay}
                 showFootprint={showFootprint}
