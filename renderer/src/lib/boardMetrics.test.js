@@ -85,6 +85,21 @@ test('boardScale divides the quad span by the extent diameter', () => {
   assert.equal(boardScale(FLAT, COLS, ROWS, null), null);
 });
 
+// Regression: a raw fisheye circle ({cx,cy,r}) is NOT an extent — it has no
+// rx/ry, so minRadius() would read Math.min(undefined, undefined) => NaN and
+// silently null out every scale/analyzeBoard call site that forgot to convert
+// it. Call sites must wrap it with extentFromCircle() first; boardScale itself
+// must keep rejecting the raw shape so a call site that skips the conversion
+// fails loudly (via a permanently-null scale) rather than reading nonsense.
+test('boardScale rejects a raw circle — call sites must convert with extentFromCircle first', () => {
+  const circle = { cx: 500, cy: 400, r: 300 };
+  assert.equal(boardScale(FLAT, COLS, ROWS, circle), null);
+  const extent = extentFromCircle(circle);
+  assert.deepEqual(extent, { cx: 500, cy: 400, rx: 300, ry: 300 });
+  const sc = boardScale(FLAT, COLS, ROWS, extent);
+  assert.ok(Number.isFinite(sc) && sc > 0, `expected a finite positive scale, got ${sc}`);
+});
+
 test('analyzeBoard bundles the four measurements', () => {
   const m = analyzeBoard(FLAT, { cols: COLS, rows: ROWS }, { cx: 0, cy: 0, rx: 100, ry: 100 });
   assert.deepEqual(m.centroid, { x: 150, y: 125 });

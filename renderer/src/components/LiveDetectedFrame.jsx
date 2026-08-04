@@ -4,6 +4,7 @@ import { streamWsUrl } from '../api/client.js';
 import { useReportCamera } from '../lib/telemetry.jsx';
 import { detectCircleFromImageData, polarCellGeometry, polarCellAt } from '../lib/polarCoverage.js';
 import { regionTarget, boardScale } from '../lib/guidedSequence.js';
+import { extentFromCircle } from '../lib/boardMetrics.js';
 
 // Draw the pose-hint glyph for the guided sequence at (x,y), sized to ~r. The
 // shape tells the operator what ORIENTATION the board should be at for this step
@@ -560,7 +561,7 @@ export function LiveDetectedFrame({
           // (real boards cluster ~0.24–0.58 regardless of step), so this fixed band —
           // which the sample sets validate at 35/38 correctly-placed frames green — stays.
           if (quad) {
-            const sc = boardScale(corners, bCols, bRows, circle);
+            const sc = boardScale(corners, bCols, bRows, extentFromCircle(circle));
             let qc = 'oklch(0.8 0.16 235 / 0.95)';                       // blue: detected, transitional size
             if (sc != null) {
               if (sc > 0.66 || sc < 0.24) qc = 'oklch(0.72 0.18 35 / 0.95)';        // 太大/太小

@@ -13,7 +13,7 @@ import {
   trafficKindForRms, trafficColor,
 } from '../components/panels.jsx';
 import { binPolar, pickGuidanceCell, totalPolarCells, polarCellAt, polarCellGeometry, RINGS, SECTORS } from '../lib/polarCoverage.js';
-import { boardTiltDeg } from '../lib/boardMetrics.js';
+import { boardTiltDeg, extentFromCircle } from '../lib/boardMetrics.js';
 import {
   GUIDED_STEPS, analyzeBoard, regionTarget, regionOk, poseOk,
   differsEnough, shotSignature,
@@ -545,7 +545,7 @@ export function FisheyeTab({ active, tweaks }) {
         return;
       }
       const shots = guidedShotsRef.current;
-      const m = analyzeBoard(corners, boardRef.current, circleG);
+      const m = analyzeBoard(corners, boardRef.current, extentFromCircle(circleG));
       const rOk = regionOk(step, m, circleG);
       const pOk = poseOk(step, m);
       const needVary = shots === 1 && !differsEnough(guidedSigRef.current, m, circleG);
@@ -800,7 +800,7 @@ export function FisheyeTab({ active, tweaks }) {
   const advanceGuidedShot = () => {
     const step = GUIDED_STEPS[guidedStepRef.current];
     if (!step) return;
-    const m = analyzeBoard(latestMetaRef.current?.corners, boardRef.current, covCircleRef.current);
+    const m = analyzeBoard(latestMetaRef.current?.corners, boardRef.current, extentFromCircle(covCircleRef.current));
     const shots = guidedShotsRef.current;
     const newShots = shots + 1;
     if (newShots >= step.shots) {
