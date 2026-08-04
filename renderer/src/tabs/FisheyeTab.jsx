@@ -541,7 +541,7 @@ export function FisheyeTab({ active, tweaks }) {
       const step = GUIDED_STEPS[guidedStepRef.current];
       if (!step) {                                  // whole sequence finished
         dwellStartRef.current = 0;
-        setAutoHud({ reason: 'done', dwell: 0, guidedLabel: t('fisheye.guided.done') });
+        setAutoHud({ reason: 'done', dwell: 0, guidedLabel: t('guided.done') });
         return;
       }
       const shots = guidedShotsRef.current;
@@ -566,10 +566,10 @@ export function FisheyeTab({ active, tweaks }) {
         say('tiltHint', 4000);
       }
 
-      const label = t('fisheye.guided.progress', {
+      const label = t('guided.progress', {
         step: guidedStepRef.current + 1, total: GUIDED_STEPS.length,
-        group: t(`fisheye.guided.groups.${step.group}`),
-        action: t(`fisheye.guided.steps.${step.id}`),
+        group: t(`guided.groups.${step.group}`),
+        action: t(`guided.steps.${step.id}`),
         shot: shots + 1, shots: step.shots,
       });
 
