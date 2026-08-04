@@ -41,9 +41,11 @@ test('pickGuidanceCell picks an empty cell', () => {
 
 test('pickGuidanceCell breaks ties toward the outer ring', () => {
   const counts = new Array(TOTAL).fill(3);
-  counts[20] = 0;   // col 4, row 2 — dead centre
-  counts[0] = 0;    // col 0, row 0 — corner
-  assert.equal(pickGuidanceCell(counts), 0);
+  counts[20] = 0;   // col 4, row 2 — dead centre (ring 0)
+  counts[39] = 0;   // col 7, row 4 — corner (ring 2), and a LATER index than 20,
+                    // so a no-op tie-break would return 20 and only a working
+                    // ring weighting returns 39.
+  assert.equal(pickGuidanceCell(counts), 39);
 });
 
 test('pickGuidanceCell skips masked-out cells', () => {
