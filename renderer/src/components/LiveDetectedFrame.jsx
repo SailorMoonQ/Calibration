@@ -178,6 +178,7 @@ export function LiveDetectedFrame({
   coverageCells = null,   // bool[covCols*covRows] — which cells are already captured
   coverageCounts = null,  // int[]  — how many captures landed in each cell (depth of green)
   fovMask = null,         // bool[] — false = cell outside fisheye FOV (drawn N/A, not red)
+  gridGuidance = null,    // int|null — cartesian cell to steer the board toward next
   covCols = 8, covRows = 5,
   showCoverageGrid = false,
   showFootprint = false,  // accumulate + draw the detection-reachable heat
@@ -221,12 +222,12 @@ export function LiveDetectedFrame({
   const covRef = useRef(null);
   useEffect(() => {
     covRef.current = {
-      cells: coverageCells, counts: coverageCounts, fovMask,
+      cells: coverageCells, counts: coverageCounts, fovMask, gridGuidance,
       cols: covCols, rows: covRows, showGrid: showCoverageGrid, showFootprint,
       showPolar: showPolarGrid, polarCells, polarCounts, polarGuidance, target: polarTarget, rings, sectors,
       guided, guidedExtent,
     };
-  }, [coverageCells, coverageCounts, fovMask, covCols, covRows, showCoverageGrid, showFootprint,
+  }, [coverageCells, coverageCounts, fovMask, gridGuidance, covCols, covRows, showCoverageGrid, showFootprint,
       showPolarGrid, polarCells, polarCounts, polarGuidance, polarTarget, rings, sectors, guided, guidedExtent]);
   // Persistent detection-footprint accumulator (reset when the stream restarts).
   const footprintRef = useRef(new Float32Array(FP_COLS * FP_ROWS));
@@ -345,7 +346,9 @@ export function LiveDetectedFrame({
       //   • outside FOV (fisheye corners) → dim diagonal hatch, "N/A", not red.
       //   • captured → green, deepening with the number of captures.
       //   • coverable but empty → red outline.
-      //   • the cell the live board currently sits in → amber pulse.
+      //   • the cell to fill next (gridGuidance) → amber wash + pulsing dot,
+      //     with a marching arrow from the live board toward it.
+      //   • the cell the live board currently sits in → blue outline.
       // When a fovMask is in play, the FOV ellipse is outlined too, so the user
       // sees exactly which region counts.
       if (cov?.showGrid && cov.cells) {
@@ -356,15 +359,19 @@ export function LiveDetectedFrame({
 
         // The live board's current cell — but only flag it when the board
         // genuinely fills a cell (a clear majority of corners), so just sweeping
-        // the board across the frame doesn't imply coverage.
-        let curCell = -1;
+        // the board across the frame doesn't imply coverage. The centroid is
+        // kept too, as the tail of the steer arrow toward the guidance cell.
+        let curCell = -1, cenX = null, cenY = null;
         if (corners.length) {
+          let sx = 0, sy = 0;
           const per = new Array(cols * rows).fill(0);
           for (const [x, y] of corners) {
+            sx += x; sy += y;
             const ci = Math.min(cols - 1, Math.max(0, Math.floor((x / w) * cols)));
             const ri = Math.min(rows - 1, Math.max(0, Math.floor((y / h) * rows)));
             per[ri * cols + ci] += 1;
           }
+          cenX = sx / corners.length; cenY = sy / corners.length;
           let best = -1, bestN = 0;
           for (let k = 0; k < per.length; k++) if (per[k] > bestN) { bestN = per[k]; best = k; }
           if (bestN >= 3) curCell = best;
@@ -400,9 +407,30 @@ export function LiveDetectedFrame({
           ctx.strokeStyle = on ? 'oklch(0.78 0.15 150 / 0.55)' : 'oklch(0.7 0.13 30 / 0.4)';
           ctx.strokeRect(x0 + 0.5, y0 + 0.5, gw - 1, gh - 1);
         }
+        // Guidance: the cell to fill next — amber wash + amber border + a pulsing
+        // target dot, with a marching arrow from the live board toward it. Same
+        // visual language as the polar dartboard's guidance wedge, so the two
+        // tabs read alike. Skipped for a masked (non-coverable) cell.
+        const guide = cov.gridGuidance;
+        if (guide != null && guide >= 0 && guide < cols * rows && (!mask || mask[guide])) {
+          const ci = guide % cols, ri = (guide / cols) | 0;
+          const gx = (ci + 0.5) * gw, gy = (ri + 0.5) * gh;
+          ctx.fillStyle = 'oklch(0.85 0.18 90 / 0.2)';
+          ctx.fillRect(ci * gw, ri * gh, gw, gh);
+          ctx.strokeStyle = 'oklch(0.9 0.18 90 / 0.95)';
+          ctx.lineWidth = Math.max(2, cornerR * 0.5);
+          ctx.strokeRect(ci * gw + 1, ri * gh + 1, gw - 2, gh - 2);
+          const tpulse = 1 + 0.25 * Math.sin(phase * 6);
+          ctx.fillStyle = 'oklch(0.92 0.18 90 / 0.95)';
+          ctx.beginPath(); ctx.arc(gx, gy, cornerR * 1.9 * tpulse, 0, Math.PI * 2); ctx.fill();
+          if (cenX != null) drawSteerArrow(ctx, cenX, cenY, gx, gy, cornerR, phase);
+        }
+
+        // Where the board is right now — blue, matching the dartboard, so it
+        // never competes with the amber "go here" cell above.
         if (curCell >= 0) {
           const ci = curCell % cols, ri = (curCell / cols) | 0;
-          ctx.strokeStyle = 'oklch(0.85 0.18 90 / 0.95)';
+          ctx.strokeStyle = 'oklch(0.8 0.16 235 / 0.95)';
           ctx.lineWidth = Math.max(2, cornerR * 0.55);
           ctx.strokeRect(ci * gw + 1.5, ri * gh + 1.5, gw - 3, gh - 3);
         }

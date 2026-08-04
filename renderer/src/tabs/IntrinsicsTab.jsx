@@ -515,6 +515,7 @@ export function IntrinsicsTab({ active, tweaks }) {
                 onMeta={capture.onMeta}
                 coverageCells={coverage.cells}
                 coverageCounts={coverage.counts}
+                gridGuidance={coverage.guidance}
                 showCoverageGrid={!guidedMode}
                 guided={guidedOverlay}
                 guidedExtent={guidedExtent}
