@@ -314,9 +314,11 @@ export function IntrinsicsTab({ active, tweaks }) {
 
   // Capture-only: save the frame and make it undoable. Resolves as soon as the
   // path is known — deliberately does NOT touch the dataset listing, so the
-  // hook can tally coverage against the pose that was actually captured
-  // (against the freshest `latestMetaRef`) before an `api.listDataset`
-  // round-trip gives the live stream time to move the board off that pose.
+  // hook's tally runs before an `api.listDataset` round-trip, not after it.
+  // That's the only ordering guaranteed here — `api.snap` itself takes on
+  // the order of 100ms, during which the live stream can still overwrite
+  // `latestMetaRef` — but it avoids adding a further, multi-hundred-
+  // millisecond window on top.
   const snapOnce = useCallback(async () => {
     const r = await api.snap(liveDevice, datasetPath);
     pushUndo({ kind: 'snap', path: r.path });

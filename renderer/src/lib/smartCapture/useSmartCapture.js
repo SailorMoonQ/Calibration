@@ -231,8 +231,11 @@ export function useSmartCapture({
   // `doSnap` does ONLY the capture + undo bookkeeping and resolves as soon as
   // the path is known — deliberately narrow, so `after(r)` (the coverage
   // tally, guided-step advance, voice cue and status) runs immediately off
-  // that resolution, against the pose that was actually captured, before the
-  // live stream's next detection can overwrite `latestMetaRef`. The page's
+  // that resolution, before the page's dataset-listing round-trip. That's
+  // the only ordering this actually guarantees — `api.snap` itself takes on
+  // the order of 100ms, during which the live stream can still overwrite
+  // `latestMetaRef` more than once — but it avoids adding a further,
+  // multi-hundred-millisecond window on top of that. The page's
   // dataset-listing refresh (`onCaptured`) runs only AFTER `after(r)` has
   // already applied — a failure there must not un-tally the capture or
   // revert the status `after(r)` just set, so it's caught separately and

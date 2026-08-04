@@ -188,6 +188,7 @@ export function LiveDetectedFrame({
   polarCounts = null,     // int[]   — captures per polar cell (depth of green)
   polarGuidance = null,   // int|null — cell index to steer the board toward next
   polarTarget = 5,        // captures-per-cell that counts as "采够" → persistent deep green
+                           // — must match TARGET_PER_CELL in useSmartCapture.js, the source of truth
   rings = 3, sectors = 8,
   // Guided-sequence overlay (doc-driven mode): { region, glyph, done } for the
   // active checklist step, or null in polar mode. Shares the image-circle detection.
@@ -345,7 +346,8 @@ export function LiveDetectedFrame({
       //   • captured → green, deepening with the number of captures.
       //   • coverable but empty → red outline.
       //   • the cell the live board currently sits in → amber pulse.
-      // The FOV ellipse is outlined so the user sees exactly which region counts.
+      // When a fovMask is in play, the FOV ellipse is outlined too, so the user
+      // sees exactly which region counts.
       if (cov?.showGrid && cov.cells) {
         const cols = cov.cols, rows = cov.rows;
         const mask = cov.fovMask;
@@ -405,12 +407,17 @@ export function LiveDetectedFrame({
           ctx.strokeRect(ci * gw + 1.5, ri * gh + 1.5, gw - 3, gh - 3);
         }
 
-        // FOV ellipse boundary (inscribed, touching the edge midpoints).
-        ctx.strokeStyle = 'oklch(0.8 0.05 220 / 0.35)';
-        ctx.lineWidth = Math.max(1, cornerR * 0.3);
-        ctx.beginPath();
-        ctx.ellipse(w / 2, h / 2, w / 2, h / 2, 0, 0, Math.PI * 2);
-        ctx.stroke();
+        // FOV ellipse boundary (inscribed, touching the edge midpoints). Only
+        // meaningful when a mask is actually delimiting the coverable region
+        // (a vignetted lens) — without one (e.g. pinhole) there's nothing to
+        // delimit, and the corner cells are coverable, not outside the FOV.
+        if (mask) {
+          ctx.strokeStyle = 'oklch(0.8 0.05 220 / 0.35)';
+          ctx.lineWidth = Math.max(1, cornerR * 0.3);
+          ctx.beginPath();
+          ctx.ellipse(w / 2, h / 2, w / 2, h / 2, 0, 0, Math.PI * 2);
+          ctx.stroke();
+        }
       }
 
       // ── Polar dartboard coverage (circular fisheye) ───────────────────────
