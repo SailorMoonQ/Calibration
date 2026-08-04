@@ -265,15 +265,26 @@ export function FisheyeTab({ active, tweaks }) {
   // spoken-direction swap (passed in below as a prop).
   useEffect(() => { localStorage.setItem('calib_fisheye_mirror', mirror ? '1' : '0'); }, [mirror]);
 
-  // One capture: save the frame, make it undoable, refresh the strip. The snap
-  // lock and all coverage/voice bookkeeping live in useSmartCapture.
+  // Capture-only: save the frame and make it undoable. Resolves as soon as the
+  // path is known — deliberately does NOT touch the dataset listing, so the
+  // hook can tally coverage against the pose that was actually captured
+  // (against the freshest `latestMetaRef`) before an `api.listDataset`
+  // round-trip gives the live stream time to move the board off that pose.
   const snapOnce = useCallback(async () => {
     const r = await api.snap(liveDevice, datasetPath);
     pushUndo({ kind: 'snap', path: r.path });
-    const files = await refreshDataset();
-    if (files) setSelected(files.length);
     return r;
   }, [liveDevice, datasetPath]);
+
+  // Runs AFTER the hook has already tallied coverage, advanced the guided
+  // step, spoken the cue, and set the "captured" status for this frame (see
+  // useSmartCapture's `runAutoSnap`). A failure here must not undo any of
+  // that — the hook catches it separately and reports it as its own error
+  // rather than autoSnapFailed.
+  const onCaptured = useCallback(async () => {
+    const files = await refreshDataset();
+    if (files) setSelected(files.length);
+  }, [datasetPath]);
 
   // `guidance` is fed to the hook through a ref rather than directly, because
   // `coverage` (below) is computed FROM `capture.counts`, and `coverage.guidance`
@@ -289,6 +300,7 @@ export function FisheyeTab({ active, tweaks }) {
     mirror,
     guidance: guidanceRef.current,
     doSnap: snapOnce,
+    onCaptured,
     say, t, setStatus,
   });
 

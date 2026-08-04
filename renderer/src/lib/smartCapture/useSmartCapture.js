@@ -23,7 +23,7 @@ const TILT_MIN_DIFF = 4;       // a follow-up capture in a cell must differ in t
 export function useSmartCapture({
   enabled, liveDevice, datasetPath, autoRate = 0.5,
   board, geometry, profile, mode = 'sweep', mirror = false, guidance = null,
-  doSnap, say, t, setStatus,
+  doSnap, onCaptured, say, t, setStatus,
 }) {
   // `poseOk` defaults its profile arg to FISHEYE_PROFILE — a caller that forgets
   // to pass one silently gets fisheye thresholds on a pinhole board. This hook is
@@ -50,6 +50,7 @@ export function useSmartCapture({
   const datasetRef = useRef(datasetPath);
   const rateRef = useRef(autoRate);
   const doSnapRef = useRef(doSnap);
+  const onCapturedRef = useRef(onCaptured);
   useEffect(() => { geomRef.current = geometry; }, [geometry]);
   useEffect(() => { boardRef.current = board; }, [board]);
   useEffect(() => { modeRef.current = mode; }, [mode]);
@@ -62,6 +63,7 @@ export function useSmartCapture({
   useEffect(() => { datasetRef.current = datasetPath; }, [datasetPath]);
   useEffect(() => { rateRef.current = autoRate; }, [autoRate]);
   useEffect(() => { doSnapRef.current = doSnap; }, [doSnap]);
+  useEffect(() => { onCapturedRef.current = onCaptured; }, [onCaptured]);
 
   const sayRef = useRef(say);
   const tRef = useRef(t);
@@ -226,18 +228,47 @@ export function useSmartCapture({
     steer(curX, curY, target, guid);
   }, [steer]);
 
+  // `doSnap` does ONLY the capture + undo bookkeeping and resolves as soon as
+  // the path is known — deliberately narrow, so `after(r)` (the coverage
+  // tally, guided-step advance, voice cue and status) runs immediately off
+  // that resolution, against the pose that was actually captured, before the
+  // live stream's next detection can overwrite `latestMetaRef`. The page's
+  // dataset-listing refresh (`onCaptured`) runs only AFTER `after(r)` has
+  // already applied — a failure there must not un-tally the capture or
+  // revert the status `after(r)` just set, so it's caught separately and
+  // reported as its own error rather than autoSnapFailed (the capture did
+  // succeed; only the listing refresh didn't).
   const runAutoSnap = useCallback((after) => {
     const now = performance.now();
     lastAutoSnapRef.current = now;
     dwellStartRef.current = 0;
     withSnapLock(async () => {
+      let r;
       try {
-        const r = await doSnapRef.current();
-        if (cancelledRef.current || !r) return;
+        r = await doSnapRef.current();
+      } catch (e) {
+        if (cancelledRef.current) return;
+        setStatusRef.current?.(tRef.current('common.autoSnapFailed', { error: e.message }), true);
+        return;
+      }
+      if (cancelledRef.current || !r) return;
+      // `after(r)` (tally / guided-step advance / voice cue / status) must run
+      // to completion before the listing refresh starts. If it somehow throws,
+      // that's still a capture-processing failure, so it's reported the same
+      // way a `doSnap` failure is — unlike a listing failure below, which is
+      // NOT a capture failure and gets its own message.
+      try {
         after(r);
       } catch (e) {
         if (cancelledRef.current) return;
         setStatusRef.current?.(tRef.current('common.autoSnapFailed', { error: e.message }), true);
+        return;
+      }
+      try {
+        await onCapturedRef.current?.(r);
+      } catch (e) {
+        if (cancelledRef.current) return;
+        setStatusRef.current?.(tRef.current('common.listingFailed', { error: e.message }), true);
       }
     });
   }, [withSnapLock]);
