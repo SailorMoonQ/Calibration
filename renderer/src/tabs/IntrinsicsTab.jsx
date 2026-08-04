@@ -30,7 +30,7 @@ export function IntrinsicsTab({ active, tweaks }) {
   const [board, setBoard] = useState(DEFAULT_CHESS_BOARD);
   const [autoCapture, setAuto] = useState(false);
   const [autoRate, setAutoRate] = useState(0.5);
-  const [view, setView] = useState('split');                 // 'split' | 'raw' | 'rect'
+  const [view, setView] = useState('split');                 // 'split' | 'raw' | 'rect' | 'compare'
   const [method, setMethod] = useState('remap');             // 'remap' | 'undistort'
   const [alpha, setAlpha] = useState(0.5);
   const [showBoard, setShowBoard] = useState(true);
@@ -57,6 +57,11 @@ export function IntrinsicsTab({ active, tweaks }) {
   const [showFootprint, setShowFootprint] = useState(false);   // 检测可达足迹热力
   // 镜像翻转：仅用于实时预览画面，不影响抓拍帧/校正视图/保存的原图。
   const [mirror, setMirror] = useState(() => localStorage.getItem('calib_intrinsics_mirror') === '1');
+
+  // When onLoad sets datasetPath from a loaded calibration, the dataset-listing
+  // effect would otherwise wipe the just-loaded result. This ref tells the effect
+  // "skip the result reset on the next listing — the result is fresh, not stale."
+  const skipResultResetRef = useRef(false);
 
   useEffect(() => { localStorage.setItem('calib_intrinsics_capmode', captureMode); }, [captureMode]);
   useEffect(() => { localStorage.setItem('calib_intrinsics_mirror', mirror ? '1' : '0'); }, [mirror]);
@@ -110,7 +115,13 @@ export function IntrinsicsTab({ active, tweaks }) {
       setDatasetFiles(r.files);
       setStatus(t('common.imagesInDataset', { count: r.count }));
       setSelected(1);
-      setResult(null);
+      if (skipResultResetRef.current) {
+        // onLoad just brought a fresh calibration in tandem with this dataset
+        // path; don't wipe it.
+        skipResultResetRef.current = false;
+      } else {
+        setResult(null);
+      }
     }).catch(e => !cancelled && setStatus(t('common.listingFailed', { error: e.message }), true));
     return () => { cancelled = true; };
   }, [datasetPath]);
@@ -406,10 +417,11 @@ export function IntrinsicsTab({ active, tweaks }) {
     try {
       const resp = await api.loadCalibration(p);
       const d = resp.data || {};
+      const Kload = d.K || null;
       setResult({
         ok: true,
         rms: d.rms ?? 0,
-        K: d.K || null,
+        K: Kload,
         D: d.D || [],
         image_size: d.image_size || null,
         per_frame_err: d.frames?.per_frame_err || [],
@@ -418,8 +430,19 @@ export function IntrinsicsTab({ active, tweaks }) {
         iterations: 0, final_cost: 0,
         message: `loaded from ${p}`,
       });
-      if (d.dataset_path && !datasetPath) setDatasetPath(d.dataset_path);
-      setStatus(t('common.loaded', { path: p }));
+      if (d.dataset_path && d.dataset_path !== datasetPath) {
+        // Tell the dataset-listing effect not to clear the result we just set above.
+        skipResultResetRef.current = true;
+        setDatasetPath(d.dataset_path);
+      }
+      // Snap the viewport into split + live so the user immediately sees the raw
+      // camera + undistorted preview built from the just-loaded intrinsics.
+      setView('split');
+      setViewMode('live');
+      const fmt = p.toLowerCase().endsWith('.json') ? 'json' : 'yaml';
+      const fxRound = Kload?.[0]?.[0]?.toFixed?.(1) ?? '?';
+      const rmsRound = (d.rms ?? 0).toFixed(3);
+      setStatus(t('intrinsics.loadedDetail', { fmt, name: p.split('/').pop(), rms: rmsRound, fx: fxRound }));
     } catch (e) { setStatus(t('common.loadFailed', { error: e.message }), true); }
   };
 
@@ -430,6 +453,7 @@ export function IntrinsicsTab({ active, tweaks }) {
     }
     setBusy(true);
     setStatus(t('intrinsics.detectingSolving'));
+    say('solveStart');
     try {
       const res = await api.calibrate('intrinsics', {
         board: boardPayload(),
@@ -440,8 +464,10 @@ export function IntrinsicsTab({ active, tweaks }) {
       setStatus(res.ok
         ? t('intrinsics.rmsResult', { rms: res.rms.toFixed(4), message: res.message })
         : t('common.failed', { message: res.message }), !res.ok);
+      say(res.ok ? 'solveOk' : 'solveFail');
     } catch (e) {
       setStatus(t('common.error', { error: e.message }), true);
+      say('solveFail');
     } finally {
       setBusy(false);
     }
@@ -537,31 +563,35 @@ export function IntrinsicsTab({ active, tweaks }) {
     </div>
   );
 
-  const rectCell = (() => {
+  // Undistorted cell. Source picks itself: live mode + calibrated → live MJPEG
+  // undistorted; dataset frame selected + calibrated → that frame; else placeholder.
+  const undistortedCell = (m, label) => {
     const useLive = showLive && calibrated && liveDevice;
     let body;
     if (useLive) {
       body = <RectifiedLivePreview device={liveDevice} K={result.K} D={D}
-                model="pinhole" alpha={alpha} method={method}/>;
+                model="pinhole" alpha={alpha} method={m}/>;
     } else if (canRectifyFrame) {
       body = <RectifiedFrame path={selectedPath} K={result.K} D={D}
-                model="pinhole" alpha={alpha} method={method}/>;
+                model="pinhole" alpha={alpha} method={m}/>;
     } else if (calibrated) {
       body = emptyCell(t('intrinsics.connectOrSelectFrame'));
     } else {
       body = emptyCell(t('intrinsics.runToUndistort'));
     }
     return (
-      <div className="vp-cell" key="rect">
-        <span className="vp-label">{useLive ? t('intrinsics.undistortedLive') : t('intrinsics.undistorted')}</span>
+      <div className="vp-cell" key={m}>
+        <span className="vp-label">{useLive ? t('intrinsics.liveSuffix', { label }) : label}</span>
         {body}
         <div className="vp-corner-read">
-          <div>{t('intrinsics.method')} <b>{method === 'undistort' ? t('intrinsics.methodCvUndistort') : t('intrinsics.methodRemapFull')}</b></div>
+          <div>{t('intrinsics.method')} <b>{m === 'undistort' ? t('intrinsics.methodCvUndistort') : t('intrinsics.methodRemapFull')}</b></div>
           <div>{t('intrinsics.alpha')} <b>{alpha.toFixed(2)}</b></div>
         </div>
       </div>
     );
-  })();
+  };
+
+  const rectCell = undistortedCell(method, t('intrinsics.undistorted'));
 
   return (
     <div className="workspace">
@@ -626,9 +656,12 @@ export function IntrinsicsTab({ active, tweaks }) {
       <div className="viewport">
         <div className="vp-toolbar">
           <Seg value={view} onChange={setView} options={[
-            {value:'split',label:t('intrinsics.viewSplit')},{value:'raw',label:t('intrinsics.viewRaw')},{value:'rect',label:t('intrinsics.viewRectified')},
+            {value:'split',label:t('intrinsics.viewSplit')},
+            {value:'raw',label:t('intrinsics.viewRaw')},
+            {value:'rect',label:t('intrinsics.viewRectified')},
+            {value:'compare',label:t('intrinsics.viewCompare')},
           ]}/>
-          {view !== 'raw' && (
+          {view !== 'compare' && view !== 'raw' && (
             <Seg value={method} onChange={setMethod} options={[
               {value:'remap',label:t('intrinsics.methodRemap')},{value:'undistort',label:t('intrinsics.methodUndistort')},
             ]}/>
@@ -645,17 +678,29 @@ export function IntrinsicsTab({ active, tweaks }) {
           <Chk checked={mirror} onChange={setMirror}>{t('intrinsics.mirror')}</Chk>
           <div className="spacer"/>
           <div className="read">
+            {streamInfo?.open && (
+              <>{streamInfo.width}×{streamInfo.height} · <b>{streamInfo.capture_fps?.toFixed(1) ?? '—'}</b> fps · </>
+            )}
             {datasetFiles.length > 0 && <>{t('intrinsics.frame')} <b>#{selectedFrame.toString().padStart(2,'0')}</b> · </>}
             {result?.ok
               ? <>rms <b style={{color: trafficColor(rmsKind)}}>{rms.toFixed(3)}</b> px</>
               : busy ? <>{t('intrinsics.solvingShort')}</> : <>{t('intrinsics.notCalibrated')}</>}
           </div>
         </div>
-        <FrameStrip frames={frames} selected={selectedFrame} onSelect={(id) => { setSelected(id); setViewMode('frame'); }} coverage={coverage.percent}/>
+        <FrameStrip frames={frames} selected={selectedFrame} onSelect={(id) => { setSelected(id); setViewMode('frame'); }} coverage={coverage.percent}
+          errUnit=" px" errHint={t('intrinsics.perFrameErrHint')}/>
         {(() => {
+          // Pick which cells to render. Until we have intrinsics, the undistorted
+          // cell is not meaningful — collapse to the raw cell at full width
+          // regardless of view mode (matches FisheyeTab).
           let cells;
           if (!calibrated) {
             cells = [rawCell];
+          } else if (view === 'compare') {
+            cells = [
+              undistortedCell('remap', t('intrinsics.undistortedRemapFull')),
+              undistortedCell('undistort', t('intrinsics.undistortedUndistortFull')),
+            ];
           } else if (view === 'raw') {
             cells = [rawCell];
           } else if (view === 'rect') {
@@ -698,7 +743,8 @@ export function IntrinsicsTab({ active, tweaks }) {
           <SolverPanel
             iters={result?.iterations ?? 0}
             cost={result?.final_cost ?? 0} costUnit="px²"
-            cond={0}/>
+            cond={0}
+            algo={t('intrinsics.algo')}/>
         </div>
         <div style={{ padding: 10, borderTop: '1px solid var(--border-soft)', background: 'var(--surface-2)', display:'flex', gap: 6 }}>
           <button className="btn" style={{flex:1}} onClick={onLoad}>{t('common.load')}</button>
