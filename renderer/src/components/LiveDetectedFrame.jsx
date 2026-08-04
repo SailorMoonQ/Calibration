@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { streamWsUrl } from '../api/client.js';
 import { useReportCamera } from '../lib/telemetry.jsx';
 import { detectCircleFromImageData, polarCellGeometry, polarCellAt } from '../lib/polarCoverage.js';
-import { regionTarget, boardScale } from '../lib/guidedSequence.js';
+import { regionTarget, boardScale, targetHalfSize } from '../lib/guidedSequence.js';
 import { extentFromCircle } from '../lib/boardMetrics.js';
 
 // Draw the pose-hint glyph for the guided sequence at (x,y), sized to ~r. The
@@ -53,21 +53,6 @@ function drawGuidedGlyph(ctx, x, y, r, glyph, unit, phase = 0) {
       ctx.moveTo(x, y - s * 0.4); ctx.lineTo(x, y + s * 0.4); ctx.stroke(); break;
   }
   ctx.restore();
-}
-
-// Recommended on-screen half-size of the target board, as a fraction of the image
-// circle radius — bigger for centre/near, smaller for edges/far (docs §3: a centred
-// board should fill ~1/3–1/2 of the frame, edge boards may be smaller). Aspect ≈ the
-// real board's cols:rows so the operator matches shape, not just position.
-function targetHalfSize(step, circle, bCols, bRows) {
-  const r = circle.r;
-  let frac;
-  if (step.pose === 'dist') frac = step.scale === 'near' ? 0.5 : step.scale === 'far' ? 0.27 : 0.38;
-  else if (step.group === 'edge') frac = 0.27;
-  else if (step.region === 'center') frac = 0.42;
-  else frac = 0.34;
-  const halfW = frac * r;
-  return { halfW, halfH: halfW * (bRows / Math.max(1, bCols)) };
 }
 
 // Stroke a closed polyline twice — a dark underlay then the colour on top — so a
@@ -518,6 +503,7 @@ export function LiveDetectedFrame({
       // outlined and tinted by how much of the frame it fills (doc §3 size guidance).
       if (cov?.guided && circleRef.current?.circle) {
         const circle = circleRef.current.circle;
+        const extent = extentFromCircle(circle);
         const g = cov.guided;
         // FOV circle (dashed, faint) — the fisheye image boundary, matches the doc figures
         ctx.save();
@@ -528,8 +514,8 @@ export function LiveDetectedFrame({
         ctx.restore();
 
         if (!g.done) {
-          const tgt = regionTarget(g.region, circle);
-          const ts = tgt ? targetHalfSize(g, circle, bCols, bRows) : null;
+          const tgt = regionTarget(g.region, extent);
+          const ts = tgt ? targetHalfSize(g, extent, bCols, bRows) : null;
           // live board centroid + outer quad (only a full detection has the quad)
           let cenX = null, cenY = null, quad = null;
           if (corners.length) {

@@ -15,7 +15,7 @@ import {
 import { binPolar, pickGuidanceCell, totalPolarCells, polarCellAt, polarCellGeometry, RINGS, SECTORS } from '../lib/polarCoverage.js';
 import { boardTiltDeg, extentFromCircle } from '../lib/boardMetrics.js';
 import {
-  GUIDED_STEPS, analyzeBoard, regionTarget, regionOk, poseOk,
+  GUIDED_STEPS, FISHEYE_PROFILE, analyzeBoard, regionTarget, regionOk, poseOk,
   differsEnough, shotSignature,
 } from '../lib/guidedSequence.js';
 import { speak } from '../lib/voice.js';
@@ -545,10 +545,11 @@ export function FisheyeTab({ active, tweaks }) {
         return;
       }
       const shots = guidedShotsRef.current;
-      const m = analyzeBoard(corners, boardRef.current, extentFromCircle(circleG));
-      const rOk = regionOk(step, m, circleG);
-      const pOk = poseOk(step, m);
-      const needVary = shots === 1 && !differsEnough(guidedSigRef.current, m, circleG);
+      const extG = extentFromCircle(circleG);
+      const m = analyzeBoard(corners, boardRef.current, extG);
+      const rOk = regionOk(step, m, extG);
+      const pOk = poseOk(step, m, FISHEYE_PROFILE);
+      const needVary = shots === 1 && !differsEnough(guidedSigRef.current, m, extG);
 
       let reason;
       if (!rOk) reason = 'region';
@@ -560,7 +561,7 @@ export function FisheyeTab({ active, tweaks }) {
 
       // Voice steering: position first, then pose. Reuse the Chinese clips.
       if (!rOk) {
-        guidedSteer(m.centroid?.x, m.centroid?.y, regionTarget(step.region, circleG), circleG, step.id);
+        guidedSteer(m.centroid?.x, m.centroid?.y, regionTarget(step.region, extG), circleG, step.id);
       } else if (!pOk) {
         say('tiltHint', 4000);
       }

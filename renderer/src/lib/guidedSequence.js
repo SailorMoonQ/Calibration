@@ -11,40 +11,61 @@
 // whether the live board matches — driving the on-frame guidance overlay and the
 // guided auto-capture state machine in FisheyeTab.
 
-import { analyzeBoard, boardScale } from './boardMetrics.js';
+import { analyzeBoard, boardScale, minRadius } from './boardMetrics.js';
 
 // Re-exported so existing consumers (LiveDetectedFrame, FisheyeTab) keep one
 // import site for "the guided sequence's view of the board".
 export { analyzeBoard, boardScale };
 
-// ── Pose / scale acceptance thresholds (heuristic, no intrinsics needed) ──────
-const TILT_FRONTAL_MAX = 12;   // a "正对" frame must be flatter than this (deg)
-// Tilt/yaw acceptance (boardTiltDeg proxy). Kept LOW on purpose. The board is
-// geometrically detectable to ~33° (verified against /tmp/1 saved frames — even
-// the downscaled live pass finds it), so this is NOT a detection ceiling. The
-// limiter is the auto-capture gate: a tilt step needs the pose held STILL +
-// SHARP + continuously detected through the 500ms dwell, and the fast live
-// detector (NORMALIZE only, no EXHAUSTIVE/ACCURACY) drops out intermittently
-// while the board is moving/motion-blurred mid-tilt. At the old 22° an operator
-// had to hold an extreme, blur-prone pose dead still for half a second — never
-// fired, so people fell back to manual snaps. A proxy reading an operator can
-// comfortably SUSTAIN tops out ~13–16°, so accept from 10° (margin below that),
-// and raise back toward ~20° only with a ChArUco board (steadier partial detect).
-const TILT_MIN = 10;           // a tilt/yaw frame must skew at least this much
-const ROLL_MIN = 15;           // an in-plane roll frame must rotate at least this
-const ROLL_FRONTAL_MAX = 12;   // ...while staying roughly fronto-parallel
-// board span / image-circle diameter. On real fisheye captures a board that
-// visually "fills the frame" still only spans ~0.55–0.65 of the circle diameter
-// (the periphery is heavily compressed), so NEAR is set where a genuine close-in
-// shot lands rather than at 1.0. Validated against /tmp/1 + /tmp/4 sample sets.
-const SCALE_NEAR = 0.54;       // "拉近占满"
-const SCALE_FAR = 0.38;        // "推远变小"
-// region acceptance radius, as a fraction of the image-circle radius
+// ── Pose / scale acceptance profiles ─────────────────────────────────────────
+// The checklist itself (GUIDED_STEPS) and the region layout (REGIONS) are
+// camera-model-independent — "put the board top-left, tilt it" means the same
+// thing through any lens. What DOES differ is how much a given physical pose
+// shows up in the picture, so the acceptance thresholds are per-model.
+//
+// TILT_* are readings of the boardTiltDeg perspective proxy, kept LOW on purpose.
+// The limiter is not detectability but the auto-capture gate: a tilt step needs
+// the pose held STILL + SHARP + continuously detected through the 500ms dwell,
+// and the fast live detector drops out intermittently while the board is moving.
+// A reading an operator can comfortably SUSTAIN tops out around 13–16° on a
+// fisheye, so accept from 10° there.
+export const FISHEYE_PROFILE = {
+  name: 'fisheye',
+  TILT_FRONTAL_MAX: 12,   // a "正对" frame must be flatter than this (deg)
+  TILT_MIN: 10,           // a tilt/yaw frame must skew at least this much
+  ROLL_MIN: 15,           // an in-plane roll frame must rotate at least this
+  ROLL_FRONTAL_MAX: 12,   // ...while staying roughly fronto-parallel
+  // board span / extent diameter. On real fisheye captures a board that visually
+  // "fills the frame" still only spans ~0.55–0.65 of the circle diameter (the
+  // periphery is heavily compressed), so NEAR sits where a genuine close-in shot
+  // lands rather than at 1.0. Validated against the /tmp/1 + /tmp/4 sample sets.
+  SCALE_NEAR: 0.54,       // "拉近占满"
+  SCALE_FAR: 0.38,        // "推远变小"
+};
+
+// A pinhole lens has a narrower field of view and no radial compression, so:
+//   • the same physical tilt produces LESS perspective skew → lower tilt gates;
+//   • a board that fills the frame really does span ~0.9 of the short axis
+//     (vs ~0.6 on a fisheye) → higher scale gates.
+// NOTE: these four values are derived from the geometry, NOT yet validated on a
+// real pinhole capture session. They only affect WHEN guided auto-capture fires,
+// never the calibration result — retune against real footage.
+export const PINHOLE_PROFILE = {
+  name: 'pinhole',
+  TILT_FRONTAL_MAX: 10,
+  TILT_MIN: 7,
+  ROLL_MIN: 15,
+  ROLL_FRONTAL_MAX: 12,
+  SCALE_NEAR: 0.75,
+  SCALE_FAR: 0.40,
+};
+
+// region acceptance radius, as a fraction of the extent's inscribed radius
 const ACCEPT_CENTER = 0.38;
 const ACCEPT_OFF = 0.42;
 
 // Region unit-direction (screen coords: x right, y down) + radial fraction of
-// the image-circle radius where the board centroid should sit.
+// the extent's half-axes where the board centroid should sit.
 const REGIONS = {
   center: { ux: 0,  uy: 0,  rf: 0.0,  accept: ACCEPT_CENTER },
   tl:     { ux: -1, uy: -1, rf: 0.55, accept: ACCEPT_OFF },
@@ -91,40 +112,42 @@ export const GUIDED_STEPS = [
 export const GUIDED_TOTAL_SHOTS = GUIDED_STEPS.reduce((n, s) => n + s.shots, 0);
 
 // Target point for a step's region, in image-pixel coords, plus the acceptance
-// radius (px). Returns null without a circle.
-export function regionTarget(region, circle) {
-  if (!circle) return null;
+// radius (px). x scales with rx and y with ry, so a wide pinhole frame reaches
+// its real left/right edges; on a square (fisheye) extent this reduces exactly
+// to the old circle form. Returns null without an extent.
+export function regionTarget(region, extent) {
+  if (!extent) return null;
   const r = REGIONS[region] || REGIONS.center;
   const L = Math.hypot(r.ux, r.uy) || 1;
   return {
-    x: circle.cx + (r.ux / L) * r.rf * circle.r,
-    y: circle.cy + (r.uy / L) * r.rf * circle.r,
-    acceptR: r.accept * circle.r,
+    x: extent.cx + (r.ux / L) * r.rf * extent.rx,
+    y: extent.cy + (r.uy / L) * r.rf * extent.ry,
+    acceptR: r.accept * minRadius(extent),
   };
 }
 
-export function regionOk(step, m, circle) {
-  const t = regionTarget(step.region, circle);
+export function regionOk(step, m, extent) {
+  const t = regionTarget(step.region, extent);
   if (!t || !m.centroid) return false;
   return Math.hypot(m.centroid.x - t.x, m.centroid.y - t.y) <= t.acceptR;
 }
 
 // Does the live board's orientation/size satisfy the step's pose requirement?
-export function poseOk(step, m) {
+export function poseOk(step, m, profile = FISHEYE_PROFILE) {
   switch (step.pose) {
     case 'frontal':
-      return m.tilt != null && m.tilt <= TILT_FRONTAL_MAX
-        && (m.roll == null || m.roll <= TILT_FRONTAL_MAX + 6);
+      return m.tilt != null && m.tilt <= profile.TILT_FRONTAL_MAX
+        && (m.roll == null || m.roll <= profile.TILT_FRONTAL_MAX + 6);
     case 'tilted':
-      return m.tilt != null && m.tilt >= TILT_MIN;
+      return m.tilt != null && m.tilt >= profile.TILT_MIN;
     case 'roll':
-      return m.roll != null && m.roll >= ROLL_MIN
-        && (m.tilt == null || m.tilt <= ROLL_FRONTAL_MAX + 8);
+      return m.roll != null && m.roll >= profile.ROLL_MIN
+        && (m.tilt == null || m.tilt <= profile.ROLL_FRONTAL_MAX + 8);
     case 'dist':
       if (m.scale == null) return false;
-      if (step.scale === 'near') return m.scale >= SCALE_NEAR;
-      if (step.scale === 'far') return m.scale <= SCALE_FAR;
-      return m.scale > SCALE_FAR && m.scale < SCALE_NEAR;  // 'mid'
+      if (step.scale === 'near') return m.scale >= profile.SCALE_NEAR;
+      if (step.scale === 'far') return m.scale <= profile.SCALE_FAR;
+      return m.scale > profile.SCALE_FAR && m.scale < profile.SCALE_NEAR;  // 'mid'
     default:
       return true;
   }
@@ -133,13 +156,14 @@ export function poseOk(step, m) {
 // The two-shots-per-action rule: the SECOND shot must differ from the first by a
 // small but real amount, so we bank a slightly varied view rather than a near
 // duplicate. A nudge in tilt, roll, or position all count.
-export function differsEnough(sig, m, circle) {
+export function differsEnough(sig, m, extent) {
   if (!sig || !m) return true;
   if (m.tilt != null && sig.tilt != null && Math.abs(m.tilt - sig.tilt) >= 2) return true;
   if (m.roll != null && sig.roll != null && Math.abs(m.roll - sig.roll) >= 2) return true;
   if (m.scale != null && sig.scale != null && Math.abs(m.scale - sig.scale) >= 0.025) return true;
-  if (m.centroid && sig.centroid && circle?.r) {
-    if (Math.hypot(m.centroid.x - sig.centroid.x, m.centroid.y - sig.centroid.y) >= circle.r * 0.03) return true;
+  const r = minRadius(extent);
+  if (m.centroid && sig.centroid && r) {
+    if (Math.hypot(m.centroid.x - sig.centroid.x, m.centroid.y - sig.centroid.y) >= r * 0.03) return true;
   }
   return false;
 }
@@ -147,4 +171,20 @@ export function differsEnough(sig, m, circle) {
 // A signature of a captured shot, for the differsEnough check on the next one.
 export function shotSignature(m) {
   return m ? { tilt: m.tilt, roll: m.roll, scale: m.scale, centroid: m.centroid } : null;
+}
+
+// Recommended on-screen half-size of the target board, as a fraction of the
+// extent's inscribed radius — bigger for centre/near, smaller for edges/far
+// (docs/fisheye-calibration-howto.md §3: a centred board should fill ~1/3–1/2 of
+// the frame, edge boards may be smaller). Aspect ≈ the real board's cols:rows so
+// the operator matches shape, not just position.
+export function targetHalfSize(step, extent, bCols, bRows) {
+  const r = minRadius(extent);
+  let frac;
+  if (step.pose === 'dist') frac = step.scale === 'near' ? 0.5 : step.scale === 'far' ? 0.27 : 0.38;
+  else if (step.group === 'edge') frac = 0.27;
+  else if (step.region === 'center') frac = 0.42;
+  else frac = 0.34;
+  const halfW = frac * r;
+  return { halfW, halfH: halfW * (bRows / Math.max(1, bCols)) };
 }
