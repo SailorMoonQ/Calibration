@@ -209,7 +209,6 @@
     "liveLabel": "实时 · {{device}}",
     "liveDetectLabel": "实时 · {{device}} · 检测",
     "undistorted": "去畸变",
-    "undistortedLive": "去畸变 · 实时",
     "method": "方法",
     "methodCvUndistort": "cv2.undistort",
     "methodRemapFull": "initUndistortRectifyMap + remap",
@@ -217,7 +216,30 @@
     "connectOrSelectFrame": "连接相机或选择一帧以查看去畸变视图",
     "runToUndistort": "运行标定以查看去畸变视图",
     "detectingSolving": "检测 + 求解中…",
-    "rmsResult": "rms {{rms}} px · {{message}}"
+    "rmsResult": "rms {{rms}} px · {{message}}",
+    "perFrameErrHint": "该帧重投影误差（像素）",
+    "viewCompare": "对比方法",
+    "mirror": "镜像",
+    "footprint": "检测足迹",
+    "captureModeSweep": "扫覆盖",
+    "captureModeGuided": "文档引导",
+    "autoCapture": "自动采集",
+    "auto_noBoard": "未见标定板",
+    "auto_enough": "该区域已采够",
+    "auto_tilt": "换个倾斜角度",
+    "auto_blurry": "太模糊，请稳住",
+    "auto_hold": "稳住…",
+    "auto_capturing": "采集中…",
+    "auto_region": "移到目标位置",
+    "auto_pose": "调整姿态",
+    "auto_vary": "微调一点再拍",
+    "auto_done": "全部完成",
+    "liveSuffix": "{{label}} · 实时",
+    "undistortedRemapFull": "去畸变 · initUndistortRectifyMap + remap",
+    "undistortedUndistortFull": "去畸变 · cv2.undistort",
+    "algo": "cv2.calibrateCamera · Levenberg-Marquardt",
+    "loadedDetail": "已加载（{{fmt}}）← {{name}} · rms {{rms}} · fx {{fx}}",
+    "voicePlayFailed": "语音播放被拦截（{{name}}）：{{error}}"
   },
   "fisheye": {
     "perFrameErrHint": "该帧重投影误差（像素）",
@@ -247,7 +269,6 @@
     "residuals": "残差",
     "detectLive": "实时检测",
     "mirror": "镜像",
-    "coverageGrid": "覆盖靶盘",
     "captureModePolar": "覆盖靶盘",
     "captureModeGuided": "文档引导",
     "footprint": "检测足迹",
@@ -262,26 +283,6 @@
     "auto_pose": "调整姿态",
     "auto_vary": "微调一点再拍",
     "auto_done": "全部完成",
-    "guided": {
-      "progress": "步骤 {{step}}/{{total}} · {{group}}·{{action}} · 第 {{shot}}/{{shots}} 张",
-      "done": "全部完成，可运行标定",
-      "groups": {
-        "frontal": "正对分区", "edge": "边缘", "tilt": "俯仰", "yaw": "偏摆", "roll": "平面旋转", "dist": "远近"
-      },
-      "steps": {
-        "f_center": "正对·中心", "f_tl": "正对·左上", "f_tr": "正对·右上", "f_bl": "正对·左下", "f_br": "正对·右下",
-        "e_top": "怼上边", "e_bottom": "怼下边", "e_left": "怼左边", "e_right": "怼右边",
-        "t_fwd": "上沿前倒（俯）", "t_back": "上沿后仰（仰）",
-        "y_left": "左侧前转（偏摆）", "y_right": "右侧前转（偏摆）",
-        "r_roll": "平面内旋转（当钟表转角）",
-        "d_near": "拉近占满", "d_far": "推远变小", "d_mid": "中等距离"
-      },
-      "hint": {
-        "frontal": "正对相机、放平", "tilted": "把板倾斜约 30~45°", "roll": "板在平面内转个角度",
-        "near": "靠近相机、占满画面", "far": "远离相机、变小", "mid": "保持中等距离",
-        "region": "移到高亮区域", "vary": "微调一点再拍第二张"
-      }
-    },
     "voiceError": "语音识别错误：{{error}}",
     "voiceCaptureStarted": "语音采集已开启 · 说“拍照”可立即抓拍，说“标定”运行求解",
     "noCalibrationYet": "尚未标定",
@@ -307,6 +308,26 @@
     "wroteCameraIntrix": "已写入 [{{slot}}] → {{path}}",
     "cameraIntrixFailed": "写入 camera_intrix 失败：{{error}}",
     "voicePlayFailed": "语音播放被拦截（{{name}}）：{{error}}"
+  },
+  "guided": {
+    "progress": "步骤 {{step}}/{{total}} · {{group}}·{{action}} · 第 {{shot}}/{{shots}} 张",
+    "done": "全部完成，可运行标定",
+    "groups": {
+      "frontal": "正对分区", "edge": "边缘", "tilt": "俯仰", "yaw": "偏摆", "roll": "平面旋转", "dist": "远近"
+    },
+    "steps": {
+      "f_center": "正对·中心", "f_tl": "正对·左上", "f_tr": "正对·右上", "f_bl": "正对·左下", "f_br": "正对·右下",
+      "e_top": "怼上边", "e_bottom": "怼下边", "e_left": "怼左边", "e_right": "怼右边",
+      "t_fwd": "上沿前倒（俯）", "t_back": "上沿后仰（仰）",
+      "y_left": "左侧前转（偏摆）", "y_right": "右侧前转（偏摆）",
+      "r_roll": "平面内旋转（当钟表转角）",
+      "d_near": "拉近占满", "d_far": "推远变小", "d_mid": "中等距离"
+    },
+    "hint": {
+      "frontal": "正对相机、放平", "tilted": "把板倾斜约 30~45°", "roll": "板在平面内转个角度",
+      "near": "靠近相机、占满画面", "far": "远离相机、变小", "mid": "保持中等距离",
+      "region": "移到高亮区域", "vary": "微调一点再拍第二张"
+    }
   },
   "handeye": {
     "perFrameErrHint": "该帧一致性偏差（毫米）· 有偏差属正常，接近 0 反而可疑（多为未参与/重复/基准帧），偏大才需留意",

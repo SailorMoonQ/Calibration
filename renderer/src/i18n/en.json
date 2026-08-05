@@ -209,7 +209,6 @@
     "liveLabel": "live · {{device}}",
     "liveDetectLabel": "live · {{device}} · detect",
     "undistorted": "undistorted",
-    "undistortedLive": "undistorted · live",
     "method": "method",
     "methodCvUndistort": "cv2.undistort",
     "methodRemapFull": "initUndistortRectifyMap + remap",
@@ -217,7 +216,30 @@
     "connectOrSelectFrame": "connect a camera or select a frame to see the undistorted view",
     "runToUndistort": "run calibration to see the undistorted view",
     "detectingSolving": "detecting + solving…",
-    "rmsResult": "rms {{rms}} px · {{message}}"
+    "rmsResult": "rms {{rms}} px · {{message}}",
+    "perFrameErrHint": "this frame's reprojection error (pixels)",
+    "viewCompare": "compare methods",
+    "mirror": "mirror",
+    "footprint": "footprint",
+    "captureModeSweep": "coverage sweep",
+    "captureModeGuided": "guided steps",
+    "autoCapture": "auto-capture",
+    "auto_noBoard": "no board in view",
+    "auto_enough": "region already covered",
+    "auto_tilt": "tilt to a new angle",
+    "auto_blurry": "too blurry — hold steady",
+    "auto_hold": "hold still…",
+    "auto_capturing": "capturing…",
+    "auto_region": "move to the target spot",
+    "auto_pose": "adjust the pose",
+    "auto_vary": "nudge slightly, then shoot",
+    "auto_done": "all done",
+    "liveSuffix": "{{label}} · live",
+    "undistortedRemapFull": "undistorted · initUndistortRectifyMap + remap",
+    "undistortedUndistortFull": "undistorted · cv2.undistort",
+    "algo": "cv2.calibrateCamera · Levenberg-Marquardt",
+    "loadedDetail": "loaded ({{fmt}}) ← {{name}} · rms {{rms}} · fx {{fx}}",
+    "voicePlayFailed": "voice playback blocked ({{name}}): {{error}}"
   },
   "fisheye": {
     "perFrameErrHint": "this frame's reprojection error (pixels)",
@@ -247,7 +269,6 @@
     "residuals": "residuals",
     "detectLive": "detect live",
     "mirror": "mirror",
-    "coverageGrid": "coverage dial",
     "captureModePolar": "coverage dial",
     "captureModeGuided": "guided steps",
     "footprint": "footprint",
@@ -262,26 +283,6 @@
     "auto_pose": "adjust the pose",
     "auto_vary": "nudge slightly, then shoot",
     "auto_done": "all done",
-    "guided": {
-      "progress": "step {{step}}/{{total}} · {{group}}·{{action}} · shot {{shot}}/{{shots}}",
-      "done": "all done — run calibration",
-      "groups": {
-        "frontal": "frontal zones", "edge": "edges", "tilt": "pitch", "yaw": "yaw", "roll": "in-plane roll", "dist": "distance"
-      },
-      "steps": {
-        "f_center": "frontal · center", "f_tl": "frontal · top-left", "f_tr": "frontal · top-right", "f_bl": "frontal · bottom-left", "f_br": "frontal · bottom-right",
-        "e_top": "push to top edge", "e_bottom": "push to bottom edge", "e_left": "push to left edge", "e_right": "push to right edge",
-        "t_fwd": "top edge tipped forward (pitch)", "t_back": "top edge leaned back (pitch)",
-        "y_left": "left side turned in (yaw)", "y_right": "right side turned in (yaw)",
-        "r_roll": "in-plane roll (turn like a clock)",
-        "d_near": "close in, fill the frame", "d_far": "pull back, smaller", "d_mid": "medium distance"
-      },
-      "hint": {
-        "frontal": "face the camera, keep it flat", "tilted": "tilt the board ~30–45°", "roll": "roll the board in its plane",
-        "near": "move closer, fill the frame", "far": "move away, smaller", "mid": "hold a medium distance",
-        "region": "move into the highlighted zone", "vary": "nudge slightly, then take the second"
-      }
-    },
     "voiceError": "speech recognition error: {{error}}",
     "voiceCaptureStarted": "voice capture enabled · say photo to snap, say calibrate to solve",
     "noCalibrationYet": "no calibration yet",
@@ -307,6 +308,26 @@
     "wroteCameraIntrix": "wrote [{{slot}}] → {{path}}",
     "cameraIntrixFailed": "camera_intrix write failed: {{error}}",
     "voicePlayFailed": "voice playback blocked ({{name}}): {{error}}"
+  },
+  "guided": {
+    "progress": "step {{step}}/{{total}} · {{group}}·{{action}} · shot {{shot}}/{{shots}}",
+    "done": "all done — run calibration",
+    "groups": {
+      "frontal": "frontal zones", "edge": "edges", "tilt": "pitch", "yaw": "yaw", "roll": "in-plane roll", "dist": "distance"
+    },
+    "steps": {
+      "f_center": "frontal · center", "f_tl": "frontal · top-left", "f_tr": "frontal · top-right", "f_bl": "frontal · bottom-left", "f_br": "frontal · bottom-right",
+      "e_top": "push to top edge", "e_bottom": "push to bottom edge", "e_left": "push to left edge", "e_right": "push to right edge",
+      "t_fwd": "top edge tipped forward (pitch)", "t_back": "top edge leaned back (pitch)",
+      "y_left": "left side turned in (yaw)", "y_right": "right side turned in (yaw)",
+      "r_roll": "in-plane roll (turn like a clock)",
+      "d_near": "close in, fill the frame", "d_far": "pull back, smaller", "d_mid": "medium distance"
+    },
+    "hint": {
+      "frontal": "face the camera, keep it flat", "tilted": "tilt the board ~30–45°", "roll": "roll the board in its plane",
+      "near": "move closer, fill the frame", "far": "move away, smaller", "mid": "hold a medium distance",
+      "region": "move into the highlighted zone", "vary": "nudge slightly, then take the second"
+    }
   },
   "handeye": {
     "perFrameErrHint": "this frame's consistency deviation (mm) · some deviation is normal; near-0 is suspicious (unused/duplicate/reference frame), only large values warrant a look",

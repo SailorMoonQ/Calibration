@@ -12,33 +12,24 @@ import {
   CaptureControls, SolverButton, SolverPanel,
   trafficKindForRms, trafficColor,
 } from '../components/panels.jsx';
-import { binPolar, pickGuidanceCell, totalPolarCells, polarCellAt, polarCellGeometry, boardTiltDeg, RINGS, SECTORS } from '../lib/polarCoverage.js';
-import {
-  GUIDED_STEPS, analyzeBoard, regionTarget, regionOk, poseOk,
-  differsEnough, shotSignature,
-} from '../lib/guidedSequence.js';
+import { totalPolarCells, polarCellAt, RINGS, SECTORS } from '../lib/polarCoverage.js';
+import { GUIDED_STEPS, FISHEYE_PROFILE } from '../lib/guidedSequence.js';
+import { makePolarGeometry } from '../lib/smartCapture/geometry.js';
+import { useSmartCapture } from '../lib/smartCapture/useSmartCapture.js';
 import { speak } from '../lib/voice.js';
 import { useVoiceCommands } from '../lib/voiceControl.js';
-
-// A snapped board only counts as covering a (polar) cell when at least this many
-// of its corners land in that cell — so a board merely clipping a cell's edge
-// (or the live board sweeping past without a capture) does not turn it green.
-const CAPTURE_MIN_CORNERS = 3;
-
-// Hands-free auto-capture tuning. The board auto-snaps only when it is sharp,
-// held still, and sitting in an under-sampled polar cell at a fresh tilt — and
-// only after a short dwell, so you can sweep the board around and let it capture
-// itself.
-const TARGET_PER_CELL = 5;     // stop auto-snapping a cell once it has this many
-const DWELL_MS = 500;          // must hold the good pose this long before it fires
-const SHARP_REL = 0.40;        // reject if blurrier than this fraction of the session-best
-const SHARP_ABS = 40;          // absolute Laplacian-variance floor
-const TILT_MIN_DIFF = 4;       // a follow-up capture in a cell must differ in tilt by ≥ this (deg)
 import { DEFAULT_CHESS_BOARD } from '../lib/board.js';
 import { confirm } from '../components/confirm.jsx';
 import { api, pickFolder, pickSaveFile, pickOpenFile } from '../api/client.js';
 
 const ZERO_K = [[0,0,0,0],[0,0,0,0],[0,0,0,0],[0,0,0,1]];
+
+// Captures-per-cell that counts as "this sector is done". The polar dartboard is
+// 17 cells (1 centre + 2 rings × 8 sectors) and one snap fills a couple of them,
+// so 5 lands at roughly 20–30 frames — the right size for a fisheye solve.
+// Feeds BOTH the capture logic (useSmartCapture) and the on-frame shading
+// (LiveDetectedFrame's polarTarget); they must stay equal.
+const TARGET_PER_CELL = 5;
 
 // Camera mount inferred from a ROS2 image source like
 // "ros2:/camera/head/color/image_rect_compressed" → "head". When present, saving
@@ -77,14 +68,6 @@ export function FisheyeTab({ active, tweaks }) {
   // Auto-detected fisheye image circle {cx,cy,r}, reported by LiveDetectedFrame.
   // Drives the polar dartboard, capture binning, and the FOV boundary.
   const [circle, setCircle] = useState(null);
-  // Live capture coverage — grows only as the user SNAPS frames, before any
-  // solve. `polarCounts[i]` = how many captured frames put a board into polar
-  // cell i (≥ CAPTURE_MIN_CORNERS corners there). Reset per dataset (= per
-  // capture session). After a solve we switch to residual-derived coverage.
-  const [polarCounts, setPolarCounts] = useState(() => new Array(totalPolarCells()).fill(0));
-  // Newest detection meta from the live stream, so a manual snap can bin the
-  // corners it just saved into polarCounts (snap itself returns no corners).
-  const latestMetaRef = useRef(null);
 
   // When onLoad sets datasetPath from a loaded calibration, the dataset-listing effect
   // would normally clear the just-loaded result. This ref tells the effect "skip the
@@ -139,39 +122,9 @@ export function FisheyeTab({ active, tweaks }) {
     return { cx: w / 2, cy: h / 2, r: (Math.min(w, h) / 2) * 0.98 };
   }, [circle, imgSizeForCov?.[0], imgSizeForCov?.[1]]);
 
-  // Polar coverage. Two sources, picked by phase:
-  //   • after a solve → bin the per-frame residuals into rings×sectors, which
-  //     also yields per-cell quality (mean reprojection error) for colouring.
-  //   • during capture → the live `polarCounts` capture tally, so the dartboard
-  //     fills in real time as the user snaps. `guidance` flags the emptiest cell.
-  const coverage = useMemo(() => {
-    const total = totalPolarCells();
-    if (result?.per_frame_residuals?.length && covCircle) {
-      const counts = new Array(total).fill(0);
-      const errSum = new Array(total).fill(0);
-      for (const frame of result.per_frame_residuals) {
-        if (!frame) continue;
-        for (const c of frame) {
-          const idx = polarCellAt(c[0], c[1], covCircle);
-          if (idx == null) continue;
-          counts[idx] += 1;
-          const ex = c[2], ey = c[3];
-          if (Number.isFinite(ex) && Number.isFinite(ey)) errSum[idx] += Math.hypot(ex, ey);
-        }
-      }
-      const cells = counts.map(n => n > 0);
-      const meanErr = counts.map((n, i) => (n > 0 ? errSum[i] / n : null));
-      const filled = cells.reduce((n, on) => n + (on ? 1 : 0), 0);
-      return { cells, counts, meanErr, guidance: null, filled, total, percent: Math.round((filled / total) * 100) };
-    }
-    const cells = polarCounts.map(c => c > 0);
-    const filled = cells.reduce((n, on) => n + (on ? 1 : 0), 0);
-    return {
-      cells, counts: polarCounts, meanErr: null,
-      guidance: pickGuidanceCell(polarCounts),
-      filled, total, percent: Math.round((filled / total) * 100),
-    };
-  }, [result, covCircle, polarCounts]);
+  // The capture geometry: the polar dartboard laid over the detected image circle.
+  // Re-made whenever the circle moves so the state machine bins against the truth.
+  const geometry = useMemo(() => makePolarGeometry(covCircle), [covCircle]);
 
   const frames = useMemo(() => datasetFiles.map((p, i) => ({
     id: i + 1, err: errByPath?.get(p) ?? 0, tx: 0, ty: 0, rot: 0,
@@ -288,55 +241,7 @@ export function FisheyeTab({ active, tweaks }) {
     if (stack.length > UNDO_LIMIT) stack.shift();
   };
 
-  // Smart auto-capture state. Rather than "new cell → snap", we gate on
-  // sharpness + stillness + polar-novelty + a dwell timer, so the board can be
-  // swept around hands-free and the app captures the good poses by itself.
-  const lastAutoSnapRef = useRef(0);
-  const snapInFlightRef = useRef(false);  // blocks both auto and manual snap to prevent race conditions
-  const prevCornersRef = useRef(null);    // last frame's corners (for motion)
-  const lastDetSeqRef = useRef(-1);       // last processed detection seq (skip repaints)
-  const dwellStartRef = useRef(0);        // when the current good pose began
-  const maxSharpRef = useRef(0);          // session-best sharpness (adaptive blur gate)
-  // Per-cell list of captured board tilts (deg) — drives orientation diversity:
-  // a 2nd/3rd capture in a cell only counts if its tilt is fresh.
-  const cellTiltsRef = useRef(Array.from({ length: totalPolarCells() }, () => []));
-  const [autoHud, setAutoHud] = useState(null);  // { reason, dwell:0..1, tilt, guidedLabel } for the on-frame badge
-
-  // Guided-sequence progress (doc-driven mode). guidedStepRef indexes GUIDED_STEPS;
-  // guidedShotsRef is how many of this step's shots are banked (0..shots);
-  // guidedSigRef is the first shot's signature, so the 2nd shot can be required to
-  // differ a little. guidedProgress mirrors the refs into state for the overlay/HUD.
-  const guidedStepRef = useRef(0);
-  const guidedShotsRef = useRef(0);
-  const guidedSigRef = useRef(null);
-  const [guidedProgress, setGuidedProgress] = useState({ step: 0, shots: 0 });
-  const captureModeRef = useRef(captureMode);
-  const resetGuided = () => {
-    guidedStepRef.current = 0; guidedShotsRef.current = 0; guidedSigRef.current = null;
-    setGuidedProgress({ step: 0, shots: 0 });
-    dirStateRef.current = { dir: null, target: null, refDist: Infinity, lastSpeak: 0, arrived: false };
-  };
-  useEffect(() => {
-    captureModeRef.current = captureMode;
-    localStorage.setItem('calib_fisheye_capmode', captureMode);
-    resetGuided();
-  }, [captureMode]);
-
-  useEffect(() => {
-    setPolarCounts(new Array(totalPolarCells()).fill(0));
-    cellTiltsRef.current = Array.from({ length: totalPolarCells() }, () => []);
-    prevCornersRef.current = null;
-    lastDetSeqRef.current = -1;
-    dwellStartRef.current = 0;
-    maxSharpRef.current = 0;
-    dirStateRef.current = { dir: null, target: null, refDist: Infinity, lastSpeak: 0, arrived: false };
-    resetGuided();
-  }, [datasetPath]);
-
-  // Board geometry in a ref so the per-frame handler reads current cols/rows
-  // without being recreated when the board panel changes.
-  const boardRef = useRef(board);
-  useEffect(() => { boardRef.current = board; }, [board]);
+  useEffect(() => { localStorage.setItem('calib_fisheye_capmode', captureMode); }, [captureMode]);
 
   // Voice prompts (Edge-TTS clips, Chinese). Gated by settings; the per-snap
   // "captured" cue is rate-limited so rapid auto-captures don't stutter the audio.
@@ -362,362 +267,89 @@ export function FisheyeTab({ active, tweaks }) {
     });
   }, [voicePrompts, t]);
 
-  // Directional-guidance state machine (see steerVoice). mirrorRef lets the
-  // spoken left/right match a mirrored display.
-  const dirStateRef = useRef({ dir: null, target: null, refDist: Infinity, lastSpeak: 0, arrived: false });
-  const mirrorRef = useRef(false);
-  useEffect(() => {
-    mirrorRef.current = mirror;
-    localStorage.setItem('calib_fisheye_mirror', mirror ? '1' : '0');
-  }, [mirror]);
+  // Mirror flip only affects the live preview picture, so this effect keeps just
+  // the localStorage persistence — the smart-capture hook owns mirror for the
+  // spoken-direction swap (passed in below as a prop).
+  useEffect(() => { localStorage.setItem('calib_fisheye_mirror', mirror ? '1' : '0'); }, [mirror]);
 
-  // Decide whether to speak a steering cue this frame. Event-driven: speak on a
-  // new target, a changed direction, drifting the wrong way, or a stall — and go
-  // quiet while the board is closing in. Announces arrival once.
-  const steerVoice = useCallback(({ cell, reason, circle, curX, curY }) => {
-    const guid = guidanceRef.current;
-    const st = dirStateRef.current;
-    if (st.target !== guid) { st.target = guid; st.dir = null; st.refDist = Infinity; st.arrived = false; }
-    if (guid == null || !circle || cell == null) return;
+  // Capture-only: save the frame and make it undoable. Resolves as soon as the
+  // path is known — deliberately does NOT touch the dataset listing, so the
+  // hook's tally runs before an `api.listDataset` round-trip, not after it.
+  // That's the only ordering guaranteed here — `api.snap` itself takes on
+  // the order of 100ms, during which the live stream can still overwrite
+  // `latestMetaRef` — but it avoids adding a further, multi-hundred-
+  // millisecond window on top.
+  const snapOnce = useCallback(async () => {
+    const r = await api.snap(liveDevice, datasetPath);
+    pushUndo({ kind: 'snap', path: r.path });
+    return r;
+  }, [liveDevice, datasetPath]);
 
-    if (cell === guid) {                       // on the target cell
-      if (!st.arrived) { st.arrived = true; say('onTarget'); }
-      return;
-    }
-    st.arrived = false;
-    if (reason !== 'enough') return;           // only steer off an already-full cell
+  // Runs AFTER the hook has already tallied coverage, advanced the guided
+  // step, spoken the cue, and set the "captured" status for this frame (see
+  // useSmartCapture's `runAutoSnap`). A failure here must not undo any of
+  // that — the hook catches it separately and reports it as its own error
+  // rather than autoSnapFailed.
+  const onCaptured = useCallback(async () => {
+    const files = await refreshDataset();
+    if (files) setSelected(files.length);
+  }, [datasetPath]);
 
-    const g = polarCellGeometry(circle).find(x => x.index === guid);
-    if (!g) return;
-    const dx = g.x - curX, dy = g.y - curY;
-    const dist = Math.hypot(dx, dy);
-    const curR = Math.hypot(curX - circle.cx, curY - circle.cy);
-    const gR = Math.hypot(g.x - circle.cx, g.y - circle.cy);
-    let dir;
-    if (gR - curR > circle.r * 0.33) dir = 'moveOut';
-    else if (Math.abs(dx) > Math.abs(dy)) {
-      const right = dx > 0;
-      dir = (right !== mirrorRef.current) ? 'moveRight' : 'moveLeft';  // mirror swaps L/R
-    } else dir = dy > 0 ? 'moveDown' : 'moveUp';
+  // `guidance` is fed to the hook through a ref rather than directly, because
+  // `coverage` (below) is computed FROM `capture.counts`, and `coverage.guidance`
+  // would otherwise create a render cycle. The hook only uses it to steer spoken
+  // directions, so a value that lags one render behind is harmless — this
+  // matches the pre-refactor page, where the ref was also synced a render late.
+  const guidanceRef = useRef(null);
+  const capture = useSmartCapture({
+    enabled: autoCapture,
+    liveDevice, datasetPath, autoRate,
+    board, geometry, profile: FISHEYE_PROFILE,
+    mode: captureMode === 'guided' ? 'guided' : 'sweep',
+    mirror,
+    targetPerCell: TARGET_PER_CELL,
+    guidance: guidanceRef.current,
+    doSnap: snapOnce,
+    onCaptured,
+    say, t, setStatus,
+  });
 
-    const now = performance.now();
-    const eps = circle.r * 0.06;
-    const progressed = dist <= st.refDist - eps;
-    const wrongWay = dist >= st.refDist + eps;
-    let speakIt = false;
-    if (dir !== st.dir) speakIt = now - st.lastSpeak > 900;        // new direction
-    else if (wrongWay) speakIt = now - st.lastSpeak > 1500;        // drifting away
-    else if (!progressed) speakIt = now - st.lastSpeak > 3500;     // stalled, no progress
-    if (progressed) st.refDist = dist;                            // closing in → stay quiet
-    if (speakIt) { say(dir); st.dir = dir; st.refDist = dist; st.lastSpeak = now; }
-  }, [say]);
-
-  // Directional voice for the guided sequence: steer the board toward an explicit
-  // target point (the active step's region), with the same event-driven cadence as
-  // steerVoice — speak on a new direction / drift / stall, stay quiet while closing
-  // in. `stepKey` resets the progress baseline when the active step changes.
-  const guidedSteer = useCallback((curX, curY, target, circle, stepKey) => {
-    const st = dirStateRef.current;
-    if (st.target !== stepKey) { st.target = stepKey; st.dir = null; st.refDist = Infinity; }
-    if (curX == null || !circle || !target) return;
-    const dx = target.x - curX, dy = target.y - curY;
-    const dist = Math.hypot(dx, dy);
-    const curR = Math.hypot(curX - circle.cx, curY - circle.cy);
-    const gR = Math.hypot(target.x - circle.cx, target.y - circle.cy);
-    let dir;
-    if (gR - curR > circle.r * 0.33) dir = 'moveOut';
-    else if (Math.abs(dx) > Math.abs(dy)) {
-      const right = dx > 0;
-      dir = (right !== mirrorRef.current) ? 'moveRight' : 'moveLeft';   // mirror swaps L/R
-    } else dir = dy > 0 ? 'moveDown' : 'moveUp';
-    const now = performance.now();
-    const eps = circle.r * 0.06;
-    const progressed = dist <= st.refDist - eps;
-    const wrongWay = dist >= st.refDist + eps;
-    let speakIt = false;
-    if (dir !== st.dir) speakIt = now - st.lastSpeak > 900;
-    else if (wrongWay) speakIt = now - st.lastSpeak > 1500;
-    else if (!progressed) speakIt = now - st.lastSpeak > 3500;
-    if (progressed) st.refDist = dist;
-    if (speakIt) { say(dir); st.dir = dir; st.refDist = dist; st.lastSpeak = now; }
-  }, [say]);
-
-  // Keep the binning circle and live counts in refs so the per-frame auto-capture
-  // handler reads the freshest values without being recreated every detection.
-  const covCircleRef = useRef(null);
-  useEffect(() => { covCircleRef.current = covCircle; }, [covCircle]);
-  const polarCountsRef = useRef(polarCounts);
-  useEffect(() => { polarCountsRef.current = polarCounts; }, [polarCounts]);
-  const guidanceRef = useRef(null);   // the cell to steer the board toward (for spoken directions)
-  useEffect(() => { guidanceRef.current = coverage.guidance; }, [coverage.guidance]);
-
-  // Tally the just-snapped frame into the live polar coverage. Only cells the
-  // board actually filled (≥ CAPTURE_MIN_CORNERS corners) are incremented, so
-  // coverage reflects deliberate captures — not the live board sweeping past.
-  // Uses the freshest live-detection meta (snap returns only a file path).
-  const markCellsFromSnap = useCallback(({ silent = false } = {}) => {
-    const meta = latestMetaRef.current;
-    const c = covCircleRef.current;
-    if (!meta?.corners?.length || !c) return;
-    const perCell = binPolar(meta.corners, c);
-    const b = boardRef.current;
-    const tilt = boardTiltDeg(meta.corners, b.cols, b.rows);
-    // record this capture's tilt in every cell it covered, for orientation diversity
-    if (tilt != null) {
-      perCell.forEach((cnt, i) => { if (cnt >= CAPTURE_MIN_CORNERS) cellTiltsRef.current[i].push(tilt); });
-    }
-    setPolarCounts(prev => {
-      const next = prev.map((n, i) => n + (perCell[i] >= CAPTURE_MIN_CORNERS ? 1 : 0));
-      // Spoken cues: a short "captured", and "coverage complete" the moment the
-      // last cell crosses from empty to covered. Guided mode passes silent:true
-      // and drives its own voice cadence (per-step, not per-cell).
-      if (!silent) {
-        say('captured', 600);
-        const wasFull = prev.every(n => n > 0);
-        if (!wasFull && next.every(n => n > 0)) say('allCovered');
-      }
-      return next;
-    });
-  }, [say]);
-
-  // Cancellation flag for async snap operations to prevent state updates after unmount
-  const snapCancelledRef = useRef(false);
-  useEffect(() => {
-    snapCancelledRef.current = false;
-    return () => { snapCancelledRef.current = true; };
-  }, []);
-
-  const onAutoMeta = useCallback((meta) => {
-    // Always stash the freshest meta so a manual snap can bin its corners,
-    // even when auto-capture is off.
-    latestMetaRef.current = meta;
-    const corners = meta?.corners;
-    const size = meta?.image_size;
-
-    if (!autoCapture || !liveDevice || !datasetPath) { dwellStartRef.current = 0; return; }
-    // Backend streams video faster than it detects, so the same detection arrives
-    // on several frames. Run the capture/motion logic only on a FRESH detection,
-    // else a moving board's repeated corners read as "still" and could mis-fire.
-    if (meta?.det_seq != null && meta.det_seq === lastDetSeqRef.current) return;
-    lastDetSeqRef.current = meta?.det_seq ?? lastDetSeqRef.current;
-    const now = performance.now();
-
-    // No full board in view → nothing to do; reset the dwell.
-    if (!corners || corners.length < 4 || !size) {
-      prevCornersRef.current = null; dwellStartRef.current = 0;
-      setAutoHud({ reason: 'noBoard', dwell: 0 });
-      return;
-    }
-
-    // 1) Motion: mean per-corner displacement vs the previous frame.
-    const prev = prevCornersRef.current;
-    let motion = Infinity;
-    if (prev && prev.length === corners.length) {
-      let s = 0;
-      for (let i = 0; i < corners.length; i++) {
-        s += Math.hypot(corners[i][0] - prev[i][0], corners[i][1] - prev[i][1]);
-      }
-      motion = s / corners.length;
-    }
-    prevCornersRef.current = corners;
-    const motionThresh = Math.max(2, size[0] * 0.004);  // ≈ 3.8 px @ 960 wide
-    const still = motion < motionThresh;
-
-    // 2) Sharpness: adaptive — must be within SHARP_REL of the session best.
-    const sharp = typeof meta.sharpness === 'number' ? meta.sharpness : null;
-    if (sharp != null) maxSharpRef.current = Math.max(maxSharpRef.current, sharp);
-    const sharpOk = sharp == null
-      || sharp >= Math.max(SHARP_ABS, maxSharpRef.current * SHARP_REL);
-
-    // ── Guided-sequence branch ────────────────────────────────────────────────
-    // Doc-driven checklist: walk GUIDED_STEPS in order, two shots per action, the
-    // 2nd required to differ a little from the 1st. Region + pose are matched
-    // against the active step; we steer with voice/HUD until both are satisfied,
-    // then dwell-snap. Shares the motion (still) + sharpness (sharpOk) gates above.
-    if (captureModeRef.current === 'guided') {
-      const debouncedG = now - lastAutoSnapRef.current >= Math.max(400, autoRate * 1000);
-      const circleG = covCircleRef.current;
-      const step = GUIDED_STEPS[guidedStepRef.current];
-      if (!step) {                                  // whole sequence finished
-        dwellStartRef.current = 0;
-        setAutoHud({ reason: 'done', dwell: 0, guidedLabel: t('fisheye.guided.done') });
-        return;
-      }
-      const shots = guidedShotsRef.current;
-      const m = analyzeBoard(corners, boardRef.current, circleG);
-      const rOk = regionOk(step, m, circleG);
-      const pOk = poseOk(step, m);
-      const needVary = shots === 1 && !differsEnough(guidedSigRef.current, m, circleG);
-
-      let reason;
-      if (!rOk) reason = 'region';
-      else if (!pOk) reason = 'pose';
-      else if (needVary) reason = 'vary';
-      else if (!sharpOk) reason = 'blurry';
-      else if (!still) reason = 'hold';
-      else reason = 'capturing';
-
-      // Voice steering: position first, then pose. Reuse the Chinese clips.
-      if (!rOk) {
-        guidedSteer(m.centroid?.x, m.centroid?.y, regionTarget(step.region, circleG), circleG, step.id);
-      } else if (!pOk) {
-        say('tiltHint', 4000);
-      }
-
-      const label = t('fisheye.guided.progress', {
-        step: guidedStepRef.current + 1, total: GUIDED_STEPS.length,
-        group: t(`fisheye.guided.groups.${step.group}`),
-        action: t(`fisheye.guided.steps.${step.id}`),
-        shot: shots + 1, shots: step.shots,
-      });
-
-      const readyG = rOk && pOk && !needVary && sharpOk && still && debouncedG;
-      if (!readyG || snapInFlightRef.current) {
-        if (reason !== 'capturing') dwellStartRef.current = 0;
-        setAutoHud({ reason, dwell: 0, tilt: m.tilt, guidedLabel: label });
-        return;
-      }
-      if (dwellStartRef.current === 0) dwellStartRef.current = now;
-      const heldG = now - dwellStartRef.current;
-      setAutoHud({ reason: 'capturing', dwell: Math.min(1, heldG / DWELL_MS), tilt: m.tilt, guidedLabel: label });
-      if (heldG < DWELL_MS) return;
-
-      // Atomically claim the lock before starting async work
-      if (snapInFlightRef.current) return;  // double-check after dwell
-      snapInFlightRef.current = true;
-      lastAutoSnapRef.current = now;
-      dwellStartRef.current = 0;
-      const sigNow = shotSignature(m);
-      (async () => {
-        try {
-          const r = await api.snap(liveDevice, datasetPath);
-          if (snapCancelledRef.current) return;  // component unmounted
-          pushUndo({ kind: 'snap', path: r.path });
-          markCellsFromSnap({ silent: true });   // feed the fallback coverage % silently
-          const newShots = shots + 1;
-          if (newShots >= step.shots) {           // step done → advance
-            guidedShotsRef.current = 0;
-            guidedSigRef.current = null;
-            guidedStepRef.current += 1;
-            const done = guidedStepRef.current >= GUIDED_STEPS.length;
-            say(done ? 'allCovered' : 'captured', 600);
-            setGuidedProgress({ step: guidedStepRef.current, shots: 0 });
-          } else {                                 // banked shot 1 → wait for a varied 2nd
-            guidedShotsRef.current = newShots;
-            guidedSigRef.current = sigNow;
-            say('captured', 600);
-            setGuidedProgress({ step: guidedStepRef.current, shots: newShots });
-          }
-          setStatus(t('common.autoSnapped', { name: r.path.split('/').pop(), cell: guidedStepRef.current }));
-          const files = await refreshDataset();
-          if (snapCancelledRef.current) return;  // check again after async operation
-          if (files) setSelected(files.length);
-        } catch (e) {
-          if (snapCancelledRef.current) return;
-          setStatus(t('common.autoSnapFailed', { error: e.message }), true);
-        } finally {
-          snapInFlightRef.current = false;
+  // Polar coverage. Two sources, picked by phase:
+  //   • after a solve → bin the per-frame residuals into rings×sectors, which
+  //     also yields per-cell quality (mean reprojection error) for colouring.
+  //   • during capture → the live `capture.counts` tally from the hook, so the
+  //     dartboard fills in real time as the user snaps. `guidance` flags the
+  //     emptiest cell.
+  const coverage = useMemo(() => {
+    const total = totalPolarCells();
+    if (result?.per_frame_residuals?.length && covCircle) {
+      const counts = new Array(total).fill(0);
+      const errSum = new Array(total).fill(0);
+      for (const frame of result.per_frame_residuals) {
+        if (!frame) continue;
+        for (const c of frame) {
+          const idx = polarCellAt(c[0], c[1], covCircle);
+          if (idx == null) continue;
+          counts[idx] += 1;
+          const ex = c[2], ey = c[3];
+          if (Number.isFinite(ex) && Number.isFinite(ey)) errSum[idx] += Math.hypot(ex, ey);
         }
-      })();
-      return;
-    }
-
-    // 3) Novelty (corner-binned, to match the coverage tally): bin THIS board's
-    //    corners into the polar cells exactly like markCellsFromSnap, instead of
-    //    keying only on the cell its centroid sits in. A board "怼到边缘" deposits
-    //    corners into an empty outer-ring cell even while its centroid stays
-    //    mid-frame, so corner-in-cell rewards the edge shots that matter most for
-    //    fisheye. The target cell is the emptiest under-sampled cell the board
-    //    actually fills (≥ CAPTURE_MIN_CORNERS corners), tie-broken toward the
-    //    outer rings (higher flat index = outer) — the hardest, most valuable ones.
-    const circle = covCircleRef.current;
-    let sx = 0, sy = 0;
-    for (const c of corners) { sx += c[0]; sy += c[1]; }
-    const cenX = sx / corners.length, cenY = sy / corners.length;
-    const centroidCell = circle ? polarCellAt(cenX, cenY, circle) : null;
-    const counts = polarCountsRef.current;
-    const b = boardRef.current;
-    const tilt = boardTiltDeg(corners, b.cols, b.rows);
-    const perCell = circle ? binPolar(corners, circle) : [];
-    let cell = null, cellCount = TARGET_PER_CELL;
-    for (let i = 0; i < perCell.length; i++) {
-      if (perCell[i] < CAPTURE_MIN_CORNERS) continue;
-      const n = counts[i] ?? 0;
-      if (n < TARGET_PER_CELL && (cell == null || n < cellCount || (n === cellCount && i > cell))) {
-        cell = i; cellCount = n;
       }
+      const cells = counts.map(n => n > 0);
+      const meanErr = counts.map((n, i) => (n > 0 ? errSum[i] / n : null));
+      const filled = cells.reduce((n, on) => n + (on ? 1 : 0), 0);
+      return { cells, counts, meanErr, guidance: null, filled, total, percent: Math.round((filled / total) * 100) };
     }
-    // Tilt freshness is tracked against the target cell (or the centroid cell when
-    // the board adds no new coverage). Judged against the MOST RECENT capture in
-    // that cell, not every prior one: comparing to all past tilts means that once
-    // you've swept through a range of angles every new angle lands within
-    // TILT_MIN_DIFF of *some* earlier capture and the gate locks up ("换个倾斜角度"
-    // forever). Against just the last shot, an obvious tilt change reads as fresh.
-    const trackCell = cell != null ? cell : centroidCell;
-    const tilts = trackCell != null ? cellTiltsRef.current[trackCell] : [];
-    const lastTilt = tilts.length ? tilts[tilts.length - 1] : null;
-    const tiltFresh = tilt == null || lastTilt == null
-      || Math.abs(lastTilt - tilt) >= TILT_MIN_DIFF;
-    const underTarget = cell != null;     // set only when an under-target cell is filled
-    const novel = underTarget && (cellCount === 0 || tiltFresh);
+    const cells = capture.counts.map(c => c > 0);
+    const filled = cells.reduce((n, on) => n + (on ? 1 : 0), 0);
+    return {
+      cells, counts: capture.counts, meanErr: null,
+      guidance: geometry.pickGuidance(capture.counts),
+      filled, total, percent: Math.round((filled / total) * 100),
+    };
+  }, [result, covCircle, capture.counts, geometry]);
 
-    // 4) Debounce after a snap, and never overlap an in-flight snap.
-    const debounced = now - lastAutoSnapRef.current >= Math.max(400, autoRate * 1000);
-
-    let reason;
-    if (cell == null) reason = 'enough';                   // board adds no under-target coverage
-    else if (!tiltFresh) reason = 'tilt';                  // need a different angle here
-    else if (!sharpOk) reason = 'blurry';
-    else if (!still) reason = 'hold';
-    else reason = 'capturing';
-
-    // Spoken directional guidance — event-driven, not on a fixed timer. We only
-    // speak when it carries new information: the target cell changed, the
-    // recommended direction changed, the board drifted the wrong way, or it
-    // stalled with no progress. While the board is steadily approaching the
-    // target we stay silent. Arriving on the target says "就这儿，稳住" once.
-    steerVoice({
-      cell: centroidCell, reason, circle,
-      curX: cenX, curY: cenY,
-    });
-
-    const ready = novel && sharpOk && still && debounced;
-    if (!ready || snapInFlightRef.current) {
-      if (reason !== 'capturing') dwellStartRef.current = 0;
-      if (reason === 'tilt') say('tiltHint', 4000);
-      setAutoHud({ reason, dwell: 0, tilt });
-      return;
-    }
-
-    // 5) Dwell: hold the good pose for DWELL_MS before firing.
-    if (dwellStartRef.current === 0) dwellStartRef.current = now;
-    const held = now - dwellStartRef.current;
-    setAutoHud({ reason: 'capturing', dwell: Math.min(1, held / DWELL_MS), tilt });
-    if (held < DWELL_MS) return;
-
-    // Atomically claim the lock before starting async work
-    if (snapInFlightRef.current) return;  // double-check after dwell
-    snapInFlightRef.current = true;
-    lastAutoSnapRef.current = now;
-    dwellStartRef.current = 0;
-    (async () => {
-      try {
-        const r = await api.snap(liveDevice, datasetPath);
-        if (snapCancelledRef.current) return;  // component unmounted
-        pushUndo({ kind: 'snap', path: r.path });
-        markCellsFromSnap();
-        setStatus(t('common.autoSnapped', { name: r.path.split('/').pop(), cell: cell ?? 0 }));
-        const files = await refreshDataset();
-        if (snapCancelledRef.current) return;  // check again after async operation
-        if (files) setSelected(files.length);
-      } catch (e) {
-        if (snapCancelledRef.current) return;
-        setStatus(t('common.autoSnapFailed', { error: e.message }), true);
-      } finally {
-        snapInFlightRef.current = false;
-      }
-    })();
-  }, [autoCapture, liveDevice, datasetPath, autoRate, say, markCellsFromSnap, steerVoice, guidedSteer, t]);
+  useEffect(() => { guidanceRef.current = coverage.guidance; }, [coverage.guidance]);
 
   const onDrop = async () => {
     if (!selectedPath) { setStatus(t('common.noFrameSelected')); return; }
@@ -793,28 +425,7 @@ export function FisheyeTab({ active, tweaks }) {
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 
-  // Advance the guided checklist by one banked shot. Auto-capture advances inline
-  // in onAutoMeta; this keeps manual (space-bar) snaps in guided mode in sync so
-  // the overlay/HUD step doesn't stall while the user shoots by hand.
-  const advanceGuidedShot = () => {
-    const step = GUIDED_STEPS[guidedStepRef.current];
-    if (!step) return;
-    const m = analyzeBoard(latestMetaRef.current?.corners, boardRef.current, covCircleRef.current);
-    const shots = guidedShotsRef.current;
-    const newShots = shots + 1;
-    if (newShots >= step.shots) {
-      guidedShotsRef.current = 0; guidedSigRef.current = null; guidedStepRef.current += 1;
-      setGuidedProgress({ step: guidedStepRef.current, shots: 0 });
-    } else {
-      guidedShotsRef.current = newShots; guidedSigRef.current = shotSignature(m);
-      setGuidedProgress({ step: guidedStepRef.current, shots: newShots });
-    }
-  };
-
   const onSnap = async () => {
-    // Block manual snap unconditionally if any snap is in flight (guided or polar)
-    if (snapInFlightRef.current) return;
-
     let dir = datasetPath;
     if (!dir) {
       const picked = await pickFolder();
@@ -823,29 +434,21 @@ export function FisheyeTab({ active, tweaks }) {
       dir = picked;
     }
     if (!liveDevice) { setStatus(t('common.pickCamera'), true); return; }
-    const guided = captureModeRef.current === 'guided';
-
-    try {
-      // Always set lock for manual snap to prevent race with auto-capture
-      snapInFlightRef.current = true;
-      const r = await api.snap(liveDevice, dir);
-      if (snapCancelledRef.current) return;  // component unmounted
-      pushUndo({ kind: 'snap', path: r.path });
-      markCellsFromSnap({ silent: guided });
-      if (guided) { advanceGuidedShot(); say('captured', 600); }
-      setStatus(t('common.snapped', { name: r.path.split('/').pop() }));
-      if (dir === datasetPath) {
-        // Refresh the listing but keep the live view in the cell — the user is mid-capture
-        // and shouldn't have the frame jump to the just-saved still. Click a thumbnail in
-        // the FrameStrip to inspect a saved frame.
-        await refreshDataset();
+    const guided = captureMode === 'guided';
+    await capture.withSnapLock(async () => {
+      try {
+        const r = await api.snap(liveDevice, dir);
+        pushUndo({ kind: 'snap', path: r.path });
+        capture.markFromManualSnap({ silent: guided });
+        if (guided) { capture.advanceGuidedShot(); say('captured', 600); }
+        setStatus(t('common.snapped', { name: r.path.split('/').pop() }));
+        // Refresh the listing but keep the live view in the cell — the user is
+        // mid-capture and shouldn't have the frame jump to the just-saved still.
+        if (dir === datasetPath) await refreshDataset();
+      } catch (e) {
+        setStatus(t('common.snapFailed', { error: e.message }), true);
       }
-    } catch (e) {
-      if (snapCancelledRef.current) return;
-      setStatus(t('common.snapFailed', { error: e.message }), true);
-    } finally {
-      snapInFlightRef.current = false;
-    }
+    });
   };
   // Keep refs pointed at the latest closures so the global keydown handler
   // always invokes the up-to-date functions (which close over liveDevice / datasetPath).
@@ -971,7 +574,7 @@ export function FisheyeTab({ active, tweaks }) {
 
   // Guided overlay descriptor for the live frame: the active step's region + pose
   // glyph, or {done:true} once the checklist is exhausted. null in polar mode.
-  const guidedStepNow = GUIDED_STEPS[guidedProgress.step];
+  const guidedStepNow = GUIDED_STEPS[capture.guidedProgress.step];
   const guidedOverlay = guidedMode
     ? (guidedStepNow
         ? { region: guidedStepNow.region, glyph: guidedStepNow.glyph,
@@ -989,7 +592,7 @@ export function FisheyeTab({ active, tweaks }) {
         liveDetect
           ? <LiveDetectedFrame device={liveDevice} board={board}
                 showCorners={showBoard} showOrigin={true}
-                onMeta={onAutoMeta}
+                onMeta={capture.onMeta}
                 onCircle={setCircle}
                 showPolarGrid={showPolar}
                 polarCells={coverage.cells}
@@ -1012,7 +615,8 @@ export function FisheyeTab({ active, tweaks }) {
       ) : (
         emptyCell(t('fisheye.connectOrLoad'))
       )}
-      {showLive && liveDetect && autoCapture && autoHud && (() => {
+      {showLive && liveDetect && autoCapture && capture.autoHud && (() => {
+        const autoHud = capture.autoHud;
         const r = autoHud.reason;
         const color = r === 'capturing' ? 'var(--ok)' : r === 'blurry' || r === 'noBoard' ? 'var(--warn)' : 'var(--text-2)';
         return (
@@ -1131,7 +735,6 @@ export function FisheyeTab({ active, tweaks }) {
               // liveDetect on alongside it. Leaving liveDetect off would render
               // the toggle silently inert.
               if (v) setLiveDetect(true);
-              else { setAutoHud(null); dwellStartRef.current = 0; }
             }}
             autoRate={autoRate}
             onAutoRate={setAutoRate}

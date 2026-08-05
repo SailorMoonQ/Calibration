@@ -3,7 +3,8 @@ import { useTranslation } from 'react-i18next';
 import { streamWsUrl } from '../api/client.js';
 import { useReportCamera } from '../lib/telemetry.jsx';
 import { detectCircleFromImageData, polarCellGeometry, polarCellAt } from '../lib/polarCoverage.js';
-import { regionTarget, boardScale } from '../lib/guidedSequence.js';
+import { regionTarget, boardScale, targetHalfSize } from '../lib/guidedSequence.js';
+import { extentFromCircle } from '../lib/boardMetrics.js';
 
 // Draw the pose-hint glyph for the guided sequence at (x,y), sized to ~r. The
 // shape tells the operator what ORIENTATION the board should be at for this step
@@ -52,21 +53,6 @@ function drawGuidedGlyph(ctx, x, y, r, glyph, unit, phase = 0) {
       ctx.moveTo(x, y - s * 0.4); ctx.lineTo(x, y + s * 0.4); ctx.stroke(); break;
   }
   ctx.restore();
-}
-
-// Recommended on-screen half-size of the target board, as a fraction of the image
-// circle radius — bigger for centre/near, smaller for edges/far (docs §3: a centred
-// board should fill ~1/3–1/2 of the frame, edge boards may be smaller). Aspect ≈ the
-// real board's cols:rows so the operator matches shape, not just position.
-function targetHalfSize(step, circle, bCols, bRows) {
-  const r = circle.r;
-  let frac;
-  if (step.pose === 'dist') frac = step.scale === 'near' ? 0.5 : step.scale === 'far' ? 0.27 : 0.38;
-  else if (step.group === 'edge') frac = 0.27;
-  else if (step.region === 'center') frac = 0.42;
-  else frac = 0.34;
-  const halfW = frac * r;
-  return { halfW, halfH: halfW * (bRows / Math.max(1, bCols)) };
 }
 
 // Stroke a closed polyline twice — a dark underlay then the colour on top — so a
@@ -192,6 +178,9 @@ export function LiveDetectedFrame({
   coverageCells = null,   // bool[covCols*covRows] — which cells are already captured
   coverageCounts = null,  // int[]  — how many captures landed in each cell (depth of green)
   fovMask = null,         // bool[] — false = cell outside fisheye FOV (drawn N/A, not red)
+  gridGuidance = null,    // int|null — cartesian cell to steer the board toward next
+  gridTarget = 5,         // captures-per-cell that reads as "done" (deep green).
+                          // Must match the caller's useSmartCapture targetPerCell.
   covCols = 8, covRows = 5,
   showCoverageGrid = false,
   showFootprint = false,  // accumulate + draw the detection-reachable heat
@@ -202,10 +191,16 @@ export function LiveDetectedFrame({
   polarCounts = null,     // int[]   — captures per polar cell (depth of green)
   polarGuidance = null,   // int|null — cell index to steer the board toward next
   polarTarget = 5,        // captures-per-cell that counts as "采够" → persistent deep green
+                           // — must match TARGET_PER_CELL in useSmartCapture.js, the source of truth
   rings = 3, sectors = 8,
   // Guided-sequence overlay (doc-driven mode): { region, glyph, done } for the
   // active checklist step, or null in polar mode. Shares the image-circle detection.
   guided = null,
+  // Explicit region geometry for the guided overlay, as {cx, cy, rx, ry}. When
+  // given we use it and skip circle auto-detection entirely — a pinhole frame
+  // has no dark border, so detectCircleFromImageData would return a meaningless
+  // disk, and running it costs a full-frame getImageData every 1.2s.
+  guidedExtent = null,
   onCircle,               // optional: called with {cx,cy,r} when the circle is detected
   mirror = false,         // display-only horizontal flip (does not affect saved frames)
 }) {
@@ -229,13 +224,13 @@ export function LiveDetectedFrame({
   const covRef = useRef(null);
   useEffect(() => {
     covRef.current = {
-      cells: coverageCells, counts: coverageCounts, fovMask,
+      cells: coverageCells, counts: coverageCounts, fovMask, gridGuidance, gridTarget,
       cols: covCols, rows: covRows, showGrid: showCoverageGrid, showFootprint,
       showPolar: showPolarGrid, polarCells, polarCounts, polarGuidance, target: polarTarget, rings, sectors,
-      guided,
+      guided, guidedExtent,
     };
-  }, [coverageCells, coverageCounts, fovMask, covCols, covRows, showCoverageGrid, showFootprint,
-      showPolarGrid, polarCells, polarCounts, polarGuidance, polarTarget, rings, sectors, guided]);
+  }, [coverageCells, coverageCounts, fovMask, gridGuidance, gridTarget, covCols, covRows, showCoverageGrid, showFootprint,
+      showPolarGrid, polarCells, polarCounts, polarGuidance, polarTarget, rings, sectors, guided, guidedExtent]);
   // Persistent detection-footprint accumulator (reset when the stream restarts).
   const footprintRef = useRef(new Float32Array(FP_COLS * FP_ROWS));
   // det_seq of the last detection already folded into the footprint, so the same
@@ -296,8 +291,9 @@ export function LiveDetectedFrame({
       const phase = performance.now() / 1000;   // animation clock for the live hints
 
       // ── Auto-detect the fisheye image circle (throttled, from the clean frame
-      // BEFORE any overlay is painted) ──────────────────────────────────────
-      if (cov?.showPolar || cov?.guided) {
+      // BEFORE any overlay is painted). Skipped when the caller supplied an
+      // explicit guidedExtent and no polar dartboard is being drawn. ──────────
+      if (cov?.showPolar || (cov?.guided && !cov.guidedExtent)) {
         const sizeKey = `${w}x${h}`;
         const now = performance.now();
         let cc = circleRef.current;
@@ -352,25 +348,35 @@ export function LiveDetectedFrame({
       //   • outside FOV (fisheye corners) → dim diagonal hatch, "N/A", not red.
       //   • captured → green, deepening with the number of captures.
       //   • coverable but empty → red outline.
-      //   • the cell the live board currently sits in → amber pulse.
-      // The FOV ellipse is outlined so the user sees exactly which region counts.
+      //   • the cell to fill next (gridGuidance) → amber wash + pulsing dot,
+      //     with a marching arrow from the live board toward it.
+      //   • the cell the live board currently sits in → blue outline.
+      // When a fovMask is in play, the FOV ellipse is outlined too, so the user
+      // sees exactly which region counts.
       if (cov?.showGrid && cov.cells) {
         const cols = cov.cols, rows = cov.rows;
         const mask = cov.fovMask;
         const counts = cov.counts;
+        // Read through `cov`, not the prop: this closure is built once per stream
+        // and that effect does not depend on gridTarget, so the prop would be stale.
+        const doneAt = cov.gridTarget ?? 5;
         const gw = w / cols, gh = h / rows;
 
         // The live board's current cell — but only flag it when the board
         // genuinely fills a cell (a clear majority of corners), so just sweeping
-        // the board across the frame doesn't imply coverage.
-        let curCell = -1;
+        // the board across the frame doesn't imply coverage. The centroid is
+        // kept too, as the tail of the steer arrow toward the guidance cell.
+        let curCell = -1, cenX = null, cenY = null;
         if (corners.length) {
+          let sx = 0, sy = 0;
           const per = new Array(cols * rows).fill(0);
           for (const [x, y] of corners) {
+            sx += x; sy += y;
             const ci = Math.min(cols - 1, Math.max(0, Math.floor((x / w) * cols)));
             const ri = Math.min(rows - 1, Math.max(0, Math.floor((y / h) * rows)));
             per[ri * cols + ci] += 1;
           }
+          cenX = sx / corners.length; cenY = sy / corners.length;
           let best = -1, bestN = 0;
           for (let k = 0; k < per.length; k++) if (per[k] > bestN) { bestN = per[k]; best = k; }
           if (bestN >= 3) curCell = best;
@@ -399,26 +405,58 @@ export function LiveDetectedFrame({
           const on = cov.cells[k];
           if (on) {
             const n = counts ? counts[k] : 1;
-            const a = Math.min(0.42, 0.16 + (n - 1) * 0.1);   // deeper green with more captures
-            ctx.fillStyle = `oklch(0.72 0.16 150 / ${a.toFixed(3)})`;
+            if (n >= doneAt) {
+              // 采够 — persistent deep green, so a finished cell reads as done at
+              // a glance instead of just "slightly darker". Mirrors the dartboard.
+              ctx.fillStyle = 'oklch(0.52 0.17 150 / 0.62)';
+            } else {
+              const a = Math.min(0.42, 0.16 + (n - 1) * 0.1);   // deeper green with more captures
+              ctx.fillStyle = `oklch(0.72 0.16 150 / ${a.toFixed(3)})`;
+            }
             ctx.fillRect(x0, y0, gw, gh);
           }
           ctx.strokeStyle = on ? 'oklch(0.78 0.15 150 / 0.55)' : 'oklch(0.7 0.13 30 / 0.4)';
           ctx.strokeRect(x0 + 0.5, y0 + 0.5, gw - 1, gh - 1);
         }
+        // Guidance: the cell to fill next — amber wash + amber border + a pulsing
+        // target dot, with a marching arrow from the live board toward it. Same
+        // visual language as the polar dartboard's guidance wedge, so the two
+        // tabs read alike. Skipped for a masked (non-coverable) cell.
+        const guide = cov.gridGuidance;
+        if (guide != null && guide >= 0 && guide < cols * rows && (!mask || mask[guide])) {
+          const ci = guide % cols, ri = (guide / cols) | 0;
+          const gx = (ci + 0.5) * gw, gy = (ri + 0.5) * gh;
+          ctx.fillStyle = 'oklch(0.85 0.18 90 / 0.2)';
+          ctx.fillRect(ci * gw, ri * gh, gw, gh);
+          ctx.strokeStyle = 'oklch(0.9 0.18 90 / 0.95)';
+          ctx.lineWidth = Math.max(2, cornerR * 0.5);
+          ctx.strokeRect(ci * gw + 1, ri * gh + 1, gw - 2, gh - 2);
+          const tpulse = 1 + 0.25 * Math.sin(phase * 6);
+          ctx.fillStyle = 'oklch(0.92 0.18 90 / 0.95)';
+          ctx.beginPath(); ctx.arc(gx, gy, cornerR * 1.9 * tpulse, 0, Math.PI * 2); ctx.fill();
+          if (cenX != null) drawSteerArrow(ctx, cenX, cenY, gx, gy, cornerR, phase);
+        }
+
+        // Where the board is right now — blue, matching the dartboard, so it
+        // never competes with the amber "go here" cell above.
         if (curCell >= 0) {
           const ci = curCell % cols, ri = (curCell / cols) | 0;
-          ctx.strokeStyle = 'oklch(0.85 0.18 90 / 0.95)';
+          ctx.strokeStyle = 'oklch(0.8 0.16 235 / 0.95)';
           ctx.lineWidth = Math.max(2, cornerR * 0.55);
           ctx.strokeRect(ci * gw + 1.5, ri * gh + 1.5, gw - 3, gh - 3);
         }
 
-        // FOV ellipse boundary (inscribed, touching the edge midpoints).
-        ctx.strokeStyle = 'oklch(0.8 0.05 220 / 0.35)';
-        ctx.lineWidth = Math.max(1, cornerR * 0.3);
-        ctx.beginPath();
-        ctx.ellipse(w / 2, h / 2, w / 2, h / 2, 0, 0, Math.PI * 2);
-        ctx.stroke();
+        // FOV ellipse boundary (inscribed, touching the edge midpoints). Only
+        // meaningful when a mask is actually delimiting the coverable region
+        // (a vignetted lens) — without one (e.g. pinhole) there's nothing to
+        // delimit, and the corner cells are coverable, not outside the FOV.
+        if (mask) {
+          ctx.strokeStyle = 'oklch(0.8 0.05 220 / 0.35)';
+          ctx.lineWidth = Math.max(1, cornerR * 0.3);
+          ctx.beginPath();
+          ctx.ellipse(w / 2, h / 2, w / 2, h / 2, 0, 0, Math.PI * 2);
+          ctx.stroke();
+        }
       }
 
       // ── Polar dartboard coverage (circular fisheye) ───────────────────────
@@ -515,61 +553,68 @@ export function LiveDetectedFrame({
       // shown, not just a static outline — mirroring docs/fisheye-howto §2. A marching
       // arrow points from the live board to the target; the live board's own quad is
       // outlined and tinted by how much of the frame it fills (doc §3 size guidance).
-      if (cov?.guided && circleRef.current?.circle) {
-        const circle = circleRef.current.circle;
-        const g = cov.guided;
-        // FOV circle (dashed, faint) — the fisheye image boundary, matches the doc figures
-        ctx.save();
-        ctx.setLineDash([cornerR * 2, cornerR * 2]);
-        ctx.strokeStyle = 'oklch(0.85 0.03 230 / 0.4)';
-        ctx.lineWidth = Math.max(1, cornerR * 0.3);
-        ctx.beginPath(); ctx.arc(circle.cx, circle.cy, circle.r, 0, Math.PI * 2); ctx.stroke();
-        ctx.restore();
+      if (cov?.guided) {
+        const extent = cov.guidedExtent || extentFromCircle(circleRef.current?.circle);
+        if (extent) {
+          const g = cov.guided;
+          // Region boundary (dashed, faint) — the fisheye image circle, or the
+          // pinhole frame's inscribed ellipse. Matches the doc figures. (A
+          // fisheye extent always has rx === ry, so this ellipse renders the
+          // same circle the old ctx.arc(cx, cy, r, ...) did.)
+          ctx.save();
+          ctx.setLineDash([cornerR * 2, cornerR * 2]);
+          ctx.strokeStyle = 'oklch(0.85 0.03 230 / 0.4)';
+          ctx.lineWidth = Math.max(1, cornerR * 0.3);
+          ctx.beginPath();
+          ctx.ellipse(extent.cx, extent.cy, extent.rx, extent.ry, 0, 0, Math.PI * 2);
+          ctx.stroke();
+          ctx.restore();
 
-        if (!g.done) {
-          const tgt = regionTarget(g.region, circle);
-          const ts = tgt ? targetHalfSize(g, circle, bCols, bRows) : null;
-          // live board centroid + outer quad (only a full detection has the quad)
-          let cenX = null, cenY = null, quad = null;
-          if (corners.length) {
-            let sx = 0, sy = 0;
-            for (const [x, y] of corners) { sx += x; sy += y; }
-            cenX = sx / corners.length; cenY = sy / corners.length;
-            const nb = bCols * bRows;
-            if (corners.length >= nb) {
-              quad = [corners[0], corners[bCols - 1], corners[nb - 1], corners[bCols * (bRows - 1)]];
+          if (!g.done) {
+            const tgt = regionTarget(g.region, extent);
+            const ts = tgt ? targetHalfSize(g, extent, bCols, bRows) : null;
+            // live board centroid + outer quad (only a full detection has the quad)
+            let cenX = null, cenY = null, quad = null;
+            if (corners.length) {
+              let sx = 0, sy = 0;
+              for (const [x, y] of corners) { sx += x; sy += y; }
+              cenX = sx / corners.length; cenY = sy / corners.length;
+              const nb = bCols * bRows;
+              if (corners.length >= nb) {
+                quad = [corners[0], corners[bCols - 1], corners[nb - 1], corners[bCols * (bRows - 1)]];
+              }
             }
-          }
 
-          if (tgt && ts) {
-            drawTargetBoard(ctx, tgt.x, tgt.y, ts.halfW, ts.halfH, g, cornerR, phase);
-            // reinforce poses the rect shape doesn't already convey (frontal / near-far)
-            if (g.pose === 'frontal' || g.pose === 'dist') {
-              drawGuidedGlyph(ctx, tgt.x, tgt.y, Math.min(ts.halfW, ts.halfH), g.glyph, cornerR, phase);
+            if (tgt && ts) {
+              drawTargetBoard(ctx, tgt.x, tgt.y, ts.halfW, ts.halfH, g, cornerR, phase);
+              // reinforce poses the rect shape doesn't already convey (frontal / near-far)
+              if (g.pose === 'frontal' || g.pose === 'dist') {
+                drawGuidedGlyph(ctx, tgt.x, tgt.y, Math.min(ts.halfW, ts.halfH), g.glyph, cornerR, phase);
+              }
+              // marching "go here" arrow while the board is away from the target zone
+              if (cenX != null && Math.hypot(cenX - tgt.x, cenY - tgt.y) > tgt.acceptR) {
+                drawSteerArrow(ctx, cenX, cenY, tgt.x, tgt.y, cornerR, phase);
+              }
             }
-            // marching "go here" arrow while the board is away from the target zone
-            if (cenX != null && Math.hypot(cenX - tgt.x, cenY - tgt.y) > tgt.acceptR) {
-              drawSteerArrow(ctx, cenX, cenY, tgt.x, tgt.y, cornerR, phase);
-            }
-          }
 
-          // Live board outline, tinted by ABSOLUTE frame-fill quality (doc §3): green
-          // when it occupies a good fraction of the FOV, amber when too big (outer
-          // corners get clipped) or too small (corners blur), blue in between. A
-          // step-relative band was tried but read WORSE on the /tmp/1+/tmp/4 captures
-          // (real boards cluster ~0.24–0.58 regardless of step), so this fixed band —
-          // which the sample sets validate at 35/38 correctly-placed frames green — stays.
-          if (quad) {
-            const sc = boardScale(corners, bCols, bRows, circle);
-            let qc = 'oklch(0.8 0.16 235 / 0.95)';                       // blue: detected, transitional size
-            if (sc != null) {
-              if (sc > 0.66 || sc < 0.24) qc = 'oklch(0.72 0.18 35 / 0.95)';        // 太大/太小
-              else if (sc >= 0.30 && sc <= 0.60) qc = 'oklch(0.78 0.16 150 / 0.95)'; // 合适
+            // Live board outline, tinted by ABSOLUTE frame-fill quality (doc §3): green
+            // when it occupies a good fraction of the FOV, amber when too big (outer
+            // corners get clipped) or too small (corners blur), blue in between. A
+            // step-relative band was tried but read WORSE on the /tmp/1+/tmp/4 captures
+            // (real boards cluster ~0.24–0.58 regardless of step), so this fixed band —
+            // which the sample sets validate at 35/38 correctly-placed frames green — stays.
+            if (quad) {
+              const sc = boardScale(corners, bCols, bRows, extent);
+              let qc = 'oklch(0.8 0.16 235 / 0.95)';                       // blue: detected, transitional size
+              if (sc != null) {
+                if (sc > 0.66 || sc < 0.24) qc = 'oklch(0.72 0.18 35 / 0.95)';        // 太大/太小
+                else if (sc >= 0.30 && sc <= 0.60) qc = 'oklch(0.78 0.16 150 / 0.95)'; // 合适
+              }
+              drawBoardQuad(ctx, quad, qc, cornerR);
+            } else if (cenX != null) {
+              ctx.fillStyle = 'oklch(0.8 0.16 235 / 0.95)';
+              ctx.beginPath(); ctx.arc(cenX, cenY, cornerR * 2.2, 0, Math.PI * 2); ctx.fill();
             }
-            drawBoardQuad(ctx, quad, qc, cornerR);
-          } else if (cenX != null) {
-            ctx.fillStyle = 'oklch(0.8 0.16 235 / 0.95)';
-            ctx.beginPath(); ctx.arc(cenX, cenY, cornerR * 2.2, 0, Math.PI * 2); ctx.fill();
           }
         }
       }
