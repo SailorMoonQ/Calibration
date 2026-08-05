@@ -99,6 +99,20 @@ export function CameraParamsTab() {
 
   const onUnlock = useCallback((parentId, unlockValue) => onSet(parentId, unlockValue), [onSet]);
 
+  // An advice action can be a pair — lowering gain without raising exposure just
+  // makes the picture dark, which costs the black squares and is worse than the
+  // noise it was meant to fix. Applied in the order the advice gives them.
+  const applyAdvice = useCallback(async (action) => {
+    const sets = action.sets || [{ control: action.control, value: action.value }];
+    for (const s of sets) {
+      // Sequential, not parallel: each write returns the refreshed control list,
+      // and a later write must see the state the earlier one produced (raising
+      // exposure can change what the driver will accept for gain).
+      // eslint-disable-next-line no-await-in-loop
+      await onSet(s.control, s.value);
+    }
+  }, [onSet]);
+
   const mutate = useCallback(async (body) => {
     if (!liveDevice) return;
     setBusy(true);
@@ -253,7 +267,7 @@ export function CameraParamsTab() {
             <>
               <Section title={t('cameraParams.adviceTitle')}>
                 <CameraAdvice controls={controls} stats={stats} sharpnessPeak={sharpPeak}
-                              onApply={onSet} busy={busy}/>
+                              onApply={applyAdvice} busy={busy}/>
               </Section>
 
               <Section title={t('cameraParams.commonControls')}>

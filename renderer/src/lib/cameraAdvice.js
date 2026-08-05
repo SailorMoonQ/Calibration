@@ -56,6 +56,61 @@ const nudge = (c, delta) => {
   return Math.max(c.min, Math.min(c.max, Math.round(v)));
 };
 
+// Trade gain for exposure at roughly constant brightness.
+//
+// Returns the paired writes, or null when exposure cannot absorb any of it.
+//
+// The brightness model is deliberately crude: V4L2 does not define what a gain
+// unit means — some drivers are linear in a multiplier, others in dB, others in
+// a raw register — so an exact compensation is not computable. We assume
+// brightness scales with (value - min) offset by one unit, take a MODEST step,
+// and let the user click again. Being off by a factor then costs a slightly
+// wrong brightness that the clipping checks immediately report, rather than a
+// confident jump to the wrong place.
+function tradeGainForExposure(gain, exp, wantDrop) {
+  if (!gain || !exp || exp.inactive || exp.value == null) return null;
+  const span = gain.max - gain.min;
+  if (!span) return null;
+
+  // Treat gain as a multiplier proportional to (value - min + 1) so that the
+  // bottom of the range is unity rather than zero brightness.
+  const g0 = gain.value - gain.min + 1;
+  const headroomMs = Math.max(0, BLUR_MS - exp.value * EXPOSURE_UNIT_MS);
+  if (headroomMs <= 0) return null;   // already at the blur limit
+
+  // Largest exposure we are willing to reach, bounded by blur and by the control.
+  const expMax = Math.min(exp.max, Math.round(BLUR_MS / EXPOSURE_UNIT_MS));
+  if (expMax <= exp.value) return null;
+
+  // How much brightness the exposure can add, and therefore how much gain we can
+  // afford to give up.
+  const expRatioMax = expMax / exp.value;
+  const wantedRatio = g0 / Math.max(1, g0 - wantDrop * span);
+  const ratio = Math.min(wantedRatio, expRatioMax);
+  if (ratio <= 1.02) return null;     // not worth a round trip
+
+  const newGainRaw = gain.min + (g0 / ratio) - 1;
+  const newGain = clampToStep(gain, newGainRaw);
+  const newExp = clampToStep(exp, exp.value * ratio);
+  if (newGain >= gain.value || newExp <= exp.value) return null;
+
+  return {
+    sets: [
+      // Exposure first: a momentarily brighter frame is friendlier than a
+      // momentarily black one if the user is watching the board.
+      { control: exp.id, value: newExp },
+      { control: gain.id, value: newGain },
+    ],
+  };
+}
+
+function clampToStep(c, raw) {
+  const step = c.step || 1;
+  let v = c.min + Math.round((raw - c.min) / step) * step;
+  v = Math.max(c.min, Math.min(c.max, Math.round(v)));
+  return v;
+}
+
 // `powerLineHz` is the local mains frequency; mismatched settings band the image
 // under artificial light. Defaults to 50 (most of the world outside the Americas).
 export function assessCamera({ controls, stats, powerLineHz = 50 } = {}) {
@@ -117,12 +172,32 @@ export function assessCamera({ controls, stats, powerLineHz = 50 } = {}) {
   }
 
   // ── noise vs blur ─────────────────────────────────────────────────────────
+  // Gain and exposure are a COUPLED pair: both scale brightness, and the reason
+  // to prefer exposure is that it adds signal while gain only amplifies what is
+  // there, noise included. So the fix is never "turn the gain down" on its own —
+  // that just makes the picture dark, and a dark board loses its black squares,
+  // which is worse than a slightly noisy one. Every gain reduction here is
+  // paired with the exposure rise that holds brightness, and is scaled back to
+  // whatever that exposure can actually absorb.
   const gain = c.gain;
   const gf = frac(gain);
   if (gf != null) {
-    if (gf >= GAIN_BAD) add('gainHigh', 'bad', { control: gain.id, value: nudge(gain, -0.3) });
-    else if (gf >= GAIN_WARN) add('gainHigh', 'warn', { control: gain.id, value: nudge(gain, -0.15) });
-    else add('gainHigh', 'ok');
+    if (gf >= GAIN_WARN) {
+      const swap = tradeGainForExposure(gain, exp, gf >= GAIN_BAD ? 0.3 : 0.15);
+      const level = gf >= GAIN_BAD ? 'bad' : 'warn';
+      if (swap) {
+        add('gainHigh', level, { sets: swap.sets });
+      } else if (exp && exp.inactive) {
+        add('gainHigh', level, null, exp.locked_by?.id || null);
+      } else {
+        // Exposure has nothing left to give: at this light level the gain is
+        // doing necessary work, and cutting it would only darken the picture.
+        // The real fix is more light, which no control can supply.
+        add('gainNeedsLight', level);
+      }
+    } else {
+      add('gainHigh', 'ok');
+    }
   }
 
   if (exp && !exp.inactive && exp.value != null) {

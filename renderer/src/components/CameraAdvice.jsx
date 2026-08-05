@@ -49,7 +49,7 @@ export function CameraAdvice({ controls, stats, sharpnessPeak, onApply, busy }) 
           {item.action ? (
             <button className="btn" style={{ alignSelf: 'flex-start', fontSize: 10.5, padding: '2px 8px' }}
                     disabled={busy}
-                    onClick={() => onApply(item.action.control, item.action.value)}>
+                    onClick={() => onApply(item.action)}>
               {t(`cameraParams.advice.${item.id}.fix`)}
             </button>
           ) : item.blockedBy ? (

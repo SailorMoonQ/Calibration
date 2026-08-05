@@ -118,16 +118,88 @@ test('the suggested value respects a non-unit step', () => {
 
 // ── noise vs blur ───────────────────────────────────────────────────────────
 
-test('high gain is flagged because noise defeats sub-pixel corners', () => {
+// Gain and exposure are a coupled pair. Dropping gain alone just darkens the
+// picture, and a dark board loses its black squares — worse than the noise it
+// was meant to fix. These tests pin that the advice never does that.
+
+const EXP = (over = {}) => ctrl('exposure_time_absolute', { min: 50, max: 10000, value: 110, ...over });
+
+test('lowering gain is ALWAYS paired with raising exposure', () => {
   const g = ctrl('gain', { min: 0, max: 128, value: 120 });
-  const item = find(assessCamera({ controls: [g], stats: clean }), 'gainHigh');
+  const item = find(assessCamera({ controls: [g, EXP()], stats: clean }), 'gainHigh');
   assert.equal(item.level, 'bad');
-  assert.ok(item.action.value < 120);
+  const sets = item.action.sets;
+  assert.equal(sets.length, 2);
+  const gs = sets.find(s => s.control === 'gain');
+  const es = sets.find(s => s.control === 'exposure_time_absolute');
+  assert.ok(gs.value < 120, 'gain must come down');
+  assert.ok(es.value > 110, 'exposure must come up to hold brightness');
+});
+
+test('exposure is written before gain, so the transient is bright not black', () => {
+  const g = ctrl('gain', { min: 0, max: 128, value: 120 });
+  const sets = find(assessCamera({ controls: [g, EXP()], stats: clean }), 'gainHigh').action.sets;
+  assert.equal(sets[0].control, 'exposure_time_absolute');
+  assert.equal(sets[1].control, 'gain');
+});
+
+test('the paired exposure never crosses the motion-blur limit', () => {
+  // BLUR_MS is 16 ms and the unit is 100 µs, so 160 is the ceiling.
+  const g = ctrl('gain', { min: 0, max: 128, value: 128 });
+  const sets = find(assessCamera({ controls: [g, EXP({ value: 140 })], stats: clean }), 'gainHigh').action.sets;
+  const es = sets.find(s => s.control === 'exposure_time_absolute');
+  assert.ok(es.value <= 160, `exposure ${es.value} would blur a handheld board`);
+});
+
+test('the gain cut is scaled back to what the exposure can absorb', () => {
+  // Exposure nearly at the blur limit can only add a little, so gain may only
+  // fall a little — cutting it further would darken the picture.
+  const g = ctrl('gain', { min: 0, max: 128, value: 128 });
+  const tight = find(assessCamera({ controls: [g, EXP({ value: 150 })], stats: clean }), 'gainHigh');
+  const roomy = find(assessCamera({ controls: [g, EXP({ value: 60 })], stats: clean }), 'gainHigh');
+  const drop = (it) => 128 - it.action.sets.find(s => s.control === 'gain').value;
+  assert.ok(drop(tight) < drop(roomy), `${drop(tight)} should be a smaller cut than ${drop(roomy)}`);
+});
+
+test('no exposure headroom means no gain fix at all, and a different message', () => {
+  // At the blur limit there is nothing to trade. Telling the user to cut gain
+  // here would darken the picture for no benefit; what they need is more light.
+  const g = ctrl('gain', { min: 0, max: 128, value: 120 });
+  const a = assessCamera({ controls: [g, EXP({ value: 200 })], stats: clean });
+  assert.equal(find(a, 'gainHigh'), undefined);
+  assert.equal(find(a, 'gainNeedsLight').level, 'bad');
+});
+
+test('a locked exposure blocks the gain fix rather than cutting gain alone', () => {
+  const g = ctrl('gain', { min: 0, max: 128, value: 120 });
+  const exp = EXP({ inactive: true, locked_by: { id: 'auto_exposure', unlock_value: 1 } });
+  const item = find(assessCamera({ controls: [g, exp], stats: clean }), 'gainHigh');
+  assert.equal(item.action, undefined);
+  assert.equal(item.blockedBy, 'auto_exposure');
+});
+
+test('with no exposure control at all, gain is never cut on its own', () => {
+  const g = ctrl('gain', { min: 0, max: 128, value: 120 });
+  const a = assessCamera({ controls: [g], stats: clean });
+  assert.equal(find(a, 'gainHigh'), undefined);
+  assert.equal(find(a, 'gainNeedsLight').level, 'bad');
 });
 
 test('moderate gain warns, low gain passes', () => {
-  assert.equal(find(assessCamera({ controls: [ctrl('gain', { min: 0, max: 128, value: 70 })], stats: clean }), 'gainHigh').level, 'warn');
-  assert.equal(find(assessCamera({ controls: [ctrl('gain', { min: 0, max: 128, value: 20 })], stats: clean }), 'gainHigh').level, 'ok');
+  assert.equal(find(assessCamera({ controls: [ctrl('gain', { min: 0, max: 128, value: 70 }), EXP()], stats: clean }), 'gainHigh').level, 'warn');
+  assert.equal(find(assessCamera({ controls: [ctrl('gain', { min: 0, max: 128, value: 20 }), EXP()], stats: clean }), 'gainHigh').level, 'ok');
+});
+
+test('the paired values stay inside both controls ranges and step grids', () => {
+  const g = ctrl('gain', { min: 0, max: 128, step: 4, value: 120 });
+  const e = ctrl('exposure_time_absolute', { min: 50, max: 10000, step: 10, value: 100 });
+  const sets = find(assessCamera({ controls: [g, e], stats: clean }), 'gainHigh').action.sets;
+  const gs = sets.find(s => s.control === 'gain');
+  const es = sets.find(s => s.control === 'exposure_time_absolute');
+  assert.equal(gs.value % 4, 0);
+  assert.ok(gs.value >= 0 && gs.value <= 128);
+  assert.equal((es.value - 50) % 10, 0);
+  assert.ok(es.value >= 50 && es.value <= 10000);
 });
 
 test('a long exposure warns about motion blur', () => {

@@ -684,8 +684,8 @@
       },
       "gainHigh": {
         "title": "Gain is high",
-        "why": "Sub-pixel corner refinement fits a surface to local intensity, and gain noise perturbs that fit directly. Prefer a longer exposure over more gain, up to the motion-blur limit.",
-        "fix": "Lower the gain",
+        "why": "Gain amplifies noise along with signal, and sub-pixel corner refinement fits a surface to local intensity — noise perturbs that fit directly. Exposure adds real signal instead, so the fix trades some gain for a longer exposure at about the same brightness.",
+        "fix": "Trade gain for exposure",
         "short": "gain"
       },
       "motionBlur": {
@@ -699,6 +699,12 @@
         "why": "Under artificial light a mismatch bands the image, and the bands move between frames.",
         "fix": "Match the local mains",
         "short": "flicker"
+      },
+      "gainNeedsLight": {
+        "title": "Gain is high and exposure cannot compensate",
+        "why": "Lowering the gain now would only darken the picture — the exposure is already at the motion-blur limit, so there is nothing to trade against. The scene simply needs more light.",
+        "fix": "",
+        "short": "gain"
       }
     },
     "adviceBlocked": "Locked by {{parent}} — fix that first."
