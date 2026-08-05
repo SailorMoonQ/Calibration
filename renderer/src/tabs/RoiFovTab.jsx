@@ -5,6 +5,7 @@ import { LivePreview } from '../components/LivePreview.jsx';
 import { useCameraSource, CameraSourcePanel } from '../components/CameraSource.jsx';
 import { confirm } from '../components/confirm.jsx';
 import { analyzeOpticalCenter, roiFor } from '../lib/opticalCenter.js';
+import { edgeClipping } from '../lib/imageStats.js';
 import { api, pickOpenFile } from '../api/client.js';
 
 // Stroke a path twice — a dark underlay, then the colour on top — so a thin
@@ -84,6 +85,38 @@ export function RoiFovTab() {
 
   const activeRoiApplied = !!roiInfo?.live_roi?.applied;
 
+  // Whether the lens's image circle runs off an edge of the sensor. Sampled from
+  // the preview rather than computed from K, because it is a property of the
+  // optics-plus-sensor pairing that no calibration reports: a lens can be
+  // perfectly centred and still overrun the sensor. Unlike a principal-point
+  // offset, a clipped edge means field of view is genuinely GONE — no crop
+  // recovers pixels the sensor never received.
+  const [edges, setEdges] = useState(null);
+  useEffect(() => {
+    if (!liveDevice || activeRoiApplied) { setEdges(null); return undefined; }
+    let stopped = false;
+    let timer = null;
+    const tick = () => {
+      if (stopped) return;
+      const c = canvasHolder.current?.current;
+      if (c && c.width > 0 && c.height > 0) {
+        try {
+          const ctx = c.getContext('2d', { willReadFrequently: true });
+          const img = ctx.getImageData(0, 0, c.width, c.height);
+          setEdges(edgeClipping(img.data, c.width, c.height));
+        } catch { /* canvas not painted yet — try again next tick */ }
+      }
+      timer = setTimeout(tick, 1000);
+    };
+    timer = setTimeout(tick, 600);
+    return () => { stopped = true; if (timer) clearTimeout(timer); };
+  }, [liveDevice, activeRoiApplied]);
+
+  // Only meaningful when there IS a vignette to reason about. A rectilinear lens
+  // filling the whole sensor lights every edge, and calling that "clipped on all
+  // four sides" would be alarming and wrong.
+  const clippedEdges = edges && edges.anyVignette ? edges.edges : [];
+
   // The analysis is only meaningful once we have BOTH a calibration and the size
   // of the frames it was measured on. Missing either yields null, and the panel
   // says what is missing instead of drawing a made-up principal point.
@@ -115,19 +148,12 @@ export function RoiFovTab() {
     // REFERENCE; amber is reserved for the measured principal point and the
     // proposed crop, so the two never compete for the same meaning.
     //
-    // The arms leave a gap in the middle: a solid cross would paint over the
-    // exact pixel it exists to mark, and would swallow the principal-point dot
-    // whenever the two nearly coincide — which is the "well-centred lens" case
-    // the operator most needs to be able to confirm.
     const armOuter = Math.max(18, Math.min(w, h) * 0.055);
-    const armInner = armOuter * 0.3;
     const cw = Math.max(2, unit * 0.95);
     strokeContrast(ctx, () => {
       ctx.beginPath();
-      ctx.moveTo(w / 2 - armOuter, h / 2); ctx.lineTo(w / 2 - armInner, h / 2);
-      ctx.moveTo(w / 2 + armInner, h / 2); ctx.lineTo(w / 2 + armOuter, h / 2);
-      ctx.moveTo(w / 2, h / 2 - armOuter); ctx.lineTo(w / 2, h / 2 - armInner);
-      ctx.moveTo(w / 2, h / 2 + armInner); ctx.lineTo(w / 2, h / 2 + armOuter);
+      ctx.moveTo(w / 2 - armOuter, h / 2); ctx.lineTo(w / 2 + armOuter, h / 2);
+      ctx.moveTo(w / 2, h / 2 - armOuter); ctx.lineTo(w / 2, h / 2 + armOuter);
     }, 'oklch(0.97 0 0 / 0.95)', cw);
 
     if (!analysis) return;
@@ -288,6 +314,19 @@ export function RoiFovTab() {
               </div>
               <button className="btn ghost" style={{ width: '100%', marginTop: 6 }}
                       disabled={busy} onClick={onClear}>{t('roi.clear')}</button>
+            </Section>
+          )}
+
+          {clippedEdges.length > 0 && (
+            <Section title={t('roi.circleClipped')} hint={String(clippedEdges.length)}>
+              <div style={{ fontSize: 11, color: 'var(--warn)', lineHeight: 1.55 }}>
+                {t('roi.circleClippedBody', {
+                  edges: clippedEdges.map(e => t(`roi.edge.${e}`)).join('、'),
+                })}
+              </div>
+              <div style={{ fontSize: 10.5, color: 'var(--text-3)', marginTop: 6, lineHeight: 1.5 }}>
+                {t('roi.circleClippedNote')}
+              </div>
             </Section>
           )}
 

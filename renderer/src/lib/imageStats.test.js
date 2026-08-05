@@ -175,3 +175,67 @@ test('frameStats flags an underexposed frame', () => {
 test('frameStats returns null for an unusable buffer', () => {
   assert.equal(frameStats(null, 320, 240), null);
 });
+
+// ── edgeClipping ────────────────────────────────────────────────────────────
+
+import { edgeClipping } from './imageStats.js';
+
+// An image circle of radius r centred at (cx, cy); everything outside is dark.
+function circleFrame(w, h, cx, cy, r) {
+  return rgba(w, h, (x, y) => (Math.hypot(x - cx, y - cy) <= r ? 200 : 5));
+}
+
+test('a circle comfortably inside the frame clips no edge', () => {
+  const d = circleFrame(200, 200, 100, 100, 80);
+  const e = edgeClipping(d, 200, 200);
+  assert.deepEqual(e.edges, []);
+  assert.equal(e.anyVignette, true);
+});
+
+test('a circle overrunning the bottom reports exactly that edge', () => {
+  // Centre pushed down so the circle passes the bottom but not the other sides.
+  const d = circleFrame(200, 200, 100, 140, 90);
+  const e = edgeClipping(d, 200, 200);
+  assert.deepEqual(e.edges, ['bottom']);
+  assert.equal(e.clipped.bottom, true);
+  assert.equal(e.clipped.top, false);
+});
+
+test('an offset circle can clip two adjacent edges', () => {
+  const d = circleFrame(200, 200, 140, 140, 100);
+  const e = edgeClipping(d, 200, 200).edges.sort();
+  assert.deepEqual(e, ['bottom', 'right']);
+});
+
+test('a circle larger than the frame clips all four edges', () => {
+  const d = circleFrame(200, 200, 100, 100, 400);
+  const e = edgeClipping(d, 200, 200);
+  assert.deepEqual(e.edges.sort(), ['bottom', 'left', 'right', 'top']);
+  // Four lit edges is a lens with no vignette at all, not a fisheye in trouble —
+  // the caller needs to be able to tell those apart.
+  assert.equal(e.anyVignette, false);
+});
+
+test('edges are judged on the middle band, not the corners', () => {
+  // Corners of a circular image are dark by construction. Sampling there would
+  // report "no clipping" for a circle that plainly runs off every side.
+  const d = circleFrame(200, 200, 100, 100, 130);
+  assert.equal(edgeClipping(d, 200, 200).clipped.bottom, true);
+});
+
+test('a single bright speck on a dark edge does not flip the verdict', () => {
+  const d = rgba(200, 200, (x, y) => (y === 199 && x === 100 ? 255 : 5));
+  assert.equal(edgeClipping(d, 200, 200).clipped.bottom, false,
+    'median over the band should ignore one outlier');
+});
+
+test('a uniformly dark frame reports nothing clipped', () => {
+  const d = solid(200, 200, 0);
+  const e = edgeClipping(d, 200, 200);
+  assert.deepEqual(e.edges, []);
+});
+
+test('edgeClipping rejects degenerate input', () => {
+  assert.equal(edgeClipping(null, 200, 200), null);
+  assert.equal(edgeClipping(solid(2, 2, 0), 2, 2), null);
+});

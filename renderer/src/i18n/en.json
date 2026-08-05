@@ -682,6 +682,15 @@
     "roiStaleShort": "crop not applied",
     "roiStaleTitle": "Crop out of date",
     "roiStale": "This crop was measured on a {{was}} frame but the stream is now {{now}}, so it is not being applied — the same rectangle would cover a different part of the scene. Clear it and measure again at this resolution.",
-    "overlayHiddenCropped": "A crop is live, so the preview is already the cropped picture — clear the crop to see the optical-centre overlay against the full frame."
+    "overlayHiddenCropped": "A crop is live, so the preview is already the cropped picture — clear the crop to see the optical-centre overlay against the full frame.",
+    "circleClipped": "Image circle clipped",
+    "circleClippedBody": "The lens's image circle runs past the {{edges}} edge(s) of the sensor, so that part of the field of view never reaches the picture.",
+    "circleClippedNote": "This is a property of how the lens sits on the sensor, not something a crop can fix — cropping cannot recover pixels the sensor never received. Re-seating or shimming the lens module is the only way to get that field of view back. It does not affect calibration accuracy: as long as the principal point is solved correctly, undistortion stays valid over the field that is present.",
+    "edge": {
+      "top": "top",
+      "bottom": "bottom",
+      "left": "left",
+      "right": "right"
+    }
   }
 }

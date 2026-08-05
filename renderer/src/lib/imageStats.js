@@ -126,3 +126,60 @@ export function frameStats(data, w, h, { targetW = 160, targetH = 120 } = {}) {
     sampledH: small.h,
   };
 }
+
+// ── image-circle clipping ───────────────────────────────────────────────────
+
+// Does the lens's image circle run off an edge of the sensor?
+//
+// A fisheye (or any lens whose image circle is smaller than the frame) leaves a
+// dark vignette outside the circle. Where that vignette is ABSENT along an edge,
+// the circle extends past it and real field of view has been lost — permanently,
+// since no crop can recover pixels the sensor never received.
+//
+// This is a different signal from a principal-point offset: an offset only says
+// the axis is not centred, while a clipped edge says the picture is incomplete.
+// A lens can be perfectly centred and still clipped (circle bigger than the
+// sensor), or badly offset yet fully inside it.
+//
+// Measured along the middle band of each edge rather than at the corners: a
+// circle's corners are outside it by construction, so corners would report
+// "dark" no matter how badly the circle overruns.
+//
+// `threshold` is the luma below which a pixel counts as vignette. 25 of 255 is
+// well under any real scene content but above sensor noise in a dark frame.
+export function edgeClipping(data, w, h, { threshold = 25, band = 0.34 } = {}) {
+  if (!data || w < 4 || h < 4) return null;
+  const at = (x, y) => {
+    const i = (y * w + x) * 4;
+    return luma(data[i], data[i + 1], data[i + 2]);
+  };
+  // Median over the band, so one specular highlight on an otherwise dark edge
+  // cannot flip the verdict.
+  const med = (vals) => {
+    vals.sort((a, b) => a - b);
+    return vals[vals.length >> 1];
+  };
+  const x0 = Math.floor(w * (0.5 - band / 2)), x1 = Math.ceil(w * (0.5 + band / 2));
+  const y0 = Math.floor(h * (0.5 - band / 2)), y1 = Math.ceil(h * (0.5 + band / 2));
+
+  const horiz = (y) => { const v = []; for (let x = x0; x < x1; x++) v.push(at(x, y)); return med(v); };
+  const vert = (x) => { const v = []; for (let y = y0; y < y1; y++) v.push(at(x, y)); return med(v); };
+
+  const levels = { top: horiz(0), bottom: horiz(h - 1), left: vert(0), right: vert(w - 1) };
+  const clipped = {
+    top: levels.top > threshold,
+    bottom: levels.bottom > threshold,
+    left: levels.left > threshold,
+    right: levels.right > threshold,
+  };
+  const edges = Object.keys(clipped).filter(k => clipped[k]);
+  return {
+    levels,
+    clipped,
+    edges,
+    // All four edges lit usually means there is no vignette at all — a normal
+    // rectilinear lens filling the sensor — not a catastrophically clipped
+    // fisheye. Reported so the caller can stay quiet rather than cry wolf.
+    anyVignette: edges.length < 4,
+  };
+}
