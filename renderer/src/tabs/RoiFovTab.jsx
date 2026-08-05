@@ -42,10 +42,17 @@ export function RoiFovTab() {
   const streamOpen = !!streamInfo?.open;
   const streamW = streamInfo?.width ?? 0;
   const streamH = streamInfo?.height ?? 0;
-  const size = useMemo(
-    () => (streamOpen && streamW && streamH ? [streamW, streamH] : null),
-    [streamOpen, streamW, streamH],
-  );
+  // The UNCROPPED frame size. `streamInfo` reports the size consumers receive,
+  // which is already cropped once an ROI is live — computing a new ROI from that
+  // would treat the crop as if it were the whole sensor and walk the window off
+  // target a little further with every adjustment. The backend reports the
+  // pre-crop size for exactly this reason.
+  const srcW = roiInfo?.source_size?.[0] ?? 0;
+  const srcH = roiInfo?.source_size?.[1] ?? 0;
+  const size = useMemo(() => {
+    if (srcW && srcH) return [srcW, srcH];
+    return streamOpen && streamW && streamH ? [streamW, streamH] : null;
+  }, [srcW, srcH, streamOpen, streamW, streamH]);
 
   const refreshRoi = useCallback(async (device) => {
     if (!device) { setRoiInfo(null); return; }
@@ -54,6 +61,8 @@ export function RoiFovTab() {
   }, [t]);
 
   useEffect(() => { refreshRoi(liveDevice); }, [liveDevice, refreshRoi]);
+
+  const activeRoiApplied = !!roiInfo?.live_roi?.applied;
 
   // The analysis is only meaningful once we have BOTH a calibration and the size
   // of the frames it was measured on. Missing either yields null, and the panel
@@ -90,6 +99,10 @@ export function RoiFovTab() {
     ctx.stroke();
 
     if (!analysis) return;
+    // Once a crop is live the preview shows the cropped picture, so drawing the
+    // full-frame geometry on top of it would misplace every marker. Show the
+    // overlay only while the preview and the analysis share a coordinate system.
+    if (activeRoiApplied) return;
     const cx = K[0][2], cy = K[1][2];
 
     // Proposed crop: dashed box, everything outside dimmed, so the cost of the
@@ -118,7 +131,7 @@ export function RoiFovTab() {
     ctx.strokeStyle = 'oklch(0.2 0 0 / 0.7)';
     ctx.lineWidth = Math.max(1, unit * 0.3);
     ctx.beginPath(); ctx.arc(cx, cy, unit * 4.5, 0, Math.PI * 2); ctx.stroke();
-  }, [analysis, proposed, size, K]);
+  }, [analysis, proposed, size, K, activeRoiApplied]);
 
   const onLoad = async () => {
     const p = await pickOpenFile({});
@@ -149,7 +162,10 @@ export function RoiFovTab() {
     if (!ok) return;
     setBusy(true);
     try {
-      const r = await api.setCameraRoi({ device: liveDevice, ...proposed });
+      // Record the frame size this crop was measured on. Without it the backend
+      // cannot tell a valid crop from one left over from another resolution, and
+      // would apply the stale one to the wrong part of the picture.
+      const r = await api.setCameraRoi({ device: liveDevice, ...proposed, for_size: size });
       await refreshRoi(liveDevice);
       setStatus(r.applied ? t('roi.applied') : t('roi.savedNotApplied', { error: r.error }), !r.applied);
     } catch (e) {
@@ -171,6 +187,10 @@ export function RoiFovTab() {
 
   const activeRoi = roiInfo?.roi ?? null;
   const hwCrop = roiInfo?.hw_crop;
+  // The stored crop does not match the current frame size, so the backend is
+  // deliberately not applying it. Saying so beats a preview that silently
+  // ignores a crop the panel claims is active.
+  const roiStale = !!roiInfo?.stale;
 
   return (
     <div className="workspace">
@@ -201,6 +221,29 @@ export function RoiFovTab() {
               </div>
             )}
           </Section>
+
+          {roiStale && (
+            <Section title={t('roi.roiStaleTitle')}>
+              <div className="mono" style={{ fontSize: 10.5, color: 'var(--err)', lineHeight: 1.5 }}>
+                {t('roi.roiStale', {
+                  was: (activeRoi?.for_size || []).join('×'),
+                  now: (roiInfo?.size || []).join('×'),
+                })}
+              </div>
+              <button className="btn ghost" style={{ width: '100%', marginTop: 6 }}
+                      disabled={busy} onClick={onClear}>{t('roi.clear')}</button>
+            </Section>
+          )}
+
+          {activeRoiApplied && (
+            <Section title={t('roi.roiActive')}>
+              <div style={{ fontSize: 10.5, color: 'var(--warn)', lineHeight: 1.5 }}>
+                {t('roi.overlayHiddenCropped')}
+              </div>
+              <button className="btn ghost" style={{ width: '100%', marginTop: 6 }}
+                      disabled={busy} onClick={onClear}>{t('roi.clear')}</button>
+            </Section>
+          )}
 
           <Section title={t('roi.hwCrop')}>
             <div className="mono" style={{ fontSize: 10.5, lineHeight: 1.5,
@@ -258,9 +301,11 @@ export function RoiFovTab() {
           <div className="spacer"/>
           <div className="read">
             {streamInfo?.open && <>{streamInfo.width}×{streamInfo.height} · </>}
-            {activeRoi
-              ? <b style={{ color: 'var(--warn)' }}>{t('roi.roiActive')}</b>
-              : t('roi.roiOff')}
+            {roiStale
+              ? <b style={{ color: 'var(--err)' }}>{t('roi.roiStaleShort')}</b>
+              : activeRoi
+                ? <b style={{ color: 'var(--warn)' }}>{t('roi.roiActive')}</b>
+                : t('roi.roiOff')}
           </div>
         </div>
         <div className="vp-body vp-split" style={{ gridTemplateColumns: '1fr' }}>

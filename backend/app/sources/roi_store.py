@@ -81,6 +81,11 @@ def get_roi(key: str) -> dict | None:
         roi = {k: int(entry[k]) for k in ("left", "top", "width", "height")}
     except (KeyError, TypeError, ValueError):
         return None
+    # The frame size the ROI was computed against. Without it we cannot tell a
+    # still-valid crop from one left over from a different resolution, and
+    # applying the latter silently crops the wrong part of the picture.
+    fs = entry.get("for_size")
+    roi["for_size"] = [int(fs[0]), int(fs[1])] if (isinstance(fs, (list, tuple)) and len(fs) == 2) else None
     if roi["width"] <= 0 or roi["height"] <= 0:
         return None
     if roi["left"] < 0 or roi["top"] < 0:
@@ -94,10 +99,14 @@ def set_roi(key: str, keyed_by: str, roi: dict | None) -> dict | None:
         if roi is None:
             data["devices"].pop(key, None)
         else:
-            data["devices"][key] = {
+            entry = {
                 "keyed_by": keyed_by,
                 "left": int(roi["left"]), "top": int(roi["top"]),
                 "width": int(roi["width"]), "height": int(roi["height"]),
             }
+            fs = roi.get("for_size")
+            if isinstance(fs, (list, tuple)) and len(fs) == 2:
+                entry["for_size"] = [int(fs[0]), int(fs[1])]
+            data["devices"][key] = entry
         save(data)
     return get_roi(key)

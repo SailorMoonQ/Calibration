@@ -108,6 +108,18 @@ class CameraSource:
         # is a pure translation (it moves only cx/cy) — mixing the two into one
         # knob would make the resulting intrinsics impossible to reason about.
         self._roi: tuple[int, int, int, int] | None = None
+        # Frame size the ROI was computed against. A crop is only meaningful on
+        # the picture it was measured on: switching resolution changes both the
+        # framing and the post-clip size, so the same rectangle would then cover
+        # a different part of the scene with the optical axis no longer centred.
+        self._roi_for_size: tuple[int, int] | None = None
+        self._roi_stale_logged = False
+        # Whether the ROI is actually being applied right now. Recorded by the
+        # grabber rather than re-derived by callers: the frame size reported to
+        # consumers is the size AFTER cropping, so comparing that against
+        # `_roi_for_size` would call every working crop stale.
+        self._roi_applied = False
+        self._roi_source_size: tuple[int, int] | None = None
 
     def _saved_controls(self) -> dict[str, int] | None:
         """The user's active control preset for this camera, or None when they
@@ -122,6 +134,12 @@ class CameraSource:
             return None
 
     def _restore_roi(self) -> None:
+        """Load the saved ROI into `_roi` directly.
+
+        MUST NOT call set_roi(): this runs from _open_cap(), which both start()
+        and set_resolution() call while already holding self._lock, and that lock
+        is not re-entrant — going through set_roi() deadlocks the whole backend
+        the first time a stream restarts with an ROI stored."""
         try:
             serial = v4l2_controls.device_serial(self.device)
             key, _ = control_store.device_key(self.device, serial)
@@ -130,7 +148,12 @@ class CameraSource:
             log.warning("%s: reading saved roi failed: %s", self.device, e)
             return
         if roi:
-            self.set_roi(roi["left"], roi["top"], roi["width"], roi["height"])
+            self._roi = (roi["left"], roi["top"], roi["width"], roi["height"])
+            fs = roi.get("for_size")
+            self._roi_for_size = (int(fs[0]), int(fs[1])) if fs else None
+            self._roi_stale_logged = False
+            log.info("%s: restored roi %dx%d+%d+%d (for %s)", self.device,
+                     roi["width"], roi["height"], roi["left"], roi["top"], fs)
 
     def _open_cap(self) -> cv2.VideoCapture:
         """Pre-open setup + cv2.VideoCapture creation. Pre-flight clears any latched
@@ -258,9 +281,24 @@ class CameraSource:
         consumers already see; that way a (cx, cy) measured by calibrating today
         can be fed straight back in without any conversion."""
         roi = self._roi
-        if frame is None or roi is None:
+        if frame is None:
             return frame
         h, w = frame.shape[:2]
+        self._roi_source_size = (w, h)
+        if roi is None:
+            self._roi_applied = False
+            return frame
+        want = self._roi_for_size
+        if want is not None and (w, h) != tuple(want):
+            # Measured on a different frame size — skip rather than crop the
+            # wrong region. Logged once so it is diagnosable without spamming at
+            # frame rate.
+            if not self._roi_stale_logged:
+                log.warning("%s: roi was measured on %dx%d but frames are %dx%d — not applying it",
+                            self.device, want[0], want[1], w, h)
+                self._roi_stale_logged = True
+            self._roi_applied = False
+            return frame
         left, top, rw, rh = roi
         # Clamp instead of raising: a stale ROI (saved at a higher resolution, or
         # applied before the stream reported its size) must degrade to a smaller
@@ -269,21 +307,27 @@ class CameraSource:
         top = max(0, min(top, h - 1))
         rw = max(1, min(rw, w - left))
         rh = max(1, min(rh, h - top))
+        self._roi_applied = True
         if left == 0 and top == 0 and rw == w and rh == h:
             return frame
         return frame[top:top + rh, left:left + rw]
 
-    def set_roi(self, left, top, width, height) -> None:
+    def set_roi(self, left, top, width, height, for_size=None) -> None:
         """Set or clear the ROI. Falsy width/height clears it. No camera restart —
         cropping happens after every read, so the next frame already reflects it."""
         if not width or not height or int(width) <= 0 or int(height) <= 0:
             with self._lock:
                 self._roi = None
+                self._roi_for_size = None
+                self._roi_stale_logged = False
+                self._roi_applied = False
                 self._ticks.clear()
             log.info("disabled roi on %s", self.device)
             return
         with self._lock:
             self._roi = (max(0, int(left)), max(0, int(top)), int(width), int(height))
+            self._roi_for_size = (int(for_size[0]), int(for_size[1])) if for_size else None
+            self._roi_stale_logged = False
             self._ticks.clear()
         log.info("roi on %s set to %dx%d+%d+%d", self.device, int(width), int(height),
                  int(left), int(top))
@@ -292,7 +336,10 @@ class CameraSource:
         roi = self._roi
         if roi is None:
             return None
-        return {"left": roi[0], "top": roi[1], "width": roi[2], "height": roi[3]}
+        return {"left": roi[0], "top": roi[1], "width": roi[2], "height": roi[3],
+                "for_size": list(self._roi_for_size) if self._roi_for_size else None,
+                "applied": self._roi_applied,
+                "source_size": list(self._roi_source_size) if self._roi_source_size else None}
 
     def _run(self) -> None:
         misses = 0

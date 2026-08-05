@@ -306,9 +306,16 @@ async def camera_get_roi(device: str) -> dict:
     except Exception:
         # Not streaming yet is normal — the stored ROI is still meaningful.
         pass
+    # Ask the source whether it is applying the crop rather than re-deriving it:
+    # the size reported to consumers is the size AFTER cropping, so comparing
+    # that against for_size would flag every working crop as stale.
+    stale = bool(stored and live and live.get("applied") is False)
+    # The uncropped frame size — the coordinate system an ROI is expressed in.
+    source_size = (live or {}).get("source_size") or size
     return {
         "key": key, "keyed_by": keyed_by,
         "roi": stored, "live_roi": live, "size": size,
+        "source_size": source_size, "stale": stale,
         "hw_crop": v4l2_controls.supports_hw_crop(device),
     }
 
@@ -335,12 +342,19 @@ async def camera_set_roi(body: dict) -> dict:
             raise HTTPException(status_code=400, detail="width/height must be positive")
         if roi["left"] < 0 or roi["top"] < 0:
             raise HTTPException(status_code=400, detail="left/top must not be negative")
+        # The frame size the caller measured against. Without it a crop cannot be
+        # told apart from one left over from another resolution, and applying the
+        # stale one silently crops the wrong region.
+        fs = body.get("for_size")
+        if isinstance(fs, (list, tuple)) and len(fs) == 2:
+            roi["for_size"] = [int(fs[0]), int(fs[1])]
     stored = roi_store.set_roi(key, keyed_by, roi)
     try:
         src = source_manager.get(device)
         if hasattr(src, "set_roi"):
             if roi:
-                src.set_roi(roi["left"], roi["top"], roi["width"], roi["height"])
+                src.set_roi(roi["left"], roi["top"], roi["width"], roi["height"],
+                            roi.get("for_size"))
             else:
                 src.set_roi(0, 0, 0, 0)
     except Exception as e:

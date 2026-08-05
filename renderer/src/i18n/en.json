@@ -678,6 +678,10 @@
     "kNote": "A crop only translates the image origin: fx and fy are unchanged and the distortion coefficients still hold, because they are defined relative to the principal point.",
     "liveLabel": "live · {{device}}",
     "noCamera": "no camera",
-    "pickCamera": "pick a camera to inspect its optical centre"
+    "pickCamera": "pick a camera to inspect its optical centre",
+    "roiStaleShort": "crop not applied",
+    "roiStaleTitle": "Crop out of date",
+    "roiStale": "This crop was measured on a {{was}} frame but the stream is now {{now}}, so it is not being applied — the same rectangle would cover a different part of the scene. Clear it and measure again at this resolution.",
+    "overlayHiddenCropped": "A crop is live, so the preview is already the cropped picture — clear the crop to see the optical-centre overlay against the full frame."
   }
 }
