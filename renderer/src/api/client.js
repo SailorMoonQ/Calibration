@@ -97,6 +97,18 @@ export const api = {
     });
   },
   snap: (device, dir) => request('/stream/snap', { method: 'POST', body: JSON.stringify({ device, dir }) }),
+
+  // Camera controls (exposure / gain / white balance / focus). `setCameraControl`
+  // returns the REFRESHED full control list, not just an ack, because setting one
+  // control can lock or unlock another and only the driver knows the new state.
+  cameraControls: (device) =>
+    request(`/camera/controls?device=${encodeURIComponent(device)}`),
+  setCameraControl: (device, name, value) =>
+    request('/camera/control', { method: 'POST', body: JSON.stringify({ device, name, value }) }),
+  cameraPresets: (device) =>
+    request(`/camera/presets?device=${encodeURIComponent(device)}`),
+  mutateCameraPresets: (body) =>
+    request('/camera/presets', { method: 'POST', body: JSON.stringify(body) }),
   appendHandeyePose: ({ poses_path, basename, T, ts, meta }) =>
     request('/handeye/append_pose', {
       method: 'POST',

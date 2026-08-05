@@ -192,15 +192,56 @@ def list_controls(device: str) -> dict:
     return {"supported": True, "reason": None, "controls": controls}
 
 
-def set_control(device: str, name: str, value: int) -> dict:
+def clamp_value(ctrl: dict, value: int) -> tuple[int, bool]:
+    """Fit a value into a control's advertised range and step grid.
+
+    Pure. Returns (value, adjusted). The driver clamps out-of-range writes
+    SILENTLY — asking for gain=9999 on a max=128 control reports success and
+    stores 128 — so we do it ourselves and say so, otherwise the UI would show a
+    number the camera never accepted.
+    """
+    v = int(value)
+    lo, hi, step = ctrl.get("min"), ctrl.get("max"), ctrl.get("step") or 1
+    original = v
+    if lo is not None and v < lo:
+        v = lo
+    if hi is not None and v > hi:
+        v = hi
+    if step > 1 and lo is not None:
+        # Snap to the grid the driver actually accepts, rounding to nearest so a
+        # slider drag does not systematically bias one direction.
+        v = lo + round((v - lo) / step) * step
+        if hi is not None and v > hi:
+            v -= step
+        if lo is not None and v < lo:
+            v = lo
+    return v, v != original
+
+
+def set_control(device: str, name: str, value: int, controls: list[dict] | None = None) -> dict:
     """Set one control. Takes effect on the running stream — no camera restart,
-    because v4l2 control writes are independent of the capture buffers."""
+    because v4l2 control writes are independent of the capture buffers.
+
+    `controls` is an already-enumerated list to clamp against; omit it and one
+    enumeration is done here. Callers setting many controls should enumerate once
+    and pass it in rather than paying a subprocess per control."""
     if not is_v4l2_device(device):
         return {"ok": False, "error": "not-a-v4l2-device"}
-    code, _, err = _run(["-d", device, "-c", f"{name}={int(value)}"])
+    if controls is None:
+        controls = list_controls(device).get("controls", [])
+    ctrl = next((c for c in controls if c["id"] == name), None)
+    if ctrl is None:
+        return {"ok": False, "error": f"unknown control '{name}'", "adjusted": False}
+    if ctrl.get("inactive"):
+        # Writing an inactive control is accepted by v4l2-ctl and then ignored —
+        # the classic "slider does nothing" failure. Refuse loudly instead.
+        return {"ok": False, "error": "control-is-inactive", "adjusted": False,
+                "locked_by": ctrl.get("locked_by")}
+    v, adjusted = clamp_value(ctrl, value)
+    code, _, err = _run(["-d", device, "-c", f"{name}={v}"])
     if code != 0:
-        return {"ok": False, "error": err.strip() or f"v4l2-ctl exited {code}"}
-    return {"ok": True, "error": None}
+        return {"ok": False, "error": err.strip() or f"v4l2-ctl exited {code}", "adjusted": False}
+    return {"ok": True, "error": None, "adjusted": adjusted, "value": v}
 
 
 def apply_controls(device: str, values: dict[str, int]) -> dict:
@@ -212,8 +253,11 @@ def apply_controls(device: str, values: dict[str, int]) -> dict:
     camera) cannot stop the rest from landing."""
     applied: list[str] = []
     failed: dict[str, str] = {}
+    # Enumerate once: clamping every control against a fresh subprocess call would
+    # turn a preset restore into dozens of them on the stream-open hot path.
+    controls = list_controls(device).get("controls", [])
     for name in _apply_order(values):
-        r = set_control(device, name, values[name])
+        r = set_control(device, name, values[name], controls)
         if r["ok"]:
             applied.append(name)
         else:

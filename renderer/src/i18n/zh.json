@@ -9,10 +9,26 @@
     "close": "关闭"
   },
   "tabs": {
-    "intrinsics": { "label": "针孔", "sub": "内参" },
-    "fisheye": { "label": "鱼眼", "sub": "内参" },
-    "handeye": { "label": "手眼", "sub": "相机 ↔ 追踪器" },
-    "link": { "label": "链接", "sub": "追踪器 ↔ 控制器" },
+    "intrinsics": {
+      "label": "针孔",
+      "sub": "内参"
+    },
+    "fisheye": {
+      "label": "鱼眼",
+      "sub": "内参"
+    },
+    "handeye": {
+      "label": "手眼",
+      "sub": "相机 ↔ 追踪器"
+    },
+    "link": {
+      "label": "链接",
+      "sub": "追踪器 ↔ 控制器"
+    },
+    "camparams": {
+      "label": "相机参数",
+      "sub": "曝光 / 增益"
+    },
     "addStage": "+ 添加阶段"
   },
   "tweaks": {
@@ -313,20 +329,41 @@
     "progress": "步骤 {{step}}/{{total}} · {{group}}·{{action}} · 第 {{shot}}/{{shots}} 张",
     "done": "全部完成，可运行标定",
     "groups": {
-      "frontal": "正对分区", "edge": "边缘", "tilt": "俯仰", "yaw": "偏摆", "roll": "平面旋转", "dist": "远近"
+      "frontal": "正对分区",
+      "edge": "边缘",
+      "tilt": "俯仰",
+      "yaw": "偏摆",
+      "roll": "平面旋转",
+      "dist": "远近"
     },
     "steps": {
-      "f_center": "正对·中心", "f_tl": "正对·左上", "f_tr": "正对·右上", "f_bl": "正对·左下", "f_br": "正对·右下",
-      "e_top": "怼上边", "e_bottom": "怼下边", "e_left": "怼左边", "e_right": "怼右边",
-      "t_fwd": "上沿前倒（俯）", "t_back": "上沿后仰（仰）",
-      "y_left": "左侧前转（偏摆）", "y_right": "右侧前转（偏摆）",
+      "f_center": "正对·中心",
+      "f_tl": "正对·左上",
+      "f_tr": "正对·右上",
+      "f_bl": "正对·左下",
+      "f_br": "正对·右下",
+      "e_top": "怼上边",
+      "e_bottom": "怼下边",
+      "e_left": "怼左边",
+      "e_right": "怼右边",
+      "t_fwd": "上沿前倒（俯）",
+      "t_back": "上沿后仰（仰）",
+      "y_left": "左侧前转（偏摆）",
+      "y_right": "右侧前转（偏摆）",
       "r_roll": "平面内旋转（当钟表转角）",
-      "d_near": "拉近占满", "d_far": "推远变小", "d_mid": "中等距离"
+      "d_near": "拉近占满",
+      "d_far": "推远变小",
+      "d_mid": "中等距离"
     },
     "hint": {
-      "frontal": "正对相机、放平", "tilted": "把板倾斜约 30~45°", "roll": "板在平面内转个角度",
-      "near": "靠近相机、占满画面", "far": "远离相机、变小", "mid": "保持中等距离",
-      "region": "移到高亮区域", "vary": "微调一点再拍第二张"
+      "frontal": "正对相机、放平",
+      "tilted": "把板倾斜约 30~45°",
+      "roll": "板在平面内转个角度",
+      "near": "靠近相机、占满画面",
+      "far": "远离相机、变小",
+      "mid": "保持中等距离",
+      "region": "移到高亮区域",
+      "vary": "微调一点再拍第二张"
     }
   },
   "handeye": {
@@ -530,5 +567,72 @@
     "noFileLoaded": "未加载文件",
     "importMeta": "n={{n}} · Δ{{span}}s",
     "deviceNone": "（无）"
+  },
+  "cameraParams": {
+    "railTitle": "相机参数",
+    "status": "状态",
+    "presets": "预设",
+    "noPreset": "未启用",
+    "noPresetsYet": "还没有预设",
+    "saveAs": "把当前参数存为",
+    "presetNamePlaceholder": "例如：室内",
+    "reset": "恢复驱动默认值",
+    "confirmReset": "把所有控制项恢复为驱动默认值，并清除当前预设？",
+    "confirmDeletePreset": "删除预设「{{name}}」？",
+    "needPresetName": "请先填写预设名称。",
+    "persistNote": "改动按相机（USB 序列号）保存，流重启后会自动回放。",
+    "unsupported": "不可用",
+    "nControls": "{{count}} 项",
+    "commonControls": "常用",
+    "allControls": "全部控制项",
+    "expand": "展开全部",
+    "collapse": "收起",
+    "noCommon": "该相机没有暴露常见的控制项",
+    "exposureReadout": "曝光反馈",
+    "waitingForFrames": "等待画面…",
+    "clipHigh": "高光截断",
+    "clipLow": "暗部截断",
+    "meanLuma": "平均亮度",
+    "sharpness": "清晰度（对焦）",
+    "liveLabel": "实时 · {{device}}",
+    "noCamera": "无相机",
+    "pickCamera": "选择一路相机以调整其参数",
+    "on": "开",
+    "off": "关",
+    "lockedBy": "被「{{parent}}」锁定",
+    "unlock": "切到手动",
+    "lockedUnknown": "当前只读（驱动报告为 inactive）",
+    "loadFailed": "读取控制项失败：{{error}}",
+    "setFailed": "设置 {{name}} 失败：{{error}}",
+    "setRejected": "驱动拒绝了 {{name}}：{{error}}",
+    "presetFailed": "预设操作失败：{{error}}",
+    "reason": {
+      "not-a-v4l2-device": "该源由 ROS2 驱动节点管理，曝光与增益无法在此调整，请到驱动侧设置。",
+      "v4l2-ctl-missing": "未安装 v4l2-ctl。安装 v4l-utils 后才能调整相机参数。",
+      "no-controls-exposed": "该相机没有暴露任何可调控制项。",
+      "v4l2-ctl-failed": "驱动没有响应控制项查询。"
+    },
+    "ctrl": {
+      "auto_exposure": "自动曝光",
+      "exposure_auto": "自动曝光",
+      "exposure_time_absolute": "曝光时间",
+      "exposure_absolute": "曝光时间",
+      "exposure_dynamic_framerate": "允许曝光降低帧率",
+      "gain": "增益",
+      "brightness": "亮度",
+      "contrast": "对比度",
+      "saturation": "饱和度",
+      "hue": "色调",
+      "gamma": "伽马",
+      "sharpness": "锐度",
+      "white_balance_automatic": "自动白平衡",
+      "white_balance_temperature": "白平衡色温 (K)",
+      "backlight_compensation": "背光补偿",
+      "power_line_frequency": "电源频率",
+      "focus_automatic_continuous": "连续自动对焦",
+      "focus_absolute": "对焦"
+    },
+    "setAdjusted": "{{name}} 超出驱动允许范围，已调整为 {{value}}。",
+    "setInactive": "{{name}} 当前被锁定，请先把它的父控制项切到手动。"
   }
 }

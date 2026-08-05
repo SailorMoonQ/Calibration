@@ -10,6 +10,7 @@ import { IntrinsicsTab } from './tabs/IntrinsicsTab.jsx';
 import { FisheyeTab } from './tabs/FisheyeTab.jsx';
 import { HandEyeTab } from './tabs/HandEyeTab.jsx';
 import { LinkCalibTab } from './tabs/LinkCalibTab.jsx';
+import { CameraParamsTab } from './tabs/CameraParamsTab.jsx';
 import { api, voiceEventsUrl } from './api/client.js';
 import { dispatchVoiceCommand } from './lib/voiceControl.js';
 
@@ -20,6 +21,7 @@ const TAB_DEFS = [
   { id: 'fisheye',    num: '02', badge: 'warn', Comp: FisheyeTab },
   { id: 'handeye',    num: '03', badge: 'ok',   Comp: HandEyeTab },
   { id: 'link',       num: '04', badge: 'ok',   Comp: LinkCalibTab },
+  { id: 'camparams',  num: '05', badge: 'ok',   Comp: CameraParamsTab },
 ];
 
 export function App() {

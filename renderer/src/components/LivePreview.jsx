@@ -20,11 +20,15 @@ function parseFrame(buf) {
   return jpeg;
 }
 
-export function LivePreview({ device, fps = 30, quality = 70, mirror = false }) {
+export function LivePreview({ device, fps = 30, quality = 70, mirror = false, onCanvas }) {
   const { t } = useTranslation();
   const [info, setInfo] = useState(null);
   const [hasFrame, setHasFrame] = useState(false);
   const canvasRef = useRef(null);
+  // Hand the drawing surface to the parent when asked, so a consumer (the camera
+  // parameters tab) can read pixels off the frames already being painted instead
+  // of opening a second stream just to measure them.
+  useEffect(() => { if (onCanvas) onCanvas(canvasRef); }, [onCanvas]);
   const wsRef = useRef(null);
 
   useEffect(() => {

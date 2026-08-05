@@ -9,10 +9,26 @@
     "close": "close"
   },
   "tabs": {
-    "intrinsics": { "label": "Pinhole", "sub": "intrinsics" },
-    "fisheye": { "label": "Fish-eye", "sub": "intrinsics" },
-    "handeye": { "label": "Hand-Eye", "sub": "cam ↔ tracker" },
-    "link": { "label": "Link", "sub": "tracker ↔ ctrl" },
+    "intrinsics": {
+      "label": "Pinhole",
+      "sub": "intrinsics"
+    },
+    "fisheye": {
+      "label": "Fish-eye",
+      "sub": "intrinsics"
+    },
+    "handeye": {
+      "label": "Hand-Eye",
+      "sub": "cam ↔ tracker"
+    },
+    "link": {
+      "label": "Link",
+      "sub": "tracker ↔ ctrl"
+    },
+    "camparams": {
+      "label": "Camera",
+      "sub": "exposure / gain"
+    },
     "addStage": "+ add stage"
   },
   "tweaks": {
@@ -313,20 +329,41 @@
     "progress": "step {{step}}/{{total}} · {{group}}·{{action}} · shot {{shot}}/{{shots}}",
     "done": "all done — run calibration",
     "groups": {
-      "frontal": "frontal zones", "edge": "edges", "tilt": "pitch", "yaw": "yaw", "roll": "in-plane roll", "dist": "distance"
+      "frontal": "frontal zones",
+      "edge": "edges",
+      "tilt": "pitch",
+      "yaw": "yaw",
+      "roll": "in-plane roll",
+      "dist": "distance"
     },
     "steps": {
-      "f_center": "frontal · center", "f_tl": "frontal · top-left", "f_tr": "frontal · top-right", "f_bl": "frontal · bottom-left", "f_br": "frontal · bottom-right",
-      "e_top": "push to top edge", "e_bottom": "push to bottom edge", "e_left": "push to left edge", "e_right": "push to right edge",
-      "t_fwd": "top edge tipped forward (pitch)", "t_back": "top edge leaned back (pitch)",
-      "y_left": "left side turned in (yaw)", "y_right": "right side turned in (yaw)",
+      "f_center": "frontal · center",
+      "f_tl": "frontal · top-left",
+      "f_tr": "frontal · top-right",
+      "f_bl": "frontal · bottom-left",
+      "f_br": "frontal · bottom-right",
+      "e_top": "push to top edge",
+      "e_bottom": "push to bottom edge",
+      "e_left": "push to left edge",
+      "e_right": "push to right edge",
+      "t_fwd": "top edge tipped forward (pitch)",
+      "t_back": "top edge leaned back (pitch)",
+      "y_left": "left side turned in (yaw)",
+      "y_right": "right side turned in (yaw)",
       "r_roll": "in-plane roll (turn like a clock)",
-      "d_near": "close in, fill the frame", "d_far": "pull back, smaller", "d_mid": "medium distance"
+      "d_near": "close in, fill the frame",
+      "d_far": "pull back, smaller",
+      "d_mid": "medium distance"
     },
     "hint": {
-      "frontal": "face the camera, keep it flat", "tilted": "tilt the board ~30–45°", "roll": "roll the board in its plane",
-      "near": "move closer, fill the frame", "far": "move away, smaller", "mid": "hold a medium distance",
-      "region": "move into the highlighted zone", "vary": "nudge slightly, then take the second"
+      "frontal": "face the camera, keep it flat",
+      "tilted": "tilt the board ~30–45°",
+      "roll": "roll the board in its plane",
+      "near": "move closer, fill the frame",
+      "far": "move away, smaller",
+      "mid": "hold a medium distance",
+      "region": "move into the highlighted zone",
+      "vary": "nudge slightly, then take the second"
     }
   },
   "handeye": {
@@ -530,5 +567,72 @@
     "noFileLoaded": "no file loaded",
     "importMeta": "n={{n}} · Δ{{span}}s",
     "deviceNone": "(none)"
+  },
+  "cameraParams": {
+    "railTitle": "Camera Parameters",
+    "status": "Status",
+    "presets": "Presets",
+    "noPreset": "none active",
+    "noPresetsYet": "no presets yet",
+    "saveAs": "save current as",
+    "presetNamePlaceholder": "e.g. indoor",
+    "reset": "Reset to driver defaults",
+    "confirmReset": "Reset every control to the driver's default and clear the active preset?",
+    "confirmDeletePreset": "Delete preset \"{{name}}\"?",
+    "needPresetName": "Enter a name for the preset first.",
+    "persistNote": "Changes are saved per camera (by USB serial) and re-applied when the stream restarts.",
+    "unsupported": "Not available",
+    "nControls": "{{count}} controls",
+    "commonControls": "Common",
+    "allControls": "All controls",
+    "expand": "show all",
+    "collapse": "hide",
+    "noCommon": "this camera exposes none of the usual controls",
+    "exposureReadout": "Exposure readout",
+    "waitingForFrames": "waiting for frames…",
+    "clipHigh": "clipped high",
+    "clipLow": "clipped low",
+    "meanLuma": "mean",
+    "sharpness": "sharpness (focus)",
+    "liveLabel": "live · {{device}}",
+    "noCamera": "no camera",
+    "pickCamera": "pick a camera to adjust its parameters",
+    "on": "on",
+    "off": "off",
+    "lockedBy": "locked by {{parent}}",
+    "unlock": "switch to manual",
+    "lockedUnknown": "read-only right now (driver reports it as inactive)",
+    "loadFailed": "could not read controls: {{error}}",
+    "setFailed": "setting {{name}} failed: {{error}}",
+    "setRejected": "the driver rejected {{name}}: {{error}}",
+    "presetFailed": "preset operation failed: {{error}}",
+    "reason": {
+      "not-a-v4l2-device": "This source is managed by its ROS2 driver node, so its exposure and gain cannot be changed from here. Adjust them on the driver instead.",
+      "v4l2-ctl-missing": "v4l2-ctl is not installed. Install v4l-utils to adjust camera parameters.",
+      "no-controls-exposed": "This camera exposes no adjustable controls.",
+      "v4l2-ctl-failed": "The driver did not answer the control query."
+    },
+    "ctrl": {
+      "auto_exposure": "auto exposure",
+      "exposure_auto": "auto exposure",
+      "exposure_time_absolute": "exposure time",
+      "exposure_absolute": "exposure time",
+      "exposure_dynamic_framerate": "let exposure lower the frame rate",
+      "gain": "gain",
+      "brightness": "brightness",
+      "contrast": "contrast",
+      "saturation": "saturation",
+      "hue": "hue",
+      "gamma": "gamma",
+      "sharpness": "sharpness",
+      "white_balance_automatic": "auto white balance",
+      "white_balance_temperature": "white balance (K)",
+      "backlight_compensation": "backlight compensation",
+      "power_line_frequency": "power line frequency",
+      "focus_automatic_continuous": "continuous autofocus",
+      "focus_absolute": "focus"
+    },
+    "setAdjusted": "{{name}} was outside the driver's range — set to {{value}}.",
+    "setInactive": "{{name}} is locked right now; switch its parent control to manual first."
   }
 }

@@ -184,3 +184,53 @@ def test_every_lock_parent_is_a_plausible_control_name():
 )
 def test_is_v4l2_device(device, expected):
     assert is_v4l2_device(device) is expected
+
+
+# ── clamping ────────────────────────────────────────────────────────────────
+# The driver clamps out-of-range writes SILENTLY (gain=9999 on a max=128 control
+# reports success and stores 128), so we clamp first and report that we did.
+
+from app.sources.v4l2_controls import clamp_value  # noqa: E402
+
+
+@pytest.mark.parametrize(
+    "ctrl,value,expected,adjusted",
+    [
+        ({"min": 0, "max": 128, "step": 1}, 64, 64, False),
+        ({"min": 0, "max": 128, "step": 1}, 9999, 128, True),
+        ({"min": 0, "max": 128, "step": 1}, -5, 0, True),
+        ({"min": -64, "max": 64, "step": 1}, -64, -64, False),
+        ({"min": -64, "max": 64, "step": 1}, -100, -64, True),
+        # step grid: 2800 + n*10
+        ({"min": 2800, "max": 6500, "step": 10}, 4600, 4600, False),
+        ({"min": 2800, "max": 6500, "step": 10}, 4604, 4600, True),
+        ({"min": 2800, "max": 6500, "step": 10}, 4607, 4610, True),
+    ],
+)
+def test_clamp_value(ctrl, value, expected, adjusted):
+    assert clamp_value(ctrl, value) == (expected, adjusted)
+
+
+def test_clamp_never_exceeds_max_when_snapping_up():
+    # 6499 rounds up to 6500 which is exactly max — must not overshoot to 6510.
+    v, _ = clamp_value({"min": 2800, "max": 6500, "step": 10}, 6499)
+    assert v <= 6500
+
+
+def test_clamp_on_a_max_not_on_the_step_grid():
+    # A driver may advertise max=105 with step=10 from min=0. Snapping must stay
+    # inside the range even though 110 would be the nearest grid point.
+    v, adjusted = clamp_value({"min": 0, "max": 105, "step": 10}, 105)
+    assert v <= 105 and adjusted is True
+
+
+def test_clamp_tolerates_missing_bounds():
+    # Some drivers omit min/max for odd control types; absence must pass through
+    # rather than crash the whole panel.
+    assert clamp_value({"step": 1}, 42) == (42, False)
+    assert clamp_value({"min": 0, "step": 1}, -3) == (0, True)
+
+
+def test_clamp_bool_range():
+    assert clamp_value({"min": 0, "max": 1, "step": 1}, 5) == (1, True)
+    assert clamp_value({"min": 0, "max": 1, "step": 1}, 1) == (1, False)
