@@ -109,6 +109,13 @@ export const api = {
     request(`/camera/presets?device=${encodeURIComponent(device)}`),
   mutateCameraPresets: (body) =>
     request('/camera/presets', { method: 'POST', body: JSON.stringify(body) }),
+
+  // ROI (crop window) used to put the optical axis at the centre of the output.
+  cameraRoi: (device) => request(`/camera/roi?device=${encodeURIComponent(device)}`),
+  setCameraRoi: (body) => {
+    invalidateStreamInfo(body.device);
+    return request('/camera/roi', { method: 'POST', body: JSON.stringify(body) });
+  },
   appendHandeyePose: ({ poses_path, basename, T, ts, meta }) =>
     request('/handeye/append_pose', {
       method: 'POST',

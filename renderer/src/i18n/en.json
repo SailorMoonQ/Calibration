@@ -29,6 +29,10 @@
       "label": "Camera",
       "sub": "exposure / gain"
     },
+    "roifov": {
+      "label": "Optics",
+      "sub": "centre / FOV"
+    },
     "addStage": "+ add stage"
   },
   "tweaks": {
@@ -634,5 +638,46 @@
     },
     "setAdjusted": "{{name}} was outside the driver's range — set to {{value}}.",
     "setInactive": "{{name}} is locked right now; switch its parent control to manual first."
+  },
+  "roi": {
+    "railTitle": "Optical Centre / FOV",
+    "status": "Status",
+    "readout": "Readout",
+    "calibration": "Calibration",
+    "notLoaded": "none loaded",
+    "loadCalib": "Load a calibration…",
+    "needCalibration": "Run a calibration in tab 01 or 02, save it, then load it here — the principal point comes from K.",
+    "needStream": "Waiting for the camera to report its frame size.",
+    "noKInFile": "That file has no camera matrix K.",
+    "loadCalibFailed": "could not load: {{error}}",
+    "loadFailed": "could not read the ROI: {{error}}",
+    "rmsHigh": "high — the principal point may be unreliable",
+    "hwCrop": "Hardware crop",
+    "hwCropYes": "Supported — the driver can crop at the sensor, so no resolution is lost.",
+    "hwCropNo": "Not supported by this driver (usual for UVC cameras). A software crop is used instead, which costs resolution.",
+    "cropWindow": "Crop window",
+    "customSize": "custom size",
+    "useMax": "max",
+    "clamped": "Too large for a centred window — reduced to {{w}}×{{h}}.",
+    "apply": "Apply crop",
+    "clear": "Clear",
+    "roiActive": "crop active",
+    "roiOff": "no crop",
+    "confirmApply": "Crop the stream to {{w}}×{{h}}? This discards {{lost}}% of the frame and you will need to calibrate again.",
+    "applied": "Crop applied and saved. Calibrate again to get intrinsics for the cropped stream.",
+    "savedNotApplied": "Saved, but not applied to the running stream: {{error}}",
+    "applyFailed": "could not set the crop: {{error}}",
+    "cleared": "Crop cleared.",
+    "recalibrateNote": "Applying a crop invalidates the calibration you loaded — re-run it afterwards.",
+    "offset": "Principal-point offset",
+    "distance": "distance",
+    "fovNow": "Field of view now",
+    "afterCrop": "After crop",
+    "frameLoss": "frame lost",
+    "kAfter": "K after crop",
+    "kNote": "A crop only translates the image origin: fx and fy are unchanged and the distortion coefficients still hold, because they are defined relative to the principal point.",
+    "liveLabel": "live · {{device}}",
+    "noCamera": "no camera",
+    "pickCamera": "pick a camera to inspect its optical centre"
   }
 }

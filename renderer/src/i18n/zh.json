@@ -29,6 +29,10 @@
       "label": "相机参数",
       "sub": "曝光 / 增益"
     },
+    "roifov": {
+      "label": "光心视野",
+      "sub": "中心 / 视场"
+    },
     "addStage": "+ 添加阶段"
   },
   "tweaks": {
@@ -634,5 +638,46 @@
     },
     "setAdjusted": "{{name}} 超出驱动允许范围，已调整为 {{value}}。",
     "setInactive": "{{name}} 当前被锁定，请先把它的父控制项切到手动。"
+  },
+  "roi": {
+    "railTitle": "光心 / 视野",
+    "status": "状态",
+    "readout": "读数",
+    "calibration": "标定结果",
+    "notLoaded": "未加载",
+    "loadCalib": "加载标定文件…",
+    "needCalibration": "先在 01 或 02 页标定一次并保存，再到这里加载 —— 主点来自 K 矩阵。",
+    "needStream": "等待相机报告画幅尺寸。",
+    "noKInFile": "该文件里没有相机矩阵 K。",
+    "loadCalibFailed": "加载失败：{{error}}",
+    "loadFailed": "读取 ROI 失败：{{error}}",
+    "rmsHigh": "偏大，主点可能不可靠",
+    "hwCrop": "硬件裁剪",
+    "hwCropYes": "支持 —— 驱动可在传感器侧裁剪，不损失分辨率。",
+    "hwCropNo": "该驱动不支持（UVC 相机普遍如此）。将使用软件裁剪，会损失分辨率。",
+    "cropWindow": "裁剪窗口",
+    "customSize": "自定尺寸",
+    "useMax": "最大",
+    "clamped": "超出可居中的范围，已缩减为 {{w}}×{{h}}。",
+    "apply": "应用裁剪",
+    "clear": "清除",
+    "roiActive": "裁剪生效中",
+    "roiOff": "未裁剪",
+    "confirmApply": "把画面裁剪为 {{w}}×{{h}}？这会舍弃 {{lost}}% 的画幅，并且需要重新标定。",
+    "applied": "裁剪已应用并保存。请重新标定以得到裁剪后画面的内参。",
+    "savedNotApplied": "已保存，但未应用到正在运行的流：{{error}}",
+    "applyFailed": "设置裁剪失败：{{error}}",
+    "cleared": "裁剪已清除。",
+    "recalibrateNote": "应用裁剪会让刚加载的标定失效，之后请重新标定。",
+    "offset": "主点偏移",
+    "distance": "距离",
+    "fovNow": "当前视场角",
+    "afterCrop": "裁剪后",
+    "frameLoss": "画幅损失",
+    "kAfter": "裁剪后的 K",
+    "kNote": "裁剪只是平移图像原点：fx、fy 不变，畸变系数依然成立 —— 它们本就是相对主点定义的。",
+    "liveLabel": "实时 · {{device}}",
+    "noCamera": "无相机",
+    "pickCamera": "选择一路相机以查看其光心"
   }
 }

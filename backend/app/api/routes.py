@@ -34,6 +34,7 @@ from app.models import (
     LinkRequest,
 )
 from app.sources import control_store
+from app.sources import roi_store
 from app.sources import manager as source_manager
 from app.sources import opencv as opencv_source
 from app.sources import ros2_context
@@ -280,6 +281,73 @@ async def camera_presets_mutate(body: dict) -> dict:
         info = control_store.set_active(key, keyed_by, None)
 
     return {"key": key, "keyed_by": keyed_by, **info}
+
+
+@router.get("/camera/roi")
+async def camera_get_roi(device: str) -> dict:
+    """Current ROI, the source's frame size, and whether the driver could do the
+    crop in hardware.
+
+    The size is what a caller needs to reason about the crop, and it must be the
+    size CONSUMERS see (post-clip), because that is the coordinate system the
+    principal point from a calibration is expressed in."""
+    if not device:
+        raise HTTPException(status_code=400, detail="need device")
+    key, keyed_by = _control_key(device)
+    stored = roi_store.get_roi(key)
+    size = None
+    live = None
+    try:
+        src = source_manager.get(device)
+        info = src.info()
+        if info.get("open"):
+            size = [info.get("width"), info.get("height")]
+        live = src.get_roi() if hasattr(src, "get_roi") else None
+    except Exception:
+        # Not streaming yet is normal — the stored ROI is still meaningful.
+        pass
+    return {
+        "key": key, "keyed_by": keyed_by,
+        "roi": stored, "live_roi": live, "size": size,
+        "hw_crop": v4l2_controls.supports_hw_crop(device),
+    }
+
+
+@router.post("/camera/roi")
+async def camera_set_roi(body: dict) -> dict:
+    """Set or clear the ROI. `{clear: true}` removes it.
+
+    Applied to the running source immediately (no restart — cropping happens
+    after each grab) and persisted, so it survives the resolution changes and tab
+    switches that tear the stream down."""
+    device = body.get("device")
+    if not device:
+        raise HTTPException(status_code=400, detail="need device")
+    key, keyed_by = _control_key(device)
+    clear = bool(body.get("clear"))
+    roi = None
+    if not clear:
+        try:
+            roi = {k: int(body[k]) for k in ("left", "top", "width", "height")}
+        except (KeyError, TypeError, ValueError) as e:
+            raise HTTPException(status_code=400, detail="need left/top/width/height") from e
+        if roi["width"] <= 0 or roi["height"] <= 0:
+            raise HTTPException(status_code=400, detail="width/height must be positive")
+        if roi["left"] < 0 or roi["top"] < 0:
+            raise HTTPException(status_code=400, detail="left/top must not be negative")
+    stored = roi_store.set_roi(key, keyed_by, roi)
+    try:
+        src = source_manager.get(device)
+        if hasattr(src, "set_roi"):
+            if roi:
+                src.set_roi(roi["left"], roi["top"], roi["width"], roi["height"])
+            else:
+                src.set_roi(0, 0, 0, 0)
+    except Exception as e:
+        # Persisted but not live: say so rather than reporting plain success,
+        # because the preview will not match what was just saved.
+        return {"key": key, "roi": stored, "applied": False, "error": str(e)}
+    return {"key": key, "roi": stored, "applied": True, "error": None}
 
 
 @router.post("/stream/clip")

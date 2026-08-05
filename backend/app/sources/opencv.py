@@ -16,7 +16,7 @@ from collections import deque
 import cv2
 import numpy as np
 
-from . import control_store, v4l2_controls
+from . import control_store, roi_store, v4l2_controls
 
 log = logging.getLogger("calib.source")
 
@@ -103,6 +103,11 @@ class CameraSource:
         # 720×720 ceiling so existing behavior is unchanged when the renderer
         # never touches set_clip().
         self._clip_target: tuple[int, int] | None = _DEFAULT_CLIP
+        # Offset-capable ROI applied AFTER _maybe_clip. Separate from the clip
+        # because the clip is a centred downscale (it changes fx/fy) while an ROI
+        # is a pure translation (it moves only cx/cy) — mixing the two into one
+        # knob would make the resulting intrinsics impossible to reason about.
+        self._roi: tuple[int, int, int, int] | None = None
 
     def _saved_controls(self) -> dict[str, int] | None:
         """The user's active control preset for this camera, or None when they
@@ -115,6 +120,17 @@ class CameraSource:
         except Exception as e:  # never let a config problem block the camera
             log.warning("%s: reading saved controls failed: %s", self.device, e)
             return None
+
+    def _restore_roi(self) -> None:
+        try:
+            serial = v4l2_controls.device_serial(self.device)
+            key, _ = control_store.device_key(self.device, serial)
+            roi = roi_store.get_roi(key)
+        except Exception as e:
+            log.warning("%s: reading saved roi failed: %s", self.device, e)
+            return
+        if roi:
+            self.set_roi(roi["left"], roi["top"], roi["width"], roi["height"])
 
     def _open_cap(self) -> cv2.VideoCapture:
         """Pre-open setup + cv2.VideoCapture creation. Pre-flight clears any latched
@@ -131,6 +147,10 @@ class CameraSource:
         # manual exposure on every stream restart (resolution change, tab switch,
         # backend reconnect) is worse than the risk it protects against, because
         # it fails invisibly: the picture just changes brightness.
+        # Replay the saved ROI too — like the controls, it is a property of the
+        # camera rather than of this session, and a crop silently disappearing on
+        # a resolution change would invalidate whatever was calibrated with it.
+        self._restore_roi()
         saved = self._saved_controls()
         if saved:
             v4l2_controls.apply_controls(self.device, saved)
@@ -229,6 +249,51 @@ class CameraSource:
             return crop
         return cv2.resize(crop, (tw, th), interpolation=cv2.INTER_AREA)
 
+    def _maybe_roi(self, frame: np.ndarray) -> np.ndarray:
+        """Crop to the stored ROI. Pure slice, no resize — a resize would change
+        the focal lengths and defeat the point, which is to move the principal
+        point without touching anything else.
+
+        Runs after _maybe_clip so the ROI is expressed in the coordinates the
+        consumers already see; that way a (cx, cy) measured by calibrating today
+        can be fed straight back in without any conversion."""
+        roi = self._roi
+        if frame is None or roi is None:
+            return frame
+        h, w = frame.shape[:2]
+        left, top, rw, rh = roi
+        # Clamp instead of raising: a stale ROI (saved at a higher resolution, or
+        # applied before the stream reported its size) must degrade to a smaller
+        # crop, not kill the stream.
+        left = max(0, min(left, w - 1))
+        top = max(0, min(top, h - 1))
+        rw = max(1, min(rw, w - left))
+        rh = max(1, min(rh, h - top))
+        if left == 0 and top == 0 and rw == w and rh == h:
+            return frame
+        return frame[top:top + rh, left:left + rw]
+
+    def set_roi(self, left, top, width, height) -> None:
+        """Set or clear the ROI. Falsy width/height clears it. No camera restart —
+        cropping happens after every read, so the next frame already reflects it."""
+        if not width or not height or int(width) <= 0 or int(height) <= 0:
+            with self._lock:
+                self._roi = None
+                self._ticks.clear()
+            log.info("disabled roi on %s", self.device)
+            return
+        with self._lock:
+            self._roi = (max(0, int(left)), max(0, int(top)), int(width), int(height))
+            self._ticks.clear()
+        log.info("roi on %s set to %dx%d+%d+%d", self.device, int(width), int(height),
+                 int(left), int(top))
+
+    def get_roi(self) -> dict | None:
+        roi = self._roi
+        if roi is None:
+            return None
+        return {"left": roi[0], "top": roi[1], "width": roi[2], "height": roi[3]}
+
     def _run(self) -> None:
         misses = 0
         logged_clip = False
@@ -238,6 +303,7 @@ class CameraSource:
                 if frame is not None:
                     h0, w0 = frame.shape[:2]
                     frame = self._maybe_clip(frame)
+                    frame = self._maybe_roi(frame)
                     if not logged_clip and (w0, h0) != frame.shape[1::-1]:
                         log.info("%s: clipping %dx%d → %dx%d", self.device, w0, h0, frame.shape[1], frame.shape[0])
                         logged_clip = True
