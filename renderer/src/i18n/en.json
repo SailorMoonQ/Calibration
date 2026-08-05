@@ -731,7 +731,46 @@
       "clipped-high": "Highlights are clipping.",
       "clipped-low": "Shadows are clipping.",
       "exceeds-blur-limit": "Exposure is longer than a handheld board can hold still — use a stand, or add light.",
-      "high-gain": "Gain ended high, so expect noise. More light would let it come down."
+      "high-gain": "Gain ended high, so expect noise. More light would let it come down.",
+      "costs-frame-rate": "Reaching the target needed an exposure longer than one frame period — the frame rate drops.",
+      "camera-fps-ceiling": "The exposure fits, but the camera cannot hit the target frame rate at this resolution — a hardware ceiling."
+    },
+    "fpsTarget": "target fps",
+    "fpsAny": "any",
+    "capNote": "exposure ceiling {{ms}} ms ({{reason}})",
+    "capReason": {
+      "fps": "set by the frame rate",
+      "blur": "set by motion blur"
+    },
+    "tuneFps": "measured",
+    "health": {
+      "title": "Is it tuned?",
+      "waiting": "waiting for frames…",
+      "pass": "All checks pass.",
+      "fail": "Some checks still fail.",
+      "verdict": {
+        "over": "over-exposed",
+        "under": "under-exposed"
+      },
+      "check": {
+        "brightness": "white level",
+        "clipHigh": "highlight clipping",
+        "clipLow": "shadow clipping",
+        "gain": "gain used",
+        "exposureBudget": "exposure vs frame period",
+        "frameRate": "measured fps"
+      },
+      "why": {
+        "brightness": {
+          "over": "The white squares are near saturation and the black/white boundary goes with them — shorten the exposure or lower the gain.",
+          "under": "Dark enough that the black squares crush to 0, which loses the corners from the other side — lengthen the exposure or add light."
+        },
+        "exposureBudget": "The exposure is longer than one frame period, so the sensor can only read out slower — this exposure is about {{fps}} fps.",
+        "frameRate": {
+          "exposure": "The exposure is what is holding the frame rate down; shortening it recovers the rate.",
+          "cameraCeiling": "The exposure fits inside the frame period and the frames still are not arriving — this is the camera's or the USB link's ceiling at this resolution, and no tuning will lift it. A smaller resolution might."
+        }
+      }
     }
   },
   "roi": {

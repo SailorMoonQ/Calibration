@@ -731,7 +731,46 @@
       "clipped-high": "高光在截断。",
       "clipped-low": "暗部在截断。",
       "exceeds-blur-limit": "曝光已超过手持能稳住的时长 —— 请用支架, 或者补光。",
-      "high-gain": "最终增益偏高, 会有噪声。补光可以把它降下来。"
+      "high-gain": "最终增益偏高, 会有噪声。补光可以把它降下来。",
+      "costs-frame-rate": "为了达到亮度, 曝光超过了一个帧周期 —— 帧率会掉下来。",
+      "camera-fps-ceiling": "曝光没有超, 但相机在该分辨率下达不到目标帧率 —— 这是硬件上限。"
+    },
+    "fpsTarget": "目标帧率",
+    "fpsAny": "不限",
+    "capNote": "曝光上限 {{ms}} ms（{{reason}}）",
+    "capReason": {
+      "fps": "受目标帧率限制",
+      "blur": "受拖影限制"
+    },
+    "tuneFps": "实测帧率",
+    "health": {
+      "title": "是否调到位",
+      "waiting": "等待画面…",
+      "pass": "各项达标。",
+      "fail": "还有项目未达标。",
+      "verdict": {
+        "over": "过曝",
+        "under": "过暗"
+      },
+      "check": {
+        "brightness": "白位亮度",
+        "clipHigh": "高光截断",
+        "clipLow": "暗部截断",
+        "gain": "增益占比",
+        "exposureBudget": "曝光 / 帧周期",
+        "frameRate": "实测帧率"
+      },
+      "why": {
+        "brightness": {
+          "over": "白格接近饱和, 黑白交界会被抹掉 —— 缩短曝光或降增益。",
+          "under": "画面偏暗, 黑格会压到 0, 角点从暗侧消失 —— 拉长曝光或补光。"
+        },
+        "exposureBudget": "曝光比一个帧周期还长, 传感器只能放慢读出 —— 当前曝光对应约 {{fps}} fps。",
+        "frameRate": {
+          "exposure": "帧率是被曝光时长拖下去的, 缩短曝光即可恢复。",
+          "cameraCeiling": "曝光并没有超, 帧率仍然上不去 —— 这是该分辨率下相机或 USB 带宽的上限, 调参无法改变。换更小的分辨率才有可能。"
+        }
+      }
     }
   },
   "roi": {

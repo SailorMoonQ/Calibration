@@ -428,3 +428,210 @@ def test_enforcing_the_cap_converges_rather_than_ping_ponging():
     _, s, hist, step = run_loop(cam, t, LIMITS)
     exposures = [st.exposure for st, _ in hist]
     assert all(e <= 200 for e in exposures[2:]), f"kept hunting: {exposures}"
+
+
+# ── the frame-rate cap ───────────────────────────────────────────────────────
+#
+# A sensor cannot integrate for longer than one frame period. Measured on the
+# rig at 1280x720: 33 ms -> 30 fps, 60 ms -> 16.6 fps, 200 ms -> 5.0 fps, i.e.
+# exactly 1000/exposure_ms once the exposure passes the frame period. So asking
+# for 60 fps IS asking for exposure <= 16.7 ms, and the controller has to treat
+# it as a hard ceiling rather than a preference.
+
+def test_the_frame_rate_sets_an_exposure_ceiling():
+    t = Targets(exposure_max_ms=200.0, fps_target=60.0)
+    assert t.exposure_cap_ms() == pytest.approx(1000 / 60)
+    assert t.cap_reason() == "fps"
+
+
+def test_the_tighter_of_the_two_caps_wins():
+    # Handheld blur limit is stricter than a 30 fps frame period.
+    t = Targets(exposure_max_ms=16.0, fps_target=30.0)
+    assert t.exposure_cap_ms() == 16.0
+    assert t.cap_reason() == "blur"
+
+
+def test_no_frame_rate_target_leaves_the_blur_limit_alone():
+    t = Targets(exposure_max_ms=200.0, fps_target=0.0)
+    assert t.exposure_cap_ms() == 200.0
+    assert t.cap_reason() == "blur"
+
+
+def test_a_fixed_rig_at_60fps_stops_at_the_frame_period_not_at_200ms():
+    """The bug this guards: 'fixed mount' used to mean a 200 ms cap, so a dim
+    room walked the exposure to 2000 units and quietly dropped the camera to
+    5 fps."""
+    cam = FakeCamera(exposure=50, gain=0)
+    t = Targets(exposure_max_ms=200.0, fps_target=60.0, allow_exceed_blur=False)
+    state, _, hist, _ = run_loop(cam, t, LIMITS)
+    cap_units = int((1000 / 60) / EXPOSURE_UNIT_MS)
+    assert state.exposure <= cap_units, f"exposure ran past the frame period: {state.exposure}"
+    assert all(st.exposure <= cap_units for st, _ in hist)
+
+
+def test_gain_covers_what_the_frame_rate_cap_takes_away():
+    """Capping exposure must not simply darken the picture — the light has to
+    come from somewhere, and gain is the only other source."""
+    cam = FakeCamera(exposure=50, gain=0)
+    t = Targets(exposure_max_ms=200.0, fps_target=60.0, allow_exceed_blur=False)
+    state, s, _, _ = run_loop(cam, t, LIMITS)
+    assert state.gain > 0, "capped the exposure and left the gain at zero"
+    assert s.p95 > 120, f"ended dark at p95={s.p95}"
+
+
+def test_an_over_period_exposure_is_reported_as_costing_frame_rate():
+    t = Targets(exposure_max_ms=200.0, fps_target=60.0, allow_exceed_blur=True)
+    v = verdict(Sample(p95=200, clip_high=0, clip_low=0), t, State(1000, 43), LIMITS)
+    assert "costs-frame-rate" in v["issues"]
+    assert v["fps_from_exposure"] == pytest.approx(10.0), "100 ms exposure is 10 fps"
+
+
+def test_a_slow_camera_at_a_short_exposure_is_blamed_on_the_camera():
+    """Exposure inside the frame period yet the frames are not arriving: the
+    ceiling is the sensor mode or the USB link, and no tuning will lift it.
+    Measured: this rig tops out near 30 fps at 720p even at a 5 ms exposure."""
+    t = Targets(exposure_max_ms=200.0, fps_target=60.0)
+    v = verdict(Sample(p95=200, clip_high=0, clip_low=0), t, State(100, 20), LIMITS,
+                fps=30.0)
+    assert "camera-fps-ceiling" in v["issues"]
+    assert "costs-frame-rate" not in v["issues"], "the exposure is not the problem"
+    assert v["fps"] == 30.0
+
+
+def test_the_camera_is_not_blamed_when_the_exposure_is_the_cause():
+    t = Targets(exposure_max_ms=200.0, fps_target=60.0)
+    v = verdict(Sample(p95=200, clip_high=0, clip_low=0), t, State(1000, 43), LIMITS,
+                fps=10.0)
+    assert "camera-fps-ceiling" not in v["issues"]
+    assert "costs-frame-rate" in v["issues"]
+
+
+def test_an_unknown_frame_rate_raises_no_frame_rate_complaint():
+    t = Targets(exposure_max_ms=200.0, fps_target=60.0)
+    v = verdict(Sample(p95=200, clip_high=0, clip_low=0), t, State(100, 20), LIMITS,
+                fps=0.0)
+    assert "camera-fps-ceiling" not in v["issues"]
+    assert v["fps"] is None
+
+
+# ── the controls are coarser than the tolerance band ─────────────────────────
+#
+# Found on hardware once the frame-rate cap pinned the exposure and left gain as
+# the only free control: gain 78 gave p95 187 and gain 93 gave p95 215, against a
+# target of 200 ± 12. The loop bounced between the two for the whole budget and
+# stopped on whichever side the count ran out on.
+
+def test_the_gain_step_shrinks_as_it_closes_in():
+    """A fixed fraction of the range steps clean over a 24-level band. The step
+    has to come from the camera's measured response, like the exposure step
+    already does."""
+    # Currently at gain 78 having come down from 93: ~1.85 p95 per gain unit.
+    hist = [
+        (State(exposure=166, gain=93), Sample(p95=215, clip_high=0, clip_low=0)),
+        (State(exposure=166, gain=78), Sample(p95=187, clip_high=0, clip_low=0)),
+    ]
+    t = Targets(exposure_max_ms=200.0, fps_target=60.0)
+    step = plan_step(hist[-1][1], hist[-1][0], t, LIMITS, hist)
+    assert step.gain > 78, "must raise the gain"
+    assert step.gain < 93, f"stepped past the band again: {step.gain}"
+
+
+def test_the_loop_stops_instead_of_oscillating_over_the_band():
+    """End to end against the simulated sensor, with a band tight enough that no
+    integer gain lands inside it. The loop must stop rather than burn the whole
+    budget bouncing across it."""
+    cam = FakeCamera(exposure=50, gain=61)
+    t = Targets(p95=200, p95_tol=1.0, exposure_max_ms=200.0, fps_target=60.0,
+                max_iterations=40)
+    _, _, _, step = run_loop(cam, t, LIMITS)
+    assert step is not None, "ran out of iterations instead of settling"
+    assert step.done is True
+
+
+def test_it_settles_on_the_closest_setting_it_actually_measured():
+    # Gain 80 measured p95 200 — 0.5 off a target the band is too tight to hold.
+    # The controller lands back on 80, so there is nothing new left to try.
+    hist = [
+        (State(exposure=166, gain=60), Sample(p95=160, clip_high=0, clip_low=0)),
+        (State(exposure=166, gain=80), Sample(p95=200, clip_high=0, clip_low=0)),
+        (State(exposure=166, gain=60), Sample(p95=160, clip_high=0, clip_low=0)),
+    ]
+    t = Targets(p95=199.5, p95_tol=0.4, exposure_max_ms=200.0, fps_target=60.0)
+    step = plan_step(hist[-1][1], hist[-1][0], t, LIMITS, hist)
+    assert (step.exposure, step.gain) == (166, 80), "did not return to the best measurement"
+    assert step.reason == "quantisation-limit"
+    assert step.done is True
+
+
+def test_a_clipped_setting_is_never_the_one_it_settles_on():
+    # p95 is exactly on target at gain 80, but 6% of the picture is saturated
+    # there and those white squares are gone for good. Gain 70 is 20 levels off
+    # and still the better answer.
+    hist = [
+        (State(exposure=166, gain=60), Sample(p95=160, clip_high=0.0, clip_low=0)),
+        (State(exposure=166, gain=80), Sample(p95=200, clip_high=0.06, clip_low=0)),
+        (State(exposure=166, gain=70), Sample(p95=180, clip_high=0.0, clip_low=0)),
+        (State(exposure=166, gain=60), Sample(p95=160, clip_high=0.0, clip_low=0)),
+    ]
+    t = Targets(p95=200, p95_tol=1, exposure_max_ms=200.0, fps_target=60.0)
+    step = plan_step(hist[-1][1], hist[-1][0], t, LIMITS, hist)
+    assert step.done is True
+    assert step.gain == 70, "settled on a setting with blown highlights"
+
+
+def test_settling_reports_on_target_when_the_best_actually_qualifies():
+    hist = [
+        (State(exposure=166, gain=78), Sample(p95=187, clip_high=0, clip_low=0)),
+        (State(exposure=166, gain=93), Sample(p95=215, clip_high=0, clip_low=0)),
+        (State(exposure=166, gain=78), Sample(p95=187, clip_high=0, clip_low=0)),
+    ]
+    t = Targets(p95=200, p95_tol=15, exposure_max_ms=200.0, fps_target=60.0)
+    step = plan_step(hist[-1][1], hist[-1][0], t, LIMITS, hist)
+    assert step.done is True
+    assert step.reason == "on-target", "187 is inside 200 ± 15"
+
+
+def test_settling_respects_a_refused_blur_limit():
+    """The best-looking measurement may be one taken over the exposure cap. If
+    the caller refused to exceed it, that setting is not a candidate."""
+    hist = [
+        (State(exposure=2000, gain=20), Sample(p95=200, clip_high=0, clip_low=0)),
+        (State(exposure=166, gain=93), Sample(p95=180, clip_high=0, clip_low=0)),
+        (State(exposure=2000, gain=20), Sample(p95=200, clip_high=0, clip_low=0)),
+    ]
+    t = Targets(p95=200, p95_tol=1, exposure_max_ms=200.0, fps_target=60.0,
+                allow_exceed_blur=False)
+    step = plan_step(hist[-1][1], hist[-1][0], t, LIMITS, hist)
+    assert step.exposure == 166, "settled on a setting that breaks the frame rate"
+
+
+def test_a_fresh_run_with_no_history_is_untouched_by_the_guard():
+    s = Sample(p95=80, clip_high=0, clip_low=0)
+    step = plan_step(s, State(exposure=100, gain=0), Targets(exposure_max_ms=100.0), LIMITS)
+    assert step.done is False
+
+
+def test_a_long_exposure_inherited_from_the_last_run_is_brought_back_down():
+    """Hardware bug: a 60 fps run that started at the 31.6 ms exposure a 30 fps
+    run had left behind called itself on-target on the first look — while listing
+    costs-frame-rate as a problem. Being correctly exposed at an over-cap
+    exposure says nothing about whether the same brightness is reachable within
+    the cap, so the cap is worth trying even when exceeding it is permitted."""
+    s = Sample(p95=200, clip_high=0, clip_low=0)
+    st = State(exposure=316, gain=54)                 # 31.6 ms — 30 fps
+    t = Targets(exposure_max_ms=200.0, fps_target=60.0, allow_exceed_blur=True)
+    step = plan_step(s, st, t, LIMITS)
+    assert step.done is False, "declared victory at half the requested frame rate"
+    assert step.exposure <= 167
+    assert step.gain > 54, "gain must take over the light exposure gives up"
+
+
+def test_a_dark_scene_may_still_exceed_the_cap_when_that_is_permitted():
+    """The cap attempt must not turn into a refusal: if the target genuinely is
+    not reachable inside it, a bright frame beats a fast one."""
+    cam = FakeCamera(light=0.10, exposure=50, gain=0)
+    t = Targets(exposure_max_ms=200.0, fps_target=60.0, allow_exceed_blur=True,
+                max_iterations=30)
+    state, s, _, _ = run_loop(cam, t, LIMITS)
+    assert state.exposure > 167, "stayed fast and dark instead of getting the picture"
+    assert s.p95 > 120, f"ended dark at p95={s.p95:.0f}"

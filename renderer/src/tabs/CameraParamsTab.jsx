@@ -7,6 +7,7 @@ import { ControlWidget } from '../components/ControlWidget.jsx';
 import { ExposureStats } from '../components/ExposureStats.jsx';
 import { CameraAdvice } from '../components/CameraAdvice.jsx';
 import { AutoTunePanel } from '../components/AutoTunePanel.jsx';
+import { CameraHealth } from '../components/CameraHealth.jsx';
 import { confirm } from '../components/confirm.jsx';
 import { api } from '../api/client.js';
 
@@ -34,6 +35,11 @@ export function CameraParamsTab() {
   const [presetName, setPresetName] = useState('');
   const [showAll, setShowAll] = useState(false);
   const [stats, setStats] = useState(null);
+  // What frame rate must survive the tuning. Owned here rather than inside the
+  // tuner panel because the health checklist judges against the same number —
+  // two independent copies would let the panel call a run "on target" while the
+  // checklist next to it reported the frame rate missed.
+  const [fpsTarget, setFpsTarget] = useState(60);
   // Best sharpness seen for this camera. Focus is hunted by peak — the absolute
   // Laplacian variance means nothing across scenes, so the useful readout is
   // "how close are you to the best you have found". Reset when the device
@@ -268,7 +274,13 @@ export function CameraParamsTab() {
             <>
               <Section title={t('cameraParams.autoTuneTitle')}>
                 <AutoTunePanel device={liveDevice} disabled={busy}
+                               fpsTarget={fpsTarget} onFpsTarget={setFpsTarget}
                                onDone={() => refresh(liveDevice)}/>
+              </Section>
+
+              <Section title={t('cameraParams.health.title')}>
+                <CameraHealth controls={controls} stats={stats}
+                              fps={streamInfo?.capture_fps} fpsTarget={fpsTarget}/>
               </Section>
 
               <Section title={t('cameraParams.adviceTitle')}>

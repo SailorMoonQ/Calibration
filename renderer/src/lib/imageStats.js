@@ -73,6 +73,28 @@ export function clipping(hist, margin = 2) {
   return { high: high / total, low: low / total, total };
 }
 
+// Luma level below which `p` of the pixels fall, read straight off the
+// histogram.
+//
+// The 95th percentile is the brightness the tuner and the health checklist both
+// judge by, and it has to be the same statistic the backend uses or the two
+// readouts would disagree on screen. Mean is the wrong one here: on a
+// calibration board the mean moves with how much board is in shot, while the p95
+// tracks the white squares — the thing that must approach saturation without
+// reaching it.
+export function percentile(hist, p) {
+  let total = 0;
+  for (let i = 0; i < 256; i++) total += hist[i];
+  if (!total) return 0;
+  const want = total * p;
+  let cum = 0;
+  for (let i = 0; i < 256; i++) {
+    cum += hist[i];
+    if (cum >= want) return i;
+  }
+  return 255;
+}
+
 // Mean luma, 0..255. Cheap orientation for "am I broadly too dark or too bright"
 // before reading the histogram shape.
 export function meanLuma(hist) {
@@ -121,6 +143,7 @@ export function frameStats(data, w, h, { targetW = 160, targetH = 120 } = {}) {
     hist,
     ...clipping(hist),
     mean: meanLuma(hist),
+    p95: percentile(hist, 0.95),
     sharpness: laplacianVar(gray, small.w, small.h),
     sampledW: small.w,
     sampledH: small.h,

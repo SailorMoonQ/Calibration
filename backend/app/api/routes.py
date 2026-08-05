@@ -327,7 +327,7 @@ async def camera_autotune(body: dict) -> dict:
 
     t = autotune_mod.Targets()
     for key in ("p95", "p95_tol", "clip_high_max", "clip_low_max", "exposure_max_ms",
-                "allow_exceed_blur", "max_iterations"):
+                "fps_target", "allow_exceed_blur", "max_iterations"):
         if key in body and body[key] is not None:
             setattr(t, key, type(getattr(t, key))(body[key]))
 
