@@ -7,6 +7,26 @@ import { confirm } from '../components/confirm.jsx';
 import { analyzeOpticalCenter, roiFor } from '../lib/opticalCenter.js';
 import { api, pickOpenFile } from '../api/client.js';
 
+// Stroke a path twice — a dark underlay, then the colour on top — so a thin
+// marker stays readable over both a blown-out calibration board and a dark
+// scene. Same technique the fisheye guidance overlay uses.
+//
+// Deliberately NOT sampling the frame to pick a colour: the picture moves, so a
+// background-adaptive marker would flicker on its own and could shift hue right
+// at the boundary it is meant to mark. A fixed colour with its own contrast is
+// steadier and cheaper.
+function strokeContrast(ctx, draw, color, width) {
+  ctx.lineCap = 'round';
+  ctx.strokeStyle = 'oklch(0.15 0 0 / 0.65)';
+  ctx.lineWidth = width * 2.4;
+  draw();
+  ctx.stroke();
+  ctx.strokeStyle = color;
+  ctx.lineWidth = width;
+  draw();
+  ctx.stroke();
+}
+
 // Optical-centre and field-of-view alignment.
 //
 // The principal point (cx, cy) from a calibration is almost never at the frame
@@ -90,13 +110,25 @@ export function RoiFovTab() {
     ctx.clearRect(0, 0, w, h);
     const unit = Math.max(2, Math.round(Math.min(w, h) / 240));
 
-    // Geometric centre — thin grey cross.
-    ctx.strokeStyle = 'oklch(0.75 0 0 / 0.55)';
-    ctx.lineWidth = Math.max(1, unit * 0.4);
-    ctx.beginPath();
-    ctx.moveTo(w / 2 - unit * 8, h / 2); ctx.lineTo(w / 2 + unit * 8, h / 2);
-    ctx.moveTo(w / 2, h / 2 - unit * 8); ctx.lineTo(w / 2, h / 2 + unit * 8);
-    ctx.stroke();
+    // Geometric frame centre — a white reticle, drawn with its own dark underlay
+    // so it reads on any background. White is used because this is the neutral
+    // REFERENCE; amber is reserved for the measured principal point and the
+    // proposed crop, so the two never compete for the same meaning.
+    //
+    // The arms leave a gap in the middle: a solid cross would paint over the
+    // exact pixel it exists to mark, and would swallow the principal-point dot
+    // whenever the two nearly coincide — which is the "well-centred lens" case
+    // the operator most needs to be able to confirm.
+    const armOuter = Math.max(18, Math.min(w, h) * 0.055);
+    const armInner = armOuter * 0.3;
+    const cw = Math.max(2, unit * 0.95);
+    strokeContrast(ctx, () => {
+      ctx.beginPath();
+      ctx.moveTo(w / 2 - armOuter, h / 2); ctx.lineTo(w / 2 - armInner, h / 2);
+      ctx.moveTo(w / 2 + armInner, h / 2); ctx.lineTo(w / 2 + armOuter, h / 2);
+      ctx.moveTo(w / 2, h / 2 - armOuter); ctx.lineTo(w / 2, h / 2 - armInner);
+      ctx.moveTo(w / 2, h / 2 + armInner); ctx.lineTo(w / 2, h / 2 + armOuter);
+    }, 'oklch(0.97 0 0 / 0.95)', cw);
 
     if (!analysis) return;
     // Once a crop is live the preview shows the cropped picture, so drawing the
@@ -121,16 +153,30 @@ export function RoiFovTab() {
       ctx.restore();
     }
 
-    // Line from centre to the principal point, then the principal point itself.
-    ctx.strokeStyle = 'oklch(0.85 0.18 90 / 0.85)';
-    ctx.lineWidth = Math.max(1.5, unit * 0.5);
-    ctx.beginPath(); ctx.moveTo(w / 2, h / 2); ctx.lineTo(cx, cy); ctx.stroke();
+    // Connector from the frame centre to the principal point — it is the offset
+    // being reported, so showing it as a line makes the magnitude readable
+    // without looking at the numbers. Skipped when the two nearly coincide,
+    // where a stub line would just be visual noise.
+    const rDot = Math.max(3, Math.min(w, h) * 0.008);
+    if (Math.hypot(cx - w / 2, cy - h / 2) > rDot * 2) {
+      strokeContrast(ctx, () => {
+        ctx.beginPath();
+        ctx.moveTo(w / 2, h / 2);
+        ctx.lineTo(cx, cy);
+      }, 'oklch(0.9 0.18 90 / 0.9)', Math.max(1.5, unit * 0.55));
+    }
 
-    ctx.fillStyle = 'oklch(0.92 0.18 90 / 0.95)';
-    ctx.beginPath(); ctx.arc(cx, cy, unit * 2.2, 0, Math.PI * 2); ctx.fill();
-    ctx.strokeStyle = 'oklch(0.2 0 0 / 0.7)';
-    ctx.lineWidth = Math.max(1, unit * 0.3);
-    ctx.beginPath(); ctx.arc(cx, cy, unit * 4.5, 0, Math.PI * 2); ctx.stroke();
+    // Principal point — a filled dot inside a ring. A different SHAPE from the
+    // centre reticle, not just a different colour, so the two stay tellable
+    // apart when they overlap and for anyone who cannot separate them by hue.
+    strokeContrast(ctx, () => {
+      ctx.beginPath();
+      ctx.arc(cx, cy, rDot * 2.6, 0, Math.PI * 2);
+    }, 'oklch(0.92 0.18 90 / 0.95)', Math.max(1.5, unit * 0.6));
+    ctx.fillStyle = 'oklch(0.15 0 0 / 0.65)';
+    ctx.beginPath(); ctx.arc(cx, cy, rDot * 1.35, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = 'oklch(0.92 0.18 90 / 0.98)';
+    ctx.beginPath(); ctx.arc(cx, cy, rDot, 0, Math.PI * 2); ctx.fill();
   }, [analysis, proposed, size, K, activeRoiApplied]);
 
   const onLoad = async () => {
