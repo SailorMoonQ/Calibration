@@ -16,6 +16,8 @@ from collections import deque
 import cv2
 import numpy as np
 
+from . import control_store, v4l2_controls
+
 log = logging.getLogger("calib.source")
 
 _DEV_RE = re.compile(r"/dev/video(\d+)$")
@@ -102,13 +104,38 @@ class CameraSource:
         # never touches set_clip().
         self._clip_target: tuple[int, int] | None = _DEFAULT_CLIP
 
+    def _saved_controls(self) -> dict[str, int] | None:
+        """The user's active control preset for this camera, or None when they
+        have never configured one. Keyed by USB serial so the preset survives the
+        device being re-enumerated as a different /dev/videoN."""
+        try:
+            serial = v4l2_controls.device_serial(self.device)
+            key, _ = control_store.device_key(self.device, serial)
+            return control_store.active_controls(key)
+        except Exception as e:  # never let a config problem block the camera
+            log.warning("%s: reading saved controls failed: %s", self.device, e)
+            return None
+
     def _open_cap(self) -> cv2.VideoCapture:
         """Pre-open setup + cv2.VideoCapture creation. Pre-flight clears any latched
         manual-exposure state, picks MJPG, and applies _target_size when the user has
         explicitly requested a resolution. Must run before any concurrent read."""
-        # Switch off any latched manual-exposure / dim-frame state. Must run before
-        # VideoCapture acquires the device or the driver may ignore the change.
-        _force_auto_exposure(self.device)
+        # Replay the user's saved camera controls when they have chosen a preset;
+        # otherwise fall back to switching off any latched manual-exposure /
+        # dim-frame state. Both must run before VideoCapture acquires the device
+        # or the driver may ignore the change.
+        #
+        # The fallback is the historical behaviour and still guards the all-black
+        # frames some IMX307 modules latch into. It is skipped only when the user
+        # has explicitly configured controls — silently overwriting a deliberate
+        # manual exposure on every stream restart (resolution change, tab switch,
+        # backend reconnect) is worse than the risk it protects against, because
+        # it fails invisibly: the picture just changes brightness.
+        saved = self._saved_controls()
+        if saved:
+            v4l2_controls.apply_controls(self.device, saved)
+        else:
+            _force_auto_exposure(self.device)
         cap = cv2.VideoCapture(_device_id(self.device))
         if not cap.isOpened():
             raise RuntimeError(f"cannot open {self.device}")

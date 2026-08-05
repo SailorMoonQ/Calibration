@@ -33,9 +33,11 @@ from app.models import (
     IntrinsicsRequest,
     LinkRequest,
 )
+from app.sources import control_store
 from app.sources import manager as source_manager
 from app.sources import opencv as opencv_source
 from app.sources import ros2_context
+from app.sources import v4l2_controls
 from app.utils import yaml_io
 from app import voice
 
@@ -159,6 +161,125 @@ async def stream_set_resolution(body: dict) -> dict:
         return src.info()
     finally:
         source_manager.release(device)
+
+
+def _control_key(device: str) -> tuple[str, str]:
+    """Storage identity for a camera: USB serial when readable, device path
+    otherwise. Shared by every /camera/* route so a preset saved through one
+    endpoint is found by the others."""
+    serial = v4l2_controls.device_serial(device)
+    return control_store.device_key(device, serial)
+
+
+@router.get("/camera/controls")
+async def camera_controls(device: str) -> dict:
+    """Enumerate the camera's V4L2 controls, plus its stored presets.
+
+    Returns supported=False with a reason (rather than an error) for sources that
+    cannot carry V4L2 controls — ROS2 topics are owned by their driver node — so
+    the UI can say why instead of rendering an inert panel."""
+    if not device:
+        raise HTTPException(status_code=400, detail="need device")
+    result = v4l2_controls.list_controls(device)
+    key, keyed_by = _control_key(device)
+    result["key"] = key
+    result["keyed_by"] = keyed_by
+    result["presets"] = control_store.list_presets(key)
+    result["hw_crop"] = v4l2_controls.supports_hw_crop(device)
+    return result
+
+
+@router.post("/camera/control")
+async def camera_set_control(body: dict) -> dict:
+    """Set one control and return the REFRESHED full list.
+
+    Returning the whole list is deliberate: changing one control can lock or
+    unlock another (exposure_time_absolute follows auto_exposure), and only the
+    driver knows the new state. Re-enumerating costs one v4l2-ctl call and keeps
+    the UI from having to guess."""
+    device = body.get("device")
+    name = body.get("name")
+    value = body.get("value")
+    if not device or not name or value is None:
+        raise HTTPException(status_code=400, detail="need device/name/value")
+    try:
+        value = int(value)
+    except (TypeError, ValueError) as e:
+        raise HTTPException(status_code=400, detail="value must be an integer") from e
+    r = v4l2_controls.set_control(device, name, value)
+    key, keyed_by = _control_key(device)
+    if r["ok"]:
+        # Persist the edit into the active preset (creating an implicit one when
+        # the user has not named any). Without this, a slider change would be
+        # silently reverted the next time the stream restarts — a resolution
+        # switch or tab change would quietly undo the operator's work, which is
+        # exactly the failure mode this feature exists to remove.
+        control_store.remember_value(key, keyed_by, name, value)
+    result = v4l2_controls.list_controls(device)
+    result["set"] = r
+    result["key"] = key
+    result["keyed_by"] = keyed_by
+    result["presets"] = control_store.list_presets(key)
+    return result
+
+
+@router.get("/camera/presets")
+async def camera_presets(device: str) -> dict:
+    if not device:
+        raise HTTPException(status_code=400, detail="need device")
+    key, keyed_by = _control_key(device)
+    return {"key": key, "keyed_by": keyed_by, **control_store.list_presets(key)}
+
+
+@router.post("/camera/presets")
+async def camera_presets_mutate(body: dict) -> dict:
+    """save | delete | activate | reset.
+
+    `reset` writes every control back to the value the driver reports as its
+    default and clears the active preset, which also restores the legacy
+    force-auto-exposure behaviour on the next stream open."""
+    device = body.get("device")
+    action = body.get("action")
+    if not device or action not in ("save", "delete", "activate", "reset"):
+        raise HTTPException(status_code=400, detail="need device + action save|delete|activate|reset")
+    key, keyed_by = _control_key(device)
+
+    if action == "save":
+        name = body.get("name")
+        values = body.get("values")
+        if not name or not isinstance(values, dict):
+            raise HTTPException(status_code=400, detail="save needs name + values")
+        try:
+            info = control_store.save_preset(key, keyed_by, name, values)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        v4l2_controls.apply_controls(device, {k: int(v) for k, v in values.items()})
+    elif action == "delete":
+        name = body.get("name")
+        if not name:
+            raise HTTPException(status_code=400, detail="delete needs name")
+        info = control_store.delete_preset(key, name)
+    elif action == "activate":
+        name = body.get("name")
+        try:
+            info = control_store.set_active(key, keyed_by, name)
+        except KeyError as e:
+            raise HTTPException(status_code=404, detail=f"no such preset: {name}") from e
+        values = info["presets"].get(name) if name else None
+        if values:
+            v4l2_controls.apply_controls(device, {k: int(v) for k, v in values.items()})
+    else:  # reset
+        listing = v4l2_controls.list_controls(device)
+        defaults = {
+            c["id"]: c["default"]
+            for c in listing.get("controls", [])
+            if c.get("default") is not None
+        }
+        if defaults:
+            v4l2_controls.apply_controls(device, defaults)
+        info = control_store.set_active(key, keyed_by, None)
+
+    return {"key": key, "keyed_by": keyed_by, **info}
 
 
 @router.post("/stream/clip")
