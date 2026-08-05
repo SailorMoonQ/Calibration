@@ -34,6 +34,7 @@ from app.models import (
     LinkRequest,
 )
 from app.sources import control_store
+from app.sources import autotune as autotune_mod
 from app.sources import roi_store
 from app.sources import manager as source_manager
 from app.sources import opencv as opencv_source
@@ -281,6 +282,94 @@ async def camera_presets_mutate(body: dict) -> dict:
         info = control_store.set_active(key, keyed_by, None)
 
     return {"key": key, "keyed_by": keyed_by, **info}
+
+
+@router.post("/camera/autotune")
+async def camera_autotune(body: dict) -> dict:
+    """Drive exposure and gain to a measured target, closed loop.
+
+    Closed loop rather than a formula because V4L2 does not define what a gain
+    unit means — on the test rig gain=0 is unity (p95=39, not black) and the
+    ISP's gamma makes the exposure exponent drift from 0.81 to 0.44 across the
+    range. Measuring the camera's own response sidesteps all of that.
+
+    Runs in a worker thread: each iteration sleeps to let the sensor settle, and
+    blocking the event loop for that would stall every other request including
+    the video stream the loop is measuring."""
+    device = body.get("device")
+    if not device:
+        raise HTTPException(status_code=400, detail="need device")
+    if not v4l2_controls.is_v4l2_device(device):
+        raise HTTPException(status_code=400, detail="autotune needs a v4l2 device")
+
+    listing = v4l2_controls.list_controls(device)
+    if not listing.get("supported"):
+        raise HTTPException(status_code=400, detail=listing.get("reason") or "no controls")
+    by = {c["id"]: c for c in listing["controls"]}
+    exp = by.get("exposure_time_absolute") or by.get("exposure_absolute")
+    if not exp:
+        raise HTTPException(status_code=400, detail="camera exposes no exposure control")
+    gain = by.get("gain")
+
+    # Manual exposure is a precondition, not a suggestion: with the driver's own
+    # AE running, every write we make is immediately overridden and the loop
+    # would be measuring the driver's decisions rather than its own.
+    ae = by.get("auto_exposure") or by.get("exposure_auto")
+    if ae is not None and ae.get("value") != 1:
+        v4l2_controls.set_control(device, ae["id"], 1, listing["controls"])
+        listing = v4l2_controls.list_controls(device)
+        by = {c["id"]: c for c in listing["controls"]}
+        exp = by.get("exposure_time_absolute") or by.get("exposure_absolute")
+        gain = by.get("gain")
+        if not exp or exp.get("inactive"):
+            raise HTTPException(status_code=409,
+                                detail="exposure stayed locked after switching to manual")
+
+    t = autotune_mod.Targets()
+    for key in ("p95", "p95_tol", "clip_high_max", "clip_low_max", "exposure_max_ms",
+                "allow_exceed_blur", "max_iterations"):
+        if key in body and body[key] is not None:
+            setattr(t, key, type(getattr(t, key))(body[key]))
+
+    limits = autotune_mod.Limits(
+        exp_min=int(exp["min"]), exp_max=int(exp["max"]), exp_step=int(exp.get("step") or 1),
+        gain_min=int(gain["min"]) if gain else 0,
+        gain_max=int(gain["max"]) if gain else 0,
+        gain_step=int(gain.get("step") or 1) if gain else 1,
+        has_gain=gain is not None and not gain.get("inactive"),
+    )
+    names = {"exposure": exp["id"], "gain": gain["id"] if gain else None}
+
+    def apply_control(which, value):
+        name = names.get(which)
+        if name:
+            v4l2_controls.set_control(device, name, int(value))
+
+    src = source_manager.get(device)
+    try:
+        if not src.wait_frame(timeout=3.0):
+            raise HTTPException(status_code=503, detail="camera produced no frame")
+        start = autotune_mod.State(
+            exposure=int(exp.get("value") or exp["min"]),
+            gain=int(gain.get("value") or gain["min"]) if gain else 0,
+        )
+        result = await asyncio.to_thread(
+            autotune_mod.run_autotune, src, apply_control, limits, t,
+            float(body.get("settle_s") or 0.28), start,
+        )
+    finally:
+        source_manager.release(device)
+
+    # Persist whatever the loop settled on, so it survives the stream restarts
+    # that a resolution change or a tab switch causes.
+    key, keyed_by = _control_key(device)
+    control_store.remember_value(key, keyed_by, names["exposure"], result["state"]["exposure"])
+    if names["gain"]:
+        control_store.remember_value(key, keyed_by, names["gain"], result["state"]["gain"])
+
+    result["controls"] = v4l2_controls.list_controls(device).get("controls", [])
+    result["presets"] = control_store.list_presets(key)
+    return result
 
 
 @router.get("/camera/roi")

@@ -105,6 +105,11 @@ export const api = {
     request(`/camera/controls?device=${encodeURIComponent(device)}`),
   setCameraControl: (device, name, value) =>
     request('/camera/control', { method: 'POST', body: JSON.stringify({ device, name, value }) }),
+  // Closed-loop exposure/gain tuning. Slow by nature: each iteration waits for
+  // the sensor to actually deliver the settings it was just given, so a run
+  // takes seconds. fetch has no default timeout, which is what we want here.
+  autotuneCamera: (body) =>
+    request('/camera/autotune', { method: 'POST', body: JSON.stringify(body) }),
   cameraPresets: (device) =>
     request(`/camera/presets?device=${encodeURIComponent(device)}`),
   mutateCameraPresets: (body) =>

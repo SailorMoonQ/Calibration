@@ -707,7 +707,32 @@
         "short": "gain"
       }
     },
-    "adviceBlocked": "Locked by {{parent}} — fix that first."
+    "adviceBlocked": "Locked by {{parent}} — fix that first.",
+    "autoTuneTitle": "Auto tune",
+    "autoTune": "Tune exposure & gain",
+    "tuning": "Tuning…",
+    "mounting": "board is",
+    "handheld": "handheld",
+    "fixed": "on a stand",
+    "handheldNote": "Keeps the exposure short enough that a moving board does not smear. If the room is too dim for that, it will go longer anyway and say so — a dark frame has no corners at all.",
+    "fixedNote": "No blur to worry about, so exposure can run long and gain stays low. Best image quality.",
+    "tuneOk": "On target.",
+    "tunePartial": "Best achievable here.",
+    "tuneFailed": "tuning failed: {{error}}",
+    "tuneExposure": "exposure",
+    "tuneGain": "gain",
+    "tuneWhite": "white level",
+    "tuneSteps": "steps",
+    "showTrace": "show what it did",
+    "hideTrace": "hide",
+    "tuneIssue": {
+      "too-dark": "Still too dark — the scene needs more light.",
+      "too-bright": "Still too bright.",
+      "clipped-high": "Highlights are clipping.",
+      "clipped-low": "Shadows are clipping.",
+      "exceeds-blur-limit": "Exposure is longer than a handheld board can hold still — use a stand, or add light.",
+      "high-gain": "Gain ended high, so expect noise. More light would let it come down."
+    }
   },
   "roi": {
     "railTitle": "Optical Centre / FOV",

@@ -707,7 +707,32 @@
         "short": "增益"
       }
     },
-    "adviceBlocked": "被「{{parent}}」锁定，请先处理上一项。"
+    "adviceBlocked": "被「{{parent}}」锁定，请先处理上一项。",
+    "autoTuneTitle": "自动调参",
+    "autoTune": "自动调曝光与增益",
+    "tuning": "调整中…",
+    "mounting": "标定板",
+    "handheld": "手持",
+    "fixed": "固定",
+    "handheldNote": "把曝光控制在移动的板不会拖影的范围内。如果光线不足以做到, 仍会拉长曝光并明确告知 —— 暗画面根本没有角点可用。",
+    "fixedNote": "不用担心拖影, 曝光可以拉长、增益保持很低, 画质最好。",
+    "tuneOk": "已达标。",
+    "tunePartial": "这是当前条件下能达到的最好结果。",
+    "tuneFailed": "调参失败：{{error}}",
+    "tuneExposure": "曝光",
+    "tuneGain": "增益",
+    "tuneWhite": "白位",
+    "tuneSteps": "步",
+    "showTrace": "查看调整过程",
+    "hideTrace": "收起",
+    "tuneIssue": {
+      "too-dark": "仍然偏暗 —— 这个场景需要补光。",
+      "too-bright": "仍然偏亮。",
+      "clipped-high": "高光在截断。",
+      "clipped-low": "暗部在截断。",
+      "exceeds-blur-limit": "曝光已超过手持能稳住的时长 —— 请用支架, 或者补光。",
+      "high-gain": "最终增益偏高, 会有噪声。补光可以把它降下来。"
+    }
   },
   "roi": {
     "railTitle": "光心 / 视野",

@@ -6,6 +6,7 @@ import { useCameraSource, CameraSourcePanel } from '../components/CameraSource.j
 import { ControlWidget } from '../components/ControlWidget.jsx';
 import { ExposureStats } from '../components/ExposureStats.jsx';
 import { CameraAdvice } from '../components/CameraAdvice.jsx';
+import { AutoTunePanel } from '../components/AutoTunePanel.jsx';
 import { confirm } from '../components/confirm.jsx';
 import { api } from '../api/client.js';
 
@@ -265,6 +266,11 @@ export function CameraParamsTab() {
 
           {supported && (
             <>
+              <Section title={t('cameraParams.autoTuneTitle')}>
+                <AutoTunePanel device={liveDevice} disabled={busy}
+                               onDone={() => refresh(liveDevice)}/>
+              </Section>
+
               <Section title={t('cameraParams.adviceTitle')}>
                 <CameraAdvice controls={controls} stats={stats} sharpnessPeak={sharpPeak}
                               onApply={applyAdvice} busy={busy}/>
