@@ -25,9 +25,14 @@ function clipColor(v) {
 // drawing into. Nothing is asked of the backend — the pixels are already on
 // screen, so reading them costs one readback per sample rather than a second
 // stream or a detection pass.
-export function ExposureStats({ canvasRef, active = true }) {
+export function ExposureStats({ canvasRef, active = true, onStats }) {
   const { t } = useTranslation();
   const [stats, setStats] = useState(null);
+  // Handed to the parent so the guidance panel reads the SAME sample rather than
+  // doing its own canvas readback — two readbacks at different instants would
+  // let the advice disagree with the histogram it sits next to.
+  const onStatsRef = useRef(onStats);
+  useEffect(() => { onStatsRef.current = onStats; }, [onStats]);
   const trendRef = useRef([]);
   const [trend, setTrend] = useState([]);
 
@@ -46,6 +51,7 @@ export function ExposureStats({ canvasRef, active = true }) {
           const s = frameStats(img.data, c.width, c.height);
           if (s) {
             setStats(s);
+            onStatsRef.current?.(s);
             const arr = trendRef.current;
             arr.push(s.sharpness);
             if (arr.length > TREND_POINTS) arr.shift();

@@ -5,6 +5,7 @@ import { LivePreview } from '../components/LivePreview.jsx';
 import { useCameraSource, CameraSourcePanel } from '../components/CameraSource.jsx';
 import { ControlWidget } from '../components/ControlWidget.jsx';
 import { ExposureStats } from '../components/ExposureStats.jsx';
+import { CameraAdvice } from '../components/CameraAdvice.jsx';
 import { confirm } from '../components/confirm.jsx';
 import { api } from '../api/client.js';
 
@@ -31,6 +32,17 @@ export function CameraParamsTab() {
   const setStatus = (msg, isErr = false) => { setStatusMsg(msg); setStatusErr(isErr); };
   const [presetName, setPresetName] = useState('');
   const [showAll, setShowAll] = useState(false);
+  const [stats, setStats] = useState(null);
+  // Best sharpness seen for this camera. Focus is hunted by peak — the absolute
+  // Laplacian variance means nothing across scenes, so the useful readout is
+  // "how close are you to the best you have found". Reset when the device
+  // changes, since a peak from another camera is not a target for this one.
+  const [sharpPeak, setSharpPeak] = useState(0);
+  useEffect(() => { setSharpPeak(0); setStats(null); }, [liveDevice]);
+  const onStats = useCallback((s) => {
+    setStats(s);
+    setSharpPeak(p => (s.sharpness > p ? s.sharpness : p));
+  }, []);
 
   // LivePreview hands us its canvas ref. Store the ref OBJECT, never its current
   // value: the canvas is replaced whenever the device changes, and a snapshot
@@ -234,11 +246,16 @@ export function CameraParamsTab() {
         <div className="rail-header"><span>{t('cameraParams.exposureReadout')}</span></div>
         <div className="rail-scroll">
           <Section title={t('cameraParams.exposureReadout')}>
-            <ExposureStats canvasRef={canvasRef} active={!!liveDevice}/>
+            <ExposureStats canvasRef={canvasRef} active={!!liveDevice} onStats={onStats}/>
           </Section>
 
           {supported && (
             <>
+              <Section title={t('cameraParams.adviceTitle')}>
+                <CameraAdvice controls={controls} stats={stats} sharpnessPeak={sharpPeak}
+                              onApply={onSet} busy={busy}/>
+              </Section>
+
               <Section title={t('cameraParams.commonControls')}>
                 {common.map(c => (
                   <ControlWidget key={c.id} control={c} onSet={onSet} onUnlock={onUnlock} busy={busy}/>

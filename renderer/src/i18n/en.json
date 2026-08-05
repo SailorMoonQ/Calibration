@@ -637,7 +637,71 @@
       "focus_absolute": "focus"
     },
     "setAdjusted": "{{name}} was outside the driver's range — set to {{value}}.",
-    "setInactive": "{{name}} is locked right now; switch its parent control to manual first."
+    "setInactive": "{{name}} is locked right now; switch its parent control to manual first.",
+    "adviceTitle": "Guidance",
+    "adviceWaiting": "waiting for a frame and the control list…",
+    "adviceAllGood": "Ready for calibration.",
+    "adviceCount": "{{count}} thing(s) to fix",
+    "advicePassing": "OK: {{list}}",
+    "focusPeak": "focus vs best seen",
+    "focusPeakHint": "Turn the focus ring and watch for the peak — the absolute number is meaningless, the maximum is not.",
+    "advice": {
+      "autoExposure": {
+        "title": "Auto exposure is on",
+        "why": "The driver re-decides exposure between frames, so images captured minutes apart no longer share one camera model — which is what a calibration assumes they do.",
+        "fix": "Switch to manual",
+        "short": "manual exposure"
+      },
+      "autoFocus": {
+        "title": "Continuous autofocus is on",
+        "why": "Refocusing mid-session changes the focal length, so the frames no longer belong to a single intrinsic model.",
+        "fix": "Turn it off",
+        "short": "fixed focus"
+      },
+      "autoWhiteBalance": {
+        "title": "Auto white balance is on",
+        "why": "Corner detection runs on luma, so this will not break detection — but it does make brightness drift between frames.",
+        "fix": "Turn it off",
+        "short": "fixed white balance"
+      },
+      "clipHigh": {
+        "title": "Highlights are blown out",
+        "why": "The white squares are saturating, so the corner between a white and a black square stops existing where it clips.",
+        "fix": "Shorten the exposure",
+        "short": "exposure level"
+      },
+      "clipLow": {
+        "title": "Shadows are crushed",
+        "why": "The black squares are hitting zero, which removes the same corners from the other side.",
+        "fix": "Lengthen the exposure",
+        "short": "exposure level"
+      },
+      "exposureLevel": {
+        "title": "Exposure level",
+        "why": "",
+        "fix": "",
+        "short": "exposure level"
+      },
+      "gainHigh": {
+        "title": "Gain is high",
+        "why": "Sub-pixel corner refinement fits a surface to local intensity, and gain noise perturbs that fit directly. Prefer a longer exposure over more gain, up to the motion-blur limit.",
+        "fix": "Lower the gain",
+        "short": "gain"
+      },
+      "motionBlur": {
+        "title": "Exposure is long enough to smear a moving board",
+        "why": "Corners captured while the board is moving land in the wrong place. If you are holding the board by hand, shorten the exposure and accept a little more gain.",
+        "fix": "",
+        "short": "exposure time"
+      },
+      "powerLine": {
+        "title": "Mains frequency does not match",
+        "why": "Under artificial light a mismatch bands the image, and the bands move between frames.",
+        "fix": "Match the local mains",
+        "short": "flicker"
+      }
+    },
+    "adviceBlocked": "Locked by {{parent}} — fix that first."
   },
   "roi": {
     "railTitle": "Optical Centre / FOV",
