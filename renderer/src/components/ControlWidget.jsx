@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 // One V4L2 control, rendered by its type. Int → slider + numeric box, bool →
@@ -20,11 +20,28 @@ export function ControlWidget({ control, onSet, onUnlock, busy }) {
   useEffect(() => { setLocal(value); }, [value]);
 
   const label = t(`cameraParams.ctrl.${id}`, { defaultValue: id });
-  const disabled = !!inactive || !!busy;
+  // Only `inactive` disables the input. Disabling on `busy` too would break a
+  // drag: a debounced commit fires while the pointer is still down, and the
+  // slider would go dead under the user's hand for the duration of the write.
+  // A control write is fast and idempotent, so there is nothing to protect.
+  const disabled = !!inactive;
 
   const commit = (v) => {
     setLocal(v);
     onSet(id, v);
+  };
+
+  // Sliders commit on a timer rather than on mouse-up. Mouse-up fires on
+  // whatever element is under the cursor, so dragging a slider and releasing
+  // outside it would leave the change uncommitted — the panel would show the new
+  // value while the camera kept the old one, with nothing to indicate it. A
+  // short debounce also keeps a drag from issuing one v4l2 write per pixel.
+  const timerRef = useRef(null);
+  useEffect(() => () => { if (timerRef.current) clearTimeout(timerRef.current); }, []);
+  const commitSoon = (v) => {
+    setLocal(v);
+    if (timerRef.current) clearTimeout(timerRef.current);
+    timerRef.current = setTimeout(() => { timerRef.current = null; onSet(id, v); }, 120);
   };
 
   return (
@@ -40,10 +57,7 @@ export function ControlWidget({ control, onSet, onUnlock, busy }) {
         <div className="slider-row">
           <input type="range" min={min} max={max} step={step || 1}
                  value={local ?? min ?? 0} disabled={disabled}
-                 onChange={e => setLocal(+e.target.value)}
-                 onMouseUp={e => commit(+e.target.value)}
-                 onKeyUp={e => commit(+e.target.value)}
-                 onTouchEnd={e => commit(+e.target.value)}/>
+                 onChange={e => commitSoon(+e.target.value)}/>
           <input className="input mono" style={{ width: 66, fontSize: 11 }}
                  type="number" min={min} max={max} step={step || 1}
                  value={local ?? ''} disabled={disabled}
