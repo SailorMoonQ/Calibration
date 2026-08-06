@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Field } from './primitives.jsx';
+import { tuningBlockers } from '../lib/cameraAdvice.js';
 import { api } from '../api/client.js';
 
 // One-click exposure/gain tuning.
@@ -21,7 +22,8 @@ import { api } from '../api/client.js';
 //
 // The tighter of the two caps wins, and the panel says which one is binding —
 // "steady the board" and "accept fewer frames" are opposite actions.
-export function AutoTunePanel({ device, onDone, disabled, fpsTarget, onFpsTarget }) {
+export function AutoTunePanel({ device, onDone, disabled, fpsTarget, onFpsTarget,
+                                controls, stats, onApply }) {
   const { t } = useTranslation();
   const [running, setRunning] = useState(false);
   const [result, setResult] = useState(null);
@@ -29,6 +31,9 @@ export function AutoTunePanel({ device, onDone, disabled, fpsTarget, onFpsTarget
   const [handheld, setHandheld] = useState(true);
   const [showTrace, setShowTrace] = useState(false);
 
+  // Prerequisites, not problems: these corrupt the measurement the loop drives
+  // on, so running first and fixing after produces a confident wrong answer.
+  const blockers = tuningBlockers({ controls, stats });
   const blurCap = handheld ? 16 : 200;
   const fpsCap = fpsTarget > 0 ? 1000 / fpsTarget : Infinity;
   const cap = Math.min(blurCap, fpsCap);
@@ -97,6 +102,27 @@ export function AutoTunePanel({ device, onDone, disabled, fpsTarget, onFpsTarget
           reason: t(`cameraParams.capReason.${capReason}`),
         })}
       </div>
+
+      {/* Warned, not blocked. When the light source itself is tinted and the
+          driver cannot correct it, there is nothing to fix — refusing to run
+          would leave the tuner permanently unusable. */}
+      {blockers.map(b => (
+        <div key={b.id} style={{ display: 'flex', flexDirection: 'column', gap: 4,
+                                 padding: '5px 7px', border: '1px solid var(--warn)',
+                                 borderRadius: 3 }}>
+          <div style={{ fontSize: 10.5, color: 'var(--warn)', lineHeight: 1.5 }}>
+            {t(`cameraParams.blocker.${b.id}`, {
+              channel: t(`cameraParams.health.channel.${b.channel}`, { defaultValue: b.channel }),
+            })}
+          </div>
+          {b.action && (
+            <button className="btn" style={{ fontSize: 10.5, alignSelf: 'flex-start' }}
+                    disabled={disabled} onClick={() => onApply?.(b.action)}>
+              {t('cameraParams.blockerFix.colorCast')}
+            </button>
+          )}
+        </div>
+      ))}
 
       <button className="btn primary" style={{ width: '100%' }}
               disabled={disabled || running || !device} onClick={run}>

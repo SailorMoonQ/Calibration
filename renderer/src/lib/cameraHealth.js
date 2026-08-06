@@ -56,6 +56,21 @@ export function evaluateHealth(m, targets = HEALTH_TARGETS) {
   const checks = [];
   const has = v => v != null && Number.isFinite(v);
 
+  // Listed first because it comes first in the fixing order, not because it is
+  // the most serious. Luma weights green at 0.587, so a cast shifts every
+  // brightness number below it — reading "white level 167" while the picture is
+  // green tells you nothing about the exposure until the cast is gone.
+  if (has(m.cast)) {
+    checks.push({
+      id: 'colorCast',
+      severity: 'advisory',
+      ok: m.cast <= targets.castMax,
+      value: m.cast,
+      want: targets.castMax,
+      detail: m.cast > targets.castMax ? (m.castChannel || null) : null,
+    });
+  }
+
   if (has(m.p95)) {
     const off = m.p95 - targets.p95;
     checks.push({
@@ -83,22 +98,6 @@ export function evaluateHealth(m, targets = HEALTH_TARGETS) {
       ok: m.clipLow <= targets.clipLowMax,
       value: m.clipLow,
       want: targets.clipLowMax,
-    });
-  }
-
-  // A colour cast is advisory for corner DETECTION — the detector runs on luma
-  // and finds the board anyway — but it is not free: luma weights green at
-  // 0.587, so a green cast makes every brightness reading here read high while
-  // red and blue stay dark, and the exposure the tuner settles on is then wrong
-  // for two thirds of the sensor.
-  if (has(m.cast)) {
-    checks.push({
-      id: 'colorCast',
-      severity: 'advisory',
-      ok: m.cast <= targets.castMax,
-      value: m.cast,
-      want: targets.castMax,
-      detail: m.cast > targets.castMax ? (m.castChannel || null) : null,
     });
   }
 

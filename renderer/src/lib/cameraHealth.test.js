@@ -181,3 +181,11 @@ test('no colour measurement means no cast check', () => {
   const r = evaluateHealth({ ...GOOD });
   assert.equal(r.checks.find(x => x.id === 'colorCast'), undefined);
 });
+
+test('the cast is checked before the brightness it distorts', () => {
+  // The list is a fixing order. Reading "white level 167" off a green picture
+  // says nothing about the exposure until the cast is gone.
+  const r = evaluateHealth({ ...GOOD, cast: 0.12, castChannel: 'green' });
+  const ids = r.checks.map(c => c.id);
+  assert.ok(ids.indexOf('colorCast') < ids.indexOf('brightness'), ids.join(','));
+});

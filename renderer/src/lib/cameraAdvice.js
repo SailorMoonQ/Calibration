@@ -118,6 +118,46 @@ function clampToStep(c, raw) {
   return v;
 }
 
+// What has to be right BEFORE the closed-loop tuner runs.
+//
+// This is not the same list as "what is wrong with the picture". A tuning
+// blocker is something that corrupts the MEASUREMENT the loop drives on, so the
+// loop converges confidently on the wrong answer — which is worse than not
+// running it, because the result looks authoritative.
+//
+// Observed: with the white balance locked to a green cast, luma (green-weighted
+// at 0.587) read high, the tuner stopped at what it thought was p95 200, and the
+// moment the cast was corrected the same scene measured 167. Every number in
+// that run was self-consistent and every one of them was wrong.
+//
+// Warned about rather than enforced: when the light source itself is tinted and
+// the driver's auto mode cannot correct it, there is nothing to fix and blocking
+// would leave the tuner permanently unusable.
+export function tuningBlockers({ controls, stats } = {}) {
+  const c = byId(controls);
+  const cast = stats?.color;
+  const out = [];
+  if (cast && cast.cast >= CAST_BAD) {
+    const awb = c.white_balance_automatic;
+    const [action] = awb && !awb.value ? fixVia(awb, 1) : [null];
+    out.push({
+      id: 'colorCast',
+      channel: cast.channel,
+      ...(action ? { action } : {}),
+    });
+  }
+  return out;
+}
+
+// A one-click fix is only offered when the driver would actually accept it.
+// Writing an inactive control is silently ignored by v4l2, so a button there
+// would look like it worked and change nothing — worse than no button. When that
+// happens the caller says WHICH control is holding the lock instead.
+function fixVia(control, value) {
+  if (!control || control.inactive) return [null, control?.locked_by?.id || null];
+  return [{ control: control.id, value }, null];
+}
+
 // `powerLineHz` is the local mains frequency; mismatched settings band the image
 // under artificial light. Defaults to 50 (most of the world outside the Americas).
 export function assessCamera({ controls, stats, powerLineHz = 50 } = {}) {
@@ -125,15 +165,6 @@ export function assessCamera({ controls, stats, powerLineHz = 50 } = {}) {
   const out = [];
   const add = (id, level, action, blockedBy) =>
     out.push({ id, level, ...(action ? { action } : {}), ...(blockedBy ? { blockedBy } : {}) });
-
-  // A one-click fix is only offered when the driver would actually accept it.
-  // Writing an inactive control is silently ignored by v4l2, so a button there
-  // would look like it worked and change nothing — worse than no button. When
-  // that happens we say WHICH control is holding the lock instead.
-  const fixVia = (control, value) => {
-    if (!control || control.inactive) return [null, control?.locked_by?.id || null];
-    return [{ control: control.id, value }, null];
-  };
 
   // ── stability: nothing may re-decide itself between frames ────────────────
   const ae = c.auto_exposure || c.exposure_auto;

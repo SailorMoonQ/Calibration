@@ -790,6 +790,12 @@
         "green": "green",
         "blue": "blue"
       }
+    },
+    "blocker": {
+      "colorCast": "The picture leans {{channel}}. Luma is green-weighted, so a cast skews the readings — fix the white balance first, or the loop will converge confidently on the wrong answer."
+    },
+    "blockerFix": {
+      "colorCast": "Fix white balance first"
     }
   },
   "roi": {

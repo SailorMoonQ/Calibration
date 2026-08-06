@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { assessCamera, focusHint, splitAdvice } from './cameraAdvice.js';
+import { assessCamera, focusHint, splitAdvice, tuningBlockers } from './cameraAdvice.js';
 
 const ctrl = (id, over = {}) => ({
   id, type: 'int', min: 0, max: 100, step: 1, value: 50, inactive: false, ...over,
@@ -371,4 +371,50 @@ test('the prerequisite is listed before the check it blocks', () => {
   const { problems } = splitAdvice(assessCamera({ controls, stats: { high: 0.2, low: 0 } }));
   const ids = problems.map(p => p.id);
   assert.ok(ids.indexOf('autoExposure') < ids.indexOf('clipHigh'), ids.join(','));
+});
+
+
+// ── prerequisites for closed-loop tuning ────────────────────────────────────
+//
+// A tuning blocker is not the same as "something is wrong with the picture": it
+// is something that corrupts the measurement the loop drives on. Observed on the
+// rig — with the white balance locked green, luma read high, the tuner stopped
+// at what it believed was p95 200, and the same scene measured 167 the moment
+// the cast was corrected. Every number in that run agreed with every other one
+// and all of them were wrong.
+
+test('a colour cast blocks tuning, and the fix is offered inline', () => {
+  const b = tuningBlockers({ controls: [AWB(0)], stats: green });
+  assert.equal(b.length, 1);
+  assert.equal(b[0].id, 'colorCast');
+  assert.equal(b[0].channel, 'green');
+  assert.deepEqual(b[0].action, { control: 'white_balance_automatic', value: 1 });
+});
+
+test('a cast the driver is already fighting is still worth warning about', () => {
+  // Nothing to click — UVC has no tint control — but the tuning result is just
+  // as skewed, so silence would be the wrong answer.
+  const b = tuningBlockers({ controls: [AWB(1)], stats: green });
+  assert.equal(b.length, 1);
+  assert.equal(b[0].action, undefined);
+});
+
+test('a neutral picture blocks nothing', () => {
+  assert.deepEqual(tuningBlockers({ controls: [AWB(0)], stats: neutral }), []);
+});
+
+test('no colour measurement blocks nothing — absence of data is not a fault', () => {
+  assert.deepEqual(tuningBlockers({ controls: [AWB(0)], stats: clean }), []);
+  assert.deepEqual(tuningBlockers({}), []);
+});
+
+test('the cast is listed above the exposure problems it distorts', () => {
+  // The fixing order IS the advice order: judging the exposure before the cast
+  // is gone means judging it on numbers that will move.
+  const controls = [AWB(0), ctrl('exposure_time_absolute', { min: 50, max: 10000, value: 5000 })];
+  const { problems } = splitAdvice(assessCamera({
+    controls, stats: { ...green, high: 0.2, low: 0 },
+  }));
+  const ids = problems.map(p => p.id);
+  assert.ok(ids.indexOf('colorCast') < ids.indexOf('clipHigh'), ids.join(','));
 });

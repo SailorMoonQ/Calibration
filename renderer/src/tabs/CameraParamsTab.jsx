@@ -275,6 +275,7 @@ export function CameraParamsTab() {
               <Section title={t('cameraParams.autoTuneTitle')}>
                 <AutoTunePanel device={liveDevice} disabled={busy}
                                fpsTarget={fpsTarget} onFpsTarget={setFpsTarget}
+                               controls={controls} stats={stats} onApply={applyAdvice}
                                onDone={() => refresh(liveDevice)}/>
               </Section>
 
