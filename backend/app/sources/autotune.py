@@ -180,14 +180,14 @@ def _gain_slope(sample: Sample, state: State,
     return None
 
 
-def _gain_toward_target(sample: Sample, state: State, targets: Targets,
-                        limits: Limits, history, fallback_frac: float) -> int:
-    """Next gain value, aimed at the brightness target when the local response is
-    known and stepped blindly by `fallback_frac` of the range when it is not."""
+def _gain_toward(aim_p95: float, sample: Sample, state: State,
+                 limits: Limits, history, fallback_frac: float) -> int:
+    """Next gain value, aimed at a given p95 when the local response is known and
+    stepped blindly by `fallback_frac` of the range when it is not."""
     span = limits.gain_max - limits.gain_min
     slope = _gain_slope(sample, state, history)
     if slope and slope > 0:
-        delta = (targets.p95 - sample.p95) / slope
+        delta = (aim_p95 - sample.p95) / slope
         # Cap the move so one bad slope estimate cannot throw the gain across
         # its whole range.
         delta = max(-0.25 * span, min(0.25 * span, delta))
@@ -271,9 +271,19 @@ def _plan_raw(sample: Sample, state: State, targets: Targets, limits: Limits,
     if sample.clip_high > targets.clip_high_max:
         # Prefer cutting gain: it removes noise at the same time. Only shorten
         # exposure once gain is already at the floor.
+        #
+        # How far to cut is proportional to how far the picture is from where it
+        # should be, not a fixed slice of the range. A blown-out frame at p95 233
+        # gets a large cut; one sitting on target at p95 201 with a lamp clipping
+        # 1.7% of the pixels gets a small one. The fixed 15% step made the second
+        # case oscillate — down 19 units to p95 167 (too dark), back up, and round
+        # again for nine iterations, because in a high-contrast scene "p95 on
+        # target" and "nothing clipping" can be genuinely incompatible and the
+        # loop has to converge on the compromise rather than bounce between the
+        # two failures.
         if limits.has_gain and state.gain > limits.gain_min:
-            new_gain = _snap(state.gain - 0.15 * (limits.gain_max - limits.gain_min),
-                             limits.gain_min, limits.gain_max, limits.gain_step)
+            aim = min(sample.p95 - 5.0, targets.p95)
+            new_gain = _gain_toward(aim, sample, state, limits, history, -0.15)
             return Step(state.exposure, new_gain, "clip-high-lower-gain", notes=notes)
         new_exp = _snap(state.exposure * 0.8, limits.exp_min, limits.exp_max, limits.exp_step)
         if new_exp == state.exposure:
@@ -363,7 +373,7 @@ def _plan_raw(sample: Sample, state: State, targets: Targets, limits: Limits,
                 return Step(new_exp, state.gain, "brighten-exposure-to-cap", notes=notes)
         # Exposure cannot go further without blurring: now raise gain.
         if limits.has_gain and state.gain < limits.gain_max:
-            new_gain = _gain_toward_target(sample, state, targets, limits, history, 0.12)
+            new_gain = _gain_toward(targets.p95, sample, state, limits, history, 0.12)
             notes.append(f"exposure at the {targets.cap_reason()} limit; raising gain instead")
             return Step(state.exposure, new_gain, "brighten-gain", notes=notes)
         # Gain is maxed too. Either accept blur or stop and say the scene is dark.
@@ -377,7 +387,7 @@ def _plan_raw(sample: Sample, state: State, targets: Targets, limits: Limits,
 
     # Too bright (but not clipping): drop gain first, it is the free win.
     if limits.has_gain and state.gain > limits.gain_min:
-        new_gain = _gain_toward_target(sample, state, targets, limits, history, -0.12)
+        new_gain = _gain_toward(targets.p95, sample, state, limits, history, -0.12)
         if new_gain < state.gain:
             return Step(state.exposure, new_gain, "darken-lower-gain", notes=notes)
     new_exp = _snap(state.exposure * exp_ratio, limits.exp_min, limits.exp_max, limits.exp_step)

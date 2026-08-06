@@ -635,3 +635,54 @@ def test_a_dark_scene_may_still_exceed_the_cap_when_that_is_permitted():
     state, s, _, _ = run_loop(cam, t, LIMITS)
     assert state.exposure > 167, "stayed fast and dark instead of getting the picture"
     assert s.p95 > 120, f"ended dark at p95={s.p95:.0f}"
+
+
+def test_the_clipping_cut_is_proportional_to_how_far_off_the_picture_is():
+    """A blown frame gets a big cut; one sitting on target with a lamp clipping a
+    fraction of a percent gets a small one. The fixed 15%-of-range cut sent the
+    second case from p95 201 to 167, which then read as too dark — nine
+    iterations of down-up-down before the budget ran out."""
+    hist = [
+        (State(exposure=160, gain=87), Sample(p95=233, clip_high=0.03, clip_low=0)),
+        (State(exposure=160, gain=72), Sample(p95=201, clip_high=0.017, clip_low=0)),
+    ]
+    t = Targets(p95=200, exposure_max_ms=16.0, fps_target=60.0)
+    step = plan_step(hist[-1][1], hist[-1][0], t, LIMITS, hist)
+    assert step.reason == "clip-high-lower-gain"
+    assert step.gain < 72, "must still come down"
+    assert step.gain >= 66, f"cut {72 - step.gain} units for 0.7% of clipping: {step.gain}"
+
+
+def test_a_badly_blown_frame_still_gets_a_big_cut():
+    hist = [
+        (State(exposure=160, gain=110), Sample(p95=254, clip_high=0.30, clip_low=0)),
+        (State(exposure=160, gain=100), Sample(p95=245, clip_high=0.22, clip_low=0)),
+    ]
+    t = Targets(p95=200, exposure_max_ms=16.0)
+    step = plan_step(hist[-1][1], hist[-1][0], t, LIMITS, hist)
+    assert step.gain <= 90, f"crawled instead of cutting: {step.gain}"
+
+
+def test_clipping_that_cannot_be_fixed_without_going_dark_settles_rather_than_bounces():
+    """A ceiling lamp in shot makes 'p95 on target' and 'nothing clipping'
+    genuinely incompatible. The loop has to converge on the compromise, not
+    alternate between the two failures until it runs out of iterations."""
+    seen = []
+    state = State(exposure=160, gain=87)
+    history = []
+    t = Targets(p95=200, exposure_max_ms=16.0, fps_target=60.0, max_iterations=30)
+    for _ in range(30):
+        # A scene whose brightest 2% is a lamp: clipping falls with gain, but so
+        # does p95, and the two cannot both be satisfied.
+        p95 = min(255.0, 39 + state.gain * 1.85)
+        clip = max(0.0, (p95 - 185) / 3000)
+        s = Sample(p95=p95, clip_high=clip, clip_low=0.0)
+        history.append((State(state.exposure, state.gain), s))
+        seen.append(state.gain)
+        step = plan_step(s, state, t, LIMITS, history)
+        if step.done:
+            break
+        state = State(step.exposure, step.gain)
+    else:
+        raise AssertionError(f"never settled: {seen}")
+    assert len(seen) < 12, f"took {len(seen)} iterations: {seen}"

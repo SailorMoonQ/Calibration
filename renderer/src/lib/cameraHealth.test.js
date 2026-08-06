@@ -189,3 +189,14 @@ test('the cast is checked before the brightness it distorts', () => {
   const ids = r.checks.map(c => c.id);
   assert.ok(ids.indexOf('colorCast') < ids.indexOf('brightness'), ids.join(','));
 });
+
+test('the verdict never contradicts the brightness line beside it', () => {
+  // Real frame from the rig: a ceiling lamp blowing 1.2% of the picture above a
+  // board sitting at p95 183. Judging clipping first called this "over-exposed"
+  // directly beside a brightness check reading "under" — both true, the pair
+  // useless. The level decides; the clipping still fails on its own row.
+  const r = evaluateHealth({ p95: 183, clipHigh: 0.012, clipLow: 0 });
+  assert.equal(r.verdict, 'under');
+  assert.equal(r.checks.find(c => c.id === 'brightness').detail, 'under');
+  assert.equal(r.checks.find(c => c.id === 'clipHigh').ok, false, 'still reported');
+});

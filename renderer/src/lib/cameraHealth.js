@@ -38,9 +38,18 @@ export function framePeriodMs(fpsTarget) {
 // independently: a picture can sit at the right p95 and still have blown
 // highlights if the contrast is high, and a dark picture crushes its blacks
 // before its p95 looks obviously wrong.
+//
+// Level is decided BEFORE clipping, and the order is load-bearing. A
+// high-contrast scene — a ceiling lamp above a dim board — is under the target
+// on level while a fraction of a percent of it is blown, and checking clipping
+// first labelled that "over-exposed" right beside a brightness line reading
+// "too dark". Both statements were true and the pair was useless. The level is
+// what the operator acts on; the clipping shows up as its own failing check.
 export function exposureVerdict({ p95, clipHigh, clipLow }, targets = HEALTH_TARGETS) {
-  if (clipHigh > targets.clipHighMax || p95 > targets.p95 + targets.p95Tol) return 'over';
-  if (clipLow > targets.clipLowMax || p95 < targets.p95 - targets.p95Tol) return 'under';
+  if (p95 > targets.p95 + targets.p95Tol) return 'over';
+  if (p95 < targets.p95 - targets.p95Tol) return 'under';
+  if (clipHigh > targets.clipHighMax) return 'over';
+  if (clipLow > targets.clipLowMax) return 'under';
   return 'ok';
 }
 
