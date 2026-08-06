@@ -18,6 +18,7 @@ export const HEALTH_TARGETS = {
   clipLowMax: 0.02,  // ≤2% crushed to black
   gainWarnFrac: 0.75,
   fpsSlack: 0.9,     // 90% of target still counts as holding the frame rate
+  castMax: 0.06,     // channel deviation in the highlights, see below
 };
 
 // UVC exposure_time_absolute is in 100 µs units.
@@ -82,6 +83,22 @@ export function evaluateHealth(m, targets = HEALTH_TARGETS) {
       ok: m.clipLow <= targets.clipLowMax,
       value: m.clipLow,
       want: targets.clipLowMax,
+    });
+  }
+
+  // A colour cast is advisory for corner DETECTION — the detector runs on luma
+  // and finds the board anyway — but it is not free: luma weights green at
+  // 0.587, so a green cast makes every brightness reading here read high while
+  // red and blue stay dark, and the exposure the tuner settles on is then wrong
+  // for two thirds of the sensor.
+  if (has(m.cast)) {
+    checks.push({
+      id: 'colorCast',
+      severity: 'advisory',
+      ok: m.cast <= targets.castMax,
+      value: m.cast,
+      want: targets.castMax,
+      detail: m.cast > targets.castMax ? (m.castChannel || null) : null,
     });
   }
 

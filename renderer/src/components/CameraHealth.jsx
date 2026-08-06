@@ -26,6 +26,7 @@ function formatValue(check) {
     case 'clipLow':
       return `${(check.value * 100).toFixed(1)}% / ≤${(check.want * 100).toFixed(0)}%`;
     case 'gain':
+    case 'colorCast':
       return `${Math.round(check.value * 100)}% / ≤${Math.round(check.want * 100)}%`;
     case 'exposureBudget':
       return `${check.value.toFixed(1)} / ≤${check.want.toFixed(1)} ms`;
@@ -44,6 +45,8 @@ export function CameraHealth({ controls, stats, fps, fpsTarget }) {
     p95: stats?.p95 ?? null,
     clipHigh: stats?.high ?? null,
     clipLow: stats?.low ?? null,
+    cast: stats?.color?.cast ?? null,
+    castChannel: stats?.color?.channel ?? null,
     fps: fps ?? null,
     fpsTarget: fpsTarget ?? 0,
     ...fromControls,
@@ -94,7 +97,11 @@ export function CameraHealth({ controls, stats, fps, fpsTarget }) {
       {health.checks.filter(c => !c.ok && c.detail).map(c => {
         const text = c.id === 'exposureBudget'
           ? t('cameraParams.health.why.exposureBudget', { fps: c.detail })
-          : t(`cameraParams.health.why.${c.id}.${c.detail}`, { defaultValue: '' });
+          : c.id === 'colorCast'
+            ? t('cameraParams.health.why.colorCast', {
+                channel: t(`cameraParams.health.channel.${c.detail}`, { defaultValue: c.detail }),
+              })
+            : t(`cameraParams.health.why.${c.id}.${c.detail}`, { defaultValue: '' });
         if (!text) return null;
         return (
           <div key={`${c.id}-why`} style={{ fontSize: 10.5, color: 'var(--warn)', lineHeight: 1.5 }}>

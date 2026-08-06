@@ -133,6 +133,60 @@ export function laplacianVar(gray, w, h) {
   return sumSq / n - mean * mean;
 }
 
+// Colour cast, measured on the brightest pixels.
+//
+// Whatever the scene is, its highlights are the closest thing to a neutral
+// reference available without a grey card: paper, a wall, a lamp and the white
+// squares of a calibration board are all meant to be white, and none of them
+// should favour a channel.
+//
+// The reason this matters here is not aesthetic. Luma weights green at 0.587, so
+// a green cast inflates every brightness reading in this file — the exposure
+// looks right while the red and blue channels are still dark, wasting most of
+// the sensor's range on a board that is supposed to be black and white.
+//
+// `top` is the fraction of pixels treated as highlights. A tenth is enough to
+// average out noise while staying well clear of the midtones, which carry the
+// scene's own colour and would swamp the measurement.
+export function colorCast(data, gray, top = 0.1) {
+  const n = gray.length;
+  if (!n) return null;
+  const hist = histogram(gray);
+  let cut = 255;
+  let seen = 0;
+  const want = n * top;
+  for (let i = 255; i >= 0; i--) {
+    seen += hist[i];
+    if (seen >= want) { cut = i; break; }
+  }
+  let r = 0;
+  let g = 0;
+  let b = 0;
+  let count = 0;
+  for (let p = 0, i = 0; p < n; p++, i += 4) {
+    if (gray[p] < cut) continue;
+    r += data[i];
+    g += data[i + 1];
+    b += data[i + 2];
+    count++;
+  }
+  if (!count) return null;
+  r /= count; g /= count; b /= count;
+  const mean = (r + g + b) / 3;
+  if (mean < 1) return null;
+  const dev = [r - mean, g - mean, b - mean];
+  const worst = dev.reduce((a, v) => (Math.abs(v) > Math.abs(a) ? v : a), 0);
+  return {
+    r, g, b,
+    // Normalised so the number means the same at any brightness.
+    cast: Math.max(...dev.map(Math.abs)) / mean,
+    // Which way it leans, for a message that names the problem rather than
+    // reporting an abstract ratio.
+    channel: ['red', 'green', 'blue'][dev.indexOf(worst)],
+    high: worst > 0,
+  };
+}
+
 // One call for the whole readout, so a caller samples the canvas once.
 export function frameStats(data, w, h, { targetW = 160, targetH = 120 } = {}) {
   const small = downsample(data, w, h, targetW, targetH);
@@ -144,6 +198,7 @@ export function frameStats(data, w, h, { targetW = 160, targetH = 120 } = {}) {
     ...clipping(hist),
     mean: meanLuma(hist),
     p95: percentile(hist, 0.95),
+    color: colorCast(small.data, gray),
     sharpness: laplacianVar(gray, small.w, small.h),
     sampledW: small.w,
     sampledH: small.h,

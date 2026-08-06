@@ -38,6 +38,13 @@ const CLIP_BAD = 0.08;
 const GAIN_WARN = 0.45;
 const GAIN_BAD = 0.75;
 
+// How far a channel may sit from the average of the three, in the highlights,
+// before the picture counts as tinted. Measured on the rig: a correctly balanced
+// frame reads 0.02, and the green cast a locked white balance produced read
+// 0.12. Set between them, nearer the good end — a visible tint is already
+// costing range in the other two channels.
+const CAST_BAD = 0.06;
+
 const byId = (controls) => Object.fromEntries((controls || []).map(c => [c.id, c]));
 
 const frac = (c) => {
@@ -147,11 +154,35 @@ export function assessCamera({ controls, stats, powerLineHz = 50 } = {}) {
     else add('autoFocus', 'ok');
   }
 
+  // ── white balance ─────────────────────────────────────────────────────────
+  //
+  // This used to offer "lock the white balance" whenever it was automatic, on
+  // the theory that nothing should re-decide itself between frames. That advice
+  // was wrong, and produced a heavily green picture on the test rig: locking
+  // freezes the colour TEMPERATURE control, which only trades red against blue.
+  // The green/magenta axis has no UVC control at all, so whatever green the
+  // driver's auto mode was correcting comes straight back and cannot be dialled
+  // out. Measured on the rig, highlights that should be neutral: 2800 K gave
+  // R156/G216/B194, 6500 K gave R189/G210/B135, and auto gave R198/G203/B204.
+  //
+  // So the rule is not "locked or automatic" but "neutral or not". Locking is
+  // worth having only when what gets frozen is correct, and that is something
+  // the picture can be asked about directly.
   const awb = c.white_balance_automatic;
-  if (awb && awb.value) {
-    // Only a warning: white balance shifts colour, and corner detection runs on
-    // luma, so it degrades consistency rather than breaking detection.
-    add('autoWhiteBalance', 'warn', { control: awb.id, value: 0 });
+  const cast = stats?.color;
+  if (awb && cast) {
+    if (cast.cast >= CAST_BAD && !awb.value) {
+      // Locked onto a cast. Handing colour back to the driver is the only fix
+      // available from here — the temperature control cannot reach this axis.
+      add('colorCast', 'bad', ...fixVia(awb, 1));
+    } else if (cast.cast >= CAST_BAD) {
+      // Already automatic and still cast: unusual lighting, or the driver's auto
+      // mode cannot cope. Nothing on this panel will fix it, so say so instead
+      // of offering a button that does nothing.
+      add('colorCastAuto', 'warn');
+    } else {
+      add('whiteBalance', 'ok');
+    }
   }
 
   // ── exposure level ────────────────────────────────────────────────────────

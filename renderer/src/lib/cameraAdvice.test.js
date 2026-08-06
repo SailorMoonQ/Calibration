@@ -42,10 +42,44 @@ test('continuous autofocus is a blocking problem', () => {
   assert.deepEqual(item.action, { control: 'focus_automatic_continuous', value: 0 });
 });
 
-test('auto white balance is only a warning', () => {
-  // Corner detection runs on luma, so AWB costs consistency, not detectability.
-  const awb = ctrl('white_balance_automatic', { type: 'bool', min: 0, max: 1, value: 1 });
-  assert.equal(find(assessCamera({ controls: [awb], stats: clean }), 'autoWhiteBalance').level, 'warn');
+// White balance is judged by the picture, not by the switch. Locking it used to
+// be recommended unconditionally, which on the test rig produced a heavily green
+// frame: the temperature control only trades red against blue, so the green a
+// driver's auto mode was correcting comes back and cannot be dialled out.
+
+const AWB = (value) => ctrl('white_balance_automatic', { type: 'bool', min: 0, max: 1, value });
+const neutral = { ...clean, color: { cast: 0.02, channel: 'green', high: true } };
+const green = { ...clean, color: { cast: 0.12, channel: 'green', high: true } };
+
+test('automatic white balance producing a neutral picture is fine', () => {
+  const item = find(assessCamera({ controls: [AWB(1)], stats: neutral }), 'whiteBalance');
+  assert.equal(item.level, 'ok');
+});
+
+test('a locked white balance producing a neutral picture is fine', () => {
+  // The ideal state: frozen AND correct. Nothing to say.
+  const item = find(assessCamera({ controls: [AWB(0)], stats: neutral }), 'whiteBalance');
+  assert.equal(item.level, 'ok');
+});
+
+test('a locked white balance producing a cast is a problem, and the fix unlocks it', () => {
+  const item = find(assessCamera({ controls: [AWB(0)], stats: green }), 'colorCast');
+  assert.equal(item.level, 'bad');
+  assert.deepEqual(item.action, { control: 'white_balance_automatic', value: 1 });
+});
+
+test('a cast under automatic white balance gets no button it cannot honour', () => {
+  // The driver is already doing its best; there is no tint control in UVC, so a
+  // fix button here would do nothing.
+  const item = find(assessCamera({ controls: [AWB(1)], stats: green }), 'colorCastAuto');
+  assert.equal(item.level, 'warn');
+  assert.equal(item.action, undefined);
+});
+
+test('white balance is not judged at all without a colour measurement', () => {
+  const a = assessCamera({ controls: [AWB(0)], stats: clean });
+  assert.equal(find(a, 'colorCast'), undefined);
+  assert.equal(find(a, 'whiteBalance'), undefined);
 });
 
 test('a camera exposing none of these controls raises nothing about them', () => {

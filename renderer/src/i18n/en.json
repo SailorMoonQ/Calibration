@@ -658,12 +658,6 @@
         "fix": "Turn it off",
         "short": "fixed focus"
       },
-      "autoWhiteBalance": {
-        "title": "Auto white balance is on",
-        "why": "Corner detection runs on luma, so this will not break detection — but it does make brightness drift between frames.",
-        "fix": "Turn it off",
-        "short": "fixed white balance"
-      },
       "clipHigh": {
         "title": "Highlights are blown out",
         "why": "The white squares are saturating, so the corner between a white and a black square stops existing where it clips.",
@@ -705,6 +699,24 @@
         "why": "Lowering the gain now would only darken the picture — the exposure is already at the motion-blur limit, so there is nothing to trade against. The scene simply needs more light.",
         "fix": "",
         "short": "gain"
+      },
+      "whiteBalance": {
+        "title": "White balance",
+        "why": "",
+        "fix": "",
+        "short": "white balance"
+      },
+      "colorCast": {
+        "title": "The picture is tinted — the white balance is locked to the wrong value",
+        "why": "The colour-temperature control only trades red against blue; it cannot reach the green/magenta axis, so a green cast cannot be dialled back out once locked. And luma weights green at 0.587, so the tint makes every brightness reading read high while red and blue stay dark.",
+        "fix": "Hand it back to auto",
+        "short": "tint"
+      },
+      "colorCastAuto": {
+        "title": "The picture is tinted, but white balance is already automatic",
+        "why": "The driver is already correcting as best it can, and UVC exposes no green/magenta control — there is nothing on this panel that would change it. Usually the light source itself is tinted: change the light, or accept it.",
+        "fix": "",
+        "short": "tint"
       }
     },
     "adviceBlocked": "Locked by {{parent}} — fix that first.",
@@ -758,7 +770,8 @@
         "clipLow": "shadow clipping",
         "gain": "gain used",
         "exposureBudget": "exposure vs frame period",
-        "frameRate": "measured fps"
+        "frameRate": "measured fps",
+        "colorCast": "colour cast"
       },
       "why": {
         "brightness": {
@@ -769,7 +782,13 @@
         "frameRate": {
           "exposure": "The exposure is what is holding the frame rate down; shortening it recovers the rate.",
           "cameraCeiling": "The exposure fits inside the frame period and the frames still are not arriving — this is the camera's or the USB link's ceiling at this resolution, and no tuning will lift it. A smaller resolution might."
-        }
+        },
+        "colorCast": "The highlights lean {{channel}} — luma is green-weighted, so a cast skews the exposure judgement. If the white balance is locked, hand it back to auto."
+      },
+      "channel": {
+        "red": "red",
+        "green": "green",
+        "blue": "blue"
       }
     }
   },

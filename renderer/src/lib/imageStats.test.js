@@ -1,7 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  clipping, downsample, frameStats, histogram, laplacianVar, luma, meanLuma, toGray,
+  clipping, colorCast, downsample, frameStats, histogram, laplacianVar, luma, meanLuma,
+  percentile, toGray,
 } from './imageStats.js';
 
 // Build an RGBA buffer from a per-pixel callback returning a grey level 0..255.
@@ -238,4 +239,88 @@ test('a uniformly dark frame reports nothing clipped', () => {
 test('edgeClipping rejects degenerate input', () => {
   assert.equal(edgeClipping(null, 200, 200), null);
   assert.equal(edgeClipping(solid(2, 2, 0), 2, 2), null);
+});
+
+
+// ── colour cast ─────────────────────────────────────────────────────────────
+//
+// Reproduces the measurement that caught a green picture on the test rig:
+// highlights that should be neutral read R180 / G207 / B165 with the white
+// balance locked, and R198 / G203 / B204 with it automatic.
+
+// An RGBA buffer of `w`×`h` pixels, each channel set independently.
+function colorImage(w, h, fn) {
+  const d = new Uint8ClampedArray(w * h * 4);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const [r, g, b] = fn(x, y);
+      const i = (y * w + x) * 4;
+      d[i] = r; d[i + 1] = g; d[i + 2] = b; d[i + 3] = 255;
+    }
+  }
+  return d;
+}
+
+function castOf(fn, w = 20, h = 20) {
+  const data = colorImage(w, h, fn);
+  return colorCast(data, toGray(data, w, h));
+}
+
+test('a neutral picture reports almost no cast', () => {
+  const c = castOf(() => [198, 203, 204]);   // measured under automatic WB
+  assert.ok(c.cast < 0.03, `cast ${c.cast}`);
+});
+
+test('the measured green cast is reported, and named', () => {
+  const c = castOf(() => [180, 207, 165]);   // measured with WB locked at 4600 K
+  assert.ok(c.cast > 0.08, `cast ${c.cast}`);
+  assert.equal(c.channel, 'green');
+  assert.equal(c.high, true);
+});
+
+test('a channel that is short rather than excessive is named too', () => {
+  // 2800 K on the rig: red starved rather than green boosted.
+  const c = castOf(() => [156, 216, 194]);
+  assert.equal(c.channel, 'red');
+  assert.equal(c.high, false);
+});
+
+test('the cast is read from the highlights, not the whole frame', () => {
+  // A deep red object filling four fifths of a frame whose highlights are
+  // neutral. Averaging everything would call this a red cast; the picture's
+  // white areas are what tells you the white balance is right.
+  const c = castOf((x, y) => (y < 16 ? [200, 40, 40] : [200, 202, 201]));
+  assert.ok(c.cast < 0.03, `scene colour leaked into the cast: ${c.cast}`);
+});
+
+test('the cast is scale-free — the same tint at half the brightness reads the same', () => {
+  const bright = castOf(() => [180, 207, 165]);
+  const dim = castOf(() => [90, 104, 83]);
+  assert.ok(Math.abs(bright.cast - dim.cast) < 0.02);
+});
+
+test('a black frame reports no cast rather than dividing by zero', () => {
+  assert.equal(castOf(() => [0, 0, 0]), null);
+});
+
+test('frameStats carries the colour reading alongside the luma ones', () => {
+  const data = colorImage(40, 30, () => [180, 207, 165]);
+  const s = frameStats(data, 40, 30);
+  assert.ok(s.color.cast > 0.08);
+  assert.equal(s.color.channel, 'green');
+});
+
+// ── percentile ──────────────────────────────────────────────────────────────
+
+test('p95 tracks the bright end, not the average', () => {
+  // 90% black, 10% white: the mean is 25 but the white squares are at 255, and
+  // it is the white squares that must not saturate.
+  const data = rgba(10, 10, (x, y) => (y < 9 ? 0 : 255));
+  const s = frameStats(data, 10, 10);
+  assert.equal(s.p95, 255);
+  assert.ok(s.mean < 40);
+});
+
+test('percentile on an empty histogram is zero rather than NaN', () => {
+  assert.equal(percentile(new Uint32Array(256), 0.95), 0);
 });

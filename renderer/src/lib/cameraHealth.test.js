@@ -157,3 +157,27 @@ test('a camera with no exposure control reports null, not zero', () => {
   assert.equal(m.exposureMs, null);
   assert.equal(m.gain, null);
 });
+
+// ── colour cast ─────────────────────────────────────────────────────────────
+
+test('a tinted picture is flagged, with the channel named', () => {
+  const r = evaluateHealth({ ...GOOD, cast: 0.12, castChannel: 'green' });
+  const c = r.checks.find(x => x.id === 'colorCast');
+  assert.equal(c.ok, false);
+  assert.equal(c.detail, 'green');
+});
+
+test('a colour cast does not block — the detector still finds the board', () => {
+  const r = evaluateHealth({ ...GOOD, cast: 0.12, castChannel: 'green' });
+  assert.equal(r.ok, true, 'a tint costs range, it does not destroy corners');
+});
+
+test('a neutral picture passes the cast check', () => {
+  const r = evaluateHealth({ ...GOOD, cast: 0.02, castChannel: 'green' });
+  assert.equal(r.checks.find(x => x.id === 'colorCast').ok, true);
+});
+
+test('no colour measurement means no cast check', () => {
+  const r = evaluateHealth({ ...GOOD });
+  assert.equal(r.checks.find(x => x.id === 'colorCast'), undefined);
+});
