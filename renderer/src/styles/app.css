@@ -197,16 +197,28 @@ button { font-family: inherit; font-size: inherit; color: inherit; }
   cursor: pointer;
   white-space: nowrap;
 }
-.btn:hover { background: var(--surface-2); border-color: var(--border-strong); }
+.btn:hover:not(:disabled) { background: var(--surface-2); border-color: var(--border-strong); }
 .btn.primary { background: var(--accent); border-color: var(--accent-line); color: white; }
-.btn.primary:hover { background: var(--accent-2); }
+.btn.primary:hover:not(:disabled) { background: var(--accent-2); }
 .btn.ghost { background: transparent; border-color: transparent; color: var(--text-2); }
-.btn.ghost:hover { background: var(--surface-2); color: var(--text); }
+.btn.ghost:hover:not(:disabled) { background: var(--surface-2); color: var(--text); }
 .btn.danger { color: var(--err); }
 .btn.block { width: 100%; }
 .btn.lg { height: 32px; font-size: 12.5px; font-weight: 500; }
 .btn.sm { height: 22px; font-size: 11px; padding: 0 7px; }
 .btn.icon { width: 26px; padding: 0; }
+
+/* Disabled affordance. There was none, so a disabled control was pixel-identical
+   to a live one — the app has 16 buttons, 6 selects and 2 inputs that disable
+   themselves, and every one of them read as broken rather than as unavailable.
+   The :not(:disabled) on the hover rules above matters as much as the opacity:
+   a button that still lights up under the cursor is still claiming to be live. */
+.btn:disabled,
+.select:disabled,
+.input:disabled {
+  opacity: 0.42;
+  cursor: not-allowed;
+}
 
 .chk {
   display: inline-flex; align-items: center; gap: 6px;
@@ -426,10 +438,6 @@ svg.fill { width: 100%; height: 100%; display: block; }
   padding: 10px 14px 14px;
 }
 .modal-actions .spacer { flex: 1; }
-/* app.css has no global :disabled rule, so a disabled .btn is visually identical
-   to a live one. The generator disables Save while the sheet is unprintable —
-   that has to read as unavailable rather than as an unresponsive button. */
-.modal-actions .btn:disabled { opacity: 0.42; cursor: not-allowed; }
 
 /* Wide variant for tool dialogs that need a preview pane beside their controls;
    the base .modal is sized for confirm prompts. */
