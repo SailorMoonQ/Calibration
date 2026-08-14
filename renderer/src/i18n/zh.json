@@ -6,14 +6,35 @@
     "drop": "丢帧",
     "minimize": "最小化",
     "maximize": "最大化",
-    "close": "关闭"
+    "close": "关闭",
+    "tools": "工具",
+    "generateBoard": "生成标定板"
   },
   "tabs": {
-    "intrinsics": { "label": "针孔", "sub": "内参" },
-    "fisheye": { "label": "鱼眼", "sub": "内参" },
-    "handeye": { "label": "手眼", "sub": "相机 ↔ 追踪器" },
-    "link": { "label": "链接", "sub": "追踪器 ↔ 控制器" },
-    "addStage": "+ 添加阶段"
+    "intrinsics": {
+      "label": "针孔",
+      "sub": "内参"
+    },
+    "fisheye": {
+      "label": "鱼眼",
+      "sub": "内参"
+    },
+    "handeye": {
+      "label": "手眼",
+      "sub": "相机 ↔ 追踪器"
+    },
+    "link": {
+      "label": "链接",
+      "sub": "追踪器 ↔ 控制器"
+    },
+    "camparams": {
+      "label": "相机参数",
+      "sub": "曝光 / 增益"
+    },
+    "roifov": {
+      "label": "光心视野",
+      "sub": "中心 / 视场"
+    }
   },
   "tweaks": {
     "title": "偏好设置",
@@ -85,7 +106,8 @@
     "loadFailed": "加载失败：{{error}}",
     "error": "错误：{{error}}",
     "rmsPx": "rms {{rms}} px",
-    "failed": "失败：{{message}}"
+    "failed": "失败：{{message}}",
+    "close": "关闭"
   },
   "panels": {
     "frames": "帧",
@@ -313,20 +335,41 @@
     "progress": "步骤 {{step}}/{{total}} · {{group}}·{{action}} · 第 {{shot}}/{{shots}} 张",
     "done": "全部完成，可运行标定",
     "groups": {
-      "frontal": "正对分区", "edge": "边缘", "tilt": "俯仰", "yaw": "偏摆", "roll": "平面旋转", "dist": "远近"
+      "frontal": "正对分区",
+      "edge": "边缘",
+      "tilt": "俯仰",
+      "yaw": "偏摆",
+      "roll": "平面旋转",
+      "dist": "远近"
     },
     "steps": {
-      "f_center": "正对·中心", "f_tl": "正对·左上", "f_tr": "正对·右上", "f_bl": "正对·左下", "f_br": "正对·右下",
-      "e_top": "怼上边", "e_bottom": "怼下边", "e_left": "怼左边", "e_right": "怼右边",
-      "t_fwd": "上沿前倒（俯）", "t_back": "上沿后仰（仰）",
-      "y_left": "左侧前转（偏摆）", "y_right": "右侧前转（偏摆）",
+      "f_center": "正对·中心",
+      "f_tl": "正对·左上",
+      "f_tr": "正对·右上",
+      "f_bl": "正对·左下",
+      "f_br": "正对·右下",
+      "e_top": "怼上边",
+      "e_bottom": "怼下边",
+      "e_left": "怼左边",
+      "e_right": "怼右边",
+      "t_fwd": "上沿前倒（俯）",
+      "t_back": "上沿后仰（仰）",
+      "y_left": "左侧前转（偏摆）",
+      "y_right": "右侧前转（偏摆）",
       "r_roll": "平面内旋转（当钟表转角）",
-      "d_near": "拉近占满", "d_far": "推远变小", "d_mid": "中等距离"
+      "d_near": "拉近占满",
+      "d_far": "推远变小",
+      "d_mid": "中等距离"
     },
     "hint": {
-      "frontal": "正对相机、放平", "tilted": "把板倾斜约 30~45°", "roll": "板在平面内转个角度",
-      "near": "靠近相机、占满画面", "far": "远离相机、变小", "mid": "保持中等距离",
-      "region": "移到高亮区域", "vary": "微调一点再拍第二张"
+      "frontal": "正对相机、放平",
+      "tilted": "把板倾斜约 30~45°",
+      "roll": "板在平面内转个角度",
+      "near": "靠近相机、占满画面",
+      "far": "远离相机、变小",
+      "mid": "保持中等距离",
+      "region": "移到高亮区域",
+      "vary": "微调一点再拍第二张"
     }
   },
   "handeye": {
@@ -530,5 +573,302 @@
     "noFileLoaded": "未加载文件",
     "importMeta": "n={{n}} · Δ{{span}}s",
     "deviceNone": "（无）"
+  },
+  "cameraParams": {
+    "railTitle": "相机参数",
+    "status": "状态",
+    "presets": "预设",
+    "noPreset": "未启用",
+    "noPresetsYet": "还没有预设",
+    "saveAs": "把当前参数存为",
+    "presetNamePlaceholder": "例如：室内",
+    "reset": "恢复驱动默认值",
+    "confirmReset": "把所有控制项恢复为驱动默认值，并清除当前预设？",
+    "confirmDeletePreset": "删除预设「{{name}}」？",
+    "needPresetName": "请先填写预设名称。",
+    "persistNote": "改动按相机（USB 序列号）保存，流重启后会自动回放。",
+    "unsupported": "不可用",
+    "nControls": "{{count}} 项",
+    "commonControls": "常用",
+    "allControls": "全部控制项",
+    "expand": "展开全部",
+    "collapse": "收起",
+    "noCommon": "该相机没有暴露常见的控制项",
+    "exposureReadout": "曝光反馈",
+    "waitingForFrames": "等待画面…",
+    "clipHigh": "高光截断",
+    "clipLow": "暗部截断",
+    "meanLuma": "平均亮度",
+    "sharpness": "清晰度（对焦）",
+    "liveLabel": "实时 · {{device}}",
+    "noCamera": "无相机",
+    "pickCamera": "选择一路相机以调整其参数",
+    "on": "开",
+    "off": "关",
+    "lockedBy": "被「{{parent}}」锁定",
+    "unlock": "切到手动",
+    "lockedUnknown": "当前只读（驱动报告为 inactive）",
+    "loadFailed": "读取控制项失败：{{error}}",
+    "setFailed": "设置 {{name}} 失败：{{error}}",
+    "setRejected": "驱动拒绝了 {{name}}：{{error}}",
+    "presetFailed": "预设操作失败：{{error}}",
+    "reason": {
+      "not-a-v4l2-device": "该源由 ROS2 驱动节点管理，曝光与增益无法在此调整，请到驱动侧设置。",
+      "v4l2-ctl-missing": "未安装 v4l2-ctl。安装 v4l-utils 后才能调整相机参数。",
+      "no-controls-exposed": "该相机没有暴露任何可调控制项。",
+      "v4l2-ctl-failed": "驱动没有响应控制项查询。"
+    },
+    "ctrl": {
+      "auto_exposure": "自动曝光",
+      "exposure_auto": "自动曝光",
+      "exposure_time_absolute": "曝光时间",
+      "exposure_absolute": "曝光时间",
+      "exposure_dynamic_framerate": "允许曝光降低帧率",
+      "gain": "增益",
+      "brightness": "亮度",
+      "contrast": "对比度",
+      "saturation": "饱和度",
+      "hue": "色调",
+      "gamma": "伽马",
+      "sharpness": "锐度",
+      "white_balance_automatic": "自动白平衡",
+      "white_balance_temperature": "白平衡色温 (K)",
+      "backlight_compensation": "背光补偿",
+      "power_line_frequency": "电源频率",
+      "focus_automatic_continuous": "连续自动对焦",
+      "focus_absolute": "对焦"
+    },
+    "setAdjusted": "{{name}} 超出驱动允许范围，已调整为 {{value}}。",
+    "setInactive": "{{name}} 当前被锁定，请先把它的父控制项切到手动。",
+    "adviceTitle": "调参引导",
+    "adviceWaiting": "等待画面与控制项…",
+    "adviceAllGood": "可以开始标定了。",
+    "adviceCount": "有 {{count}} 项待调整",
+    "advicePassing": "已就绪：{{list}}",
+    "focusPeak": "清晰度 / 本次最佳",
+    "focusPeakHint": "转动对焦环找峰值 —— 绝对数值没有意义，最大值才有。",
+    "advice": {
+      "autoExposure": {
+        "title": "自动曝光开着",
+        "why": "驱动会在帧与帧之间重新决定曝光，于是相隔几分钟拍的图不再属于同一个相机模型 —— 而标定正是假设它们属于同一个。",
+        "fix": "切到手动",
+        "short": "手动曝光"
+      },
+      "autoFocus": {
+        "title": "连续自动对焦开着",
+        "why": "过程中重新对焦会改变焦距，这些帧就不再属于同一套内参。",
+        "fix": "关掉",
+        "short": "固定对焦"
+      },
+      "clipHigh": {
+        "title": "高光过曝",
+        "why": "白格已经饱和，在截断的地方黑白格之间的角点就不存在了。",
+        "fix": "缩短曝光",
+        "short": "曝光水平"
+      },
+      "clipLow": {
+        "title": "暗部欠曝",
+        "why": "黑格压到了 0，从另一侧同样抹掉这些角点。",
+        "fix": "延长曝光",
+        "short": "曝光水平"
+      },
+      "exposureLevel": {
+        "title": "曝光水平",
+        "why": "",
+        "fix": "",
+        "short": "曝光水平"
+      },
+      "gainHigh": {
+        "title": "增益偏高",
+        "why": "增益在放大信号的同时放大噪声, 而亚像素角点细化是在局部灰度面上拟合, 噪声会直接扰动它。曝光增加的是真实信号, 所以修正的做法是在亮度大致不变的前提下, 用更长的曝光换掉一部分增益。",
+        "fix": "用曝光换增益",
+        "short": "增益"
+      },
+      "motionBlur": {
+        "title": "曝光时间足以让移动的板拖影",
+        "why": "板在动的时候拍到的角点会落在错误的位置。如果是手持标定板，应缩短曝光、适当接受一点增益。",
+        "fix": "",
+        "short": "曝光时间"
+      },
+      "powerLine": {
+        "title": "电源频率不匹配",
+        "why": "人工光源下频率不匹配会产生条纹，而且条纹在帧间移动。",
+        "fix": "改为本地频率",
+        "short": "频闪"
+      },
+      "gainNeedsLight": {
+        "title": "增益偏高, 且曝光无法补偿",
+        "why": "此时降增益只会让画面变暗 —— 曝光已经到了拖影上限, 没有可交换的余量。这个场景需要的是补光。",
+        "fix": "",
+        "short": "增益"
+      },
+      "whiteBalance": {
+        "title": "白平衡",
+        "why": "",
+        "fix": "",
+        "short": "白平衡"
+      },
+      "colorCast": {
+        "title": "画面偏色, 白平衡被锁在了错误的值上",
+        "why": "色温控制只能在红蓝之间调, 够不到绿/品红这条轴 —— 所以锁定之后偏绿是没法手动调回来的。而亮度是按绿色 0.587 加权的, 偏绿会让所有亮度读数偏高, 实际上红蓝两个通道还是暗的。",
+        "fix": "交还给自动白平衡",
+        "short": "偏色"
+      },
+      "colorCastAuto": {
+        "title": "画面偏色, 但白平衡已经是自动",
+        "why": "驱动已经在尽力校正了, 而 UVC 没有提供绿/品红方向的控制项, 这个面板上没有能改的东西。通常是光源本身偏色 —— 换个光源, 或者接受它。",
+        "fix": "",
+        "short": "偏色"
+      }
+    },
+    "adviceBlocked": "被「{{parent}}」锁定，请先处理上一项。",
+    "autoTuneTitle": "自动调参",
+    "autoTune": "自动调曝光与增益",
+    "tuning": "调整中…",
+    "mounting": "标定板",
+    "handheld": "手持",
+    "fixed": "固定",
+    "handheldNote": "把曝光控制在移动的板不会拖影的范围内。如果光线不足以做到, 仍会拉长曝光并明确告知 —— 暗画面根本没有角点可用。",
+    "fixedNote": "不用担心拖影, 曝光可以拉长、增益保持很低, 画质最好。",
+    "tuneOk": "已达标。",
+    "tunePartial": "这是当前条件下能达到的最好结果。",
+    "tuneFailed": "调参失败：{{error}}",
+    "tuneExposure": "曝光",
+    "tuneGain": "增益",
+    "tuneWhite": "白位",
+    "tuneSteps": "步",
+    "showTrace": "查看调整过程",
+    "hideTrace": "收起",
+    "tuneIssue": {
+      "too-dark": "仍然偏暗 —— 这个场景需要补光。",
+      "too-bright": "仍然偏亮。",
+      "clipped-high": "高光在截断。",
+      "clipped-low": "暗部在截断。",
+      "exceeds-blur-limit": "曝光已超过手持能稳住的时长 —— 请用支架, 或者补光。",
+      "high-gain": "最终增益偏高, 会有噪声。补光可以把它降下来。",
+      "costs-frame-rate": "为了达到亮度, 曝光超过了一个帧周期 —— 帧率会掉下来。",
+      "camera-fps-ceiling": "曝光没有超, 但相机在该分辨率下达不到目标帧率 —— 这是硬件上限。"
+    },
+    "fpsTarget": "目标帧率",
+    "fpsAny": "不限",
+    "capNote": "曝光上限 {{ms}} ms（{{reason}}）",
+    "capReason": {
+      "fps": "受目标帧率限制",
+      "blur": "受拖影限制"
+    },
+    "tuneFps": "实测帧率",
+    "health": {
+      "title": "是否调到位",
+      "waiting": "等待画面…",
+      "pass": "各项达标。",
+      "fail": "还有项目未达标。",
+      "verdict": {
+        "over": "过曝",
+        "under": "过暗"
+      },
+      "check": {
+        "brightness": "白位亮度",
+        "clipHigh": "高光截断",
+        "clipLow": "暗部截断",
+        "gain": "增益占比",
+        "exposureBudget": "曝光 / 帧周期",
+        "frameRate": "实测帧率",
+        "colorCast": "偏色"
+      },
+      "why": {
+        "brightness": {
+          "over": "白格接近饱和, 黑白交界会被抹掉 —— 缩短曝光或降增益。",
+          "under": "画面偏暗, 黑格会压到 0, 角点从暗侧消失 —— 拉长曝光或补光。"
+        },
+        "exposureBudget": "曝光比一个帧周期还长, 传感器只能放慢读出 —— 当前曝光对应约 {{fps}} fps。",
+        "frameRate": {
+          "exposure": "帧率是被曝光时长拖下去的, 缩短曝光即可恢复。",
+          "cameraCeiling": "曝光并没有超, 帧率仍然上不去 —— 这是该分辨率下相机或 USB 带宽的上限, 调参无法改变。换更小的分辨率才有可能。"
+        },
+        "colorCast": "高光偏{{channel}} —— 亮度按绿色加权, 偏色会让曝光判断失真。白平衡若是锁定的, 交还给自动即可。"
+      },
+      "channel": {
+        "red": "红",
+        "green": "绿",
+        "blue": "蓝"
+      }
+    },
+    "blocker": {
+      "colorCast": "画面偏{{channel}}。亮度是按绿色加权的, 偏色会让读数失真 —— 先修白平衡再调参, 否则会稳稳地收敛到一个错误的值上。"
+    },
+    "blockerFix": {
+      "colorCast": "先修白平衡"
+    }
+  },
+  "roi": {
+    "railTitle": "光心 / 视野",
+    "status": "状态",
+    "readout": "读数",
+    "calibration": "标定结果",
+    "notLoaded": "未加载",
+    "loadCalib": "加载标定文件…",
+    "needCalibration": "先在 01 或 02 页标定一次并保存，再到这里加载 —— 主点来自 K 矩阵。",
+    "needStream": "等待相机报告画幅尺寸。",
+    "noKInFile": "该文件里没有相机矩阵 K。",
+    "loadCalibFailed": "加载失败：{{error}}",
+    "loadFailed": "读取 ROI 失败：{{error}}",
+    "rmsHigh": "偏大，主点可能不可靠",
+    "hwCrop": "硬件裁剪",
+    "hwCropYes": "支持 —— 驱动可在传感器侧裁剪，不损失分辨率。",
+    "hwCropNo": "该驱动不支持（UVC 相机普遍如此）。将使用软件裁剪，会损失分辨率。",
+    "cropWindow": "裁剪窗口",
+    "customSize": "自定尺寸",
+    "useMax": "最大",
+    "clamped": "超出可居中的范围，已缩减为 {{w}}×{{h}}。",
+    "apply": "应用裁剪",
+    "clear": "清除",
+    "roiActive": "裁剪生效中",
+    "roiOff": "未裁剪",
+    "confirmApply": "把画面裁剪为 {{w}}×{{h}}？这会舍弃 {{lost}}% 的画幅，并且需要重新标定。",
+    "applied": "裁剪已应用并保存。请重新标定以得到裁剪后画面的内参。",
+    "savedNotApplied": "已保存，但未应用到正在运行的流：{{error}}",
+    "applyFailed": "设置裁剪失败：{{error}}",
+    "cleared": "裁剪已清除。",
+    "recalibrateNote": "应用裁剪会让刚加载的标定失效，之后请重新标定。",
+    "offset": "主点偏移",
+    "distance": "距离",
+    "fovNow": "当前视场角",
+    "afterCrop": "裁剪后",
+    "frameLoss": "画幅损失",
+    "kAfter": "裁剪后的 K",
+    "kNote": "裁剪只是平移图像原点：fx、fy 不变，畸变系数依然成立 —— 它们本就是相对主点定义的。",
+    "liveLabel": "实时 · {{device}}",
+    "noCamera": "无相机",
+    "pickCamera": "选择一路相机以查看其光心",
+    "roiStaleShort": "裁剪未生效",
+    "roiStaleTitle": "裁剪已失效",
+    "roiStale": "该裁剪是在 {{was}} 画幅上量的，当前画幅是 {{now}}，因此未被应用 —— 同一个矩形现在框住的是画面的另一部分。请清除后在当前分辨率下重新测量。",
+    "overlayHiddenCropped": "裁剪正在生效，预览显示的已是裁剪后的画面 —— 清除裁剪后才能在完整画幅上看到光心叠加。",
+    "circleClipped": "图像圆被切",
+    "circleClippedBody": "镜头的图像圆越过了传感器的{{edges}}边，这部分视野根本没有进入画面。",
+    "circleClippedNote": "这是镜头与传感器的装配关系决定的，裁剪解决不了 —— 传感器从未收到的像素无法通过裁剪找回。只有重新安装或加垫片调整镜头模组才能拿回这部分视野。它不影响标定精度：只要主点解算正确，去畸变在现有视野范围内依然成立。",
+    "edge": {
+      "top": "上",
+      "bottom": "下",
+      "left": "左",
+      "right": "右"
+    }
+  },
+  "boardgen": {
+    "title": "标定板生成",
+    "paper": "纸张",
+    "dpi": "DPI",
+    "margin": "白边",
+    "printedSize": "成图尺寸",
+    "actualSquare": "实际格边长",
+    "innerCorners": "内角点",
+    "markers": "码数",
+    "modePage": "打印页",
+    "modeBoard": "仅板面",
+    "savePng": "保存 PNG",
+    "savePdf": "保存 PDF",
+    "openSaved": "打开已保存文件",
+    "scaleWarning": "按 100% 比例打印，不要选「适应页面」。印好后用卡尺量一格，把实测值填回方格尺寸。",
+    "legacyWarning": "左上角是黑格。网上下载的板若左上角为白格，属于 OpenCV 4.7 之前的旧排布，在这里检测会出错。"
   }
 }

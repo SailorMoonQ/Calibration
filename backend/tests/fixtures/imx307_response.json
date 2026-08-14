@@ -1,0 +1,9 @@
+{
+  "_comment": "Measured on the test rig's LRCP imx307_03 (uvcvideo) at 640x480, indoor light. p95 = 95th percentile luma of the frame. Two sweeps: exposure with gain pinned, and gain with exposure pinned. Recorded because the response is NOT what an open-loop model would assume: gain=0 already gives p95=39 (unity gain, not zero), and doubling exposure raises p95 by ~1.7x rather than 2x because the ISP applies gamma. Both facts are why brightness has to be measured rather than computed.",
+  "exposure_sweep": { "gain": 64, "points": [
+    [50, 33], [100, 58], [150, 80], [200, 98], [300, 127], [400, 148], [600, 179], [900, 214]
+  ]},
+  "gain_sweep": { "exposure": 150, "points": [
+    [0, 39], [16, 48], [32, 58], [48, 68], [64, 78], [80, 92], [96, 106], [112, 120], [128, 135]
+  ]}
+}

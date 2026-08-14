@@ -1,3 +1,5 @@
+import { previewQuery } from '../lib/boardgen.js';
+
 let cached = null;
 
 async function info() {
@@ -97,6 +99,30 @@ export const api = {
     });
   },
   snap: (device, dir) => request('/stream/snap', { method: 'POST', body: JSON.stringify({ device, dir }) }),
+
+  // Camera controls (exposure / gain / white balance / focus). `setCameraControl`
+  // returns the REFRESHED full control list, not just an ack, because setting one
+  // control can lock or unlock another and only the driver knows the new state.
+  cameraControls: (device) =>
+    request(`/camera/controls?device=${encodeURIComponent(device)}`),
+  setCameraControl: (device, name, value) =>
+    request('/camera/control', { method: 'POST', body: JSON.stringify({ device, name, value }) }),
+  // Closed-loop exposure/gain tuning. Slow by nature: each iteration waits for
+  // the sensor to actually deliver the settings it was just given, so a run
+  // takes seconds. fetch has no default timeout, which is what we want here.
+  autotuneCamera: (body) =>
+    request('/camera/autotune', { method: 'POST', body: JSON.stringify(body) }),
+  cameraPresets: (device) =>
+    request(`/camera/presets?device=${encodeURIComponent(device)}`),
+  mutateCameraPresets: (body) =>
+    request('/camera/presets', { method: 'POST', body: JSON.stringify(body) }),
+
+  // ROI (crop window) used to put the optical axis at the centre of the output.
+  cameraRoi: (device) => request(`/camera/roi?device=${encodeURIComponent(device)}`),
+  setCameraRoi: (body) => {
+    invalidateStreamInfo(body.device);
+    return request('/camera/roi', { method: 'POST', body: JSON.stringify(body) });
+  },
   appendHandeyePose: ({ poses_path, basename, T, ts, meta }) =>
     request('/handeye/append_pose', {
       method: 'POST',
@@ -265,6 +291,38 @@ export async function fetchRectifiedBlob({
     throw new Error(`rectify ${res.status}: ${txt}`);
   }
   return res.blob();
+}
+
+// FastAPI reports refusals as {"detail": "..."} — for the board generator that
+// text is the whole message ("board does not fit A4: needs 560x450 mm ..."), so
+// it has to reach the dialog instead of being flattened to a status code.
+async function detailOf(res) {
+  try {
+    const body = await res.json();
+    return body.detail || res.statusText;
+  } catch { return res.statusText; }
+}
+
+export async function fetchBoardPreviewBlob(board, opts) {
+  const { baseUrl } = await info();
+  const qs = previewQuery(board, opts);
+  const res = await fetch(`${baseUrl}/board/preview.png?${qs.toString()}`);
+  if (!res.ok) throw new Error(await detailOf(res));
+  return res.blob();
+}
+
+export async function exportBoard(board, opts, { format, path }) {
+  const { baseUrl } = await info();
+  const qs = previewQuery(board, opts);
+  const body = Object.fromEntries(qs.entries());
+  delete body.max_px;  // export always renders at full dpi
+  const res = await fetch(`${baseUrl}/board/export`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ...body, format, path }),
+  });
+  if (!res.ok) throw new Error(await detailOf(res));
+  return res.json();
 }
 
 export async function pickFolder(defaultPath) {

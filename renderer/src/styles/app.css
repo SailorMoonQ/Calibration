@@ -197,16 +197,28 @@ button { font-family: inherit; font-size: inherit; color: inherit; }
   cursor: pointer;
   white-space: nowrap;
 }
-.btn:hover { background: var(--surface-2); border-color: var(--border-strong); }
+.btn:hover:not(:disabled) { background: var(--surface-2); border-color: var(--border-strong); }
 .btn.primary { background: var(--accent); border-color: var(--accent-line); color: white; }
-.btn.primary:hover { background: var(--accent-2); }
+.btn.primary:hover:not(:disabled) { background: var(--accent-2); }
 .btn.ghost { background: transparent; border-color: transparent; color: var(--text-2); }
-.btn.ghost:hover { background: var(--surface-2); color: var(--text); }
+.btn.ghost:hover:not(:disabled) { background: var(--surface-2); color: var(--text); }
 .btn.danger { color: var(--err); }
 .btn.block { width: 100%; }
 .btn.lg { height: 32px; font-size: 12.5px; font-weight: 500; }
 .btn.sm { height: 22px; font-size: 11px; padding: 0 7px; }
 .btn.icon { width: 26px; padding: 0; }
+
+/* Disabled affordance. There was none, so a disabled control was pixel-identical
+   to a live one — the app has 16 buttons, 6 selects and 2 inputs that disable
+   themselves, and every one of them read as broken rather than as unavailable.
+   The :not(:disabled) on the hover rules above matters as much as the opacity:
+   a button that still lights up under the cursor is still claiming to be live. */
+.btn:disabled,
+.select:disabled,
+.input:disabled {
+  opacity: 0.42;
+  cursor: not-allowed;
+}
 
 .chk {
   display: inline-flex; align-items: center; gap: 6px;
@@ -425,6 +437,78 @@ svg.fill { width: 100%; height: 100%; display: block; }
   display: flex; justify-content: flex-end; gap: 8px;
   padding: 10px 14px 14px;
 }
+.modal-actions .spacer { flex: 1; }
+
+/* Wide variant for tool dialogs that need a preview pane beside their controls;
+   the base .modal is sized for confirm prompts. */
+.modal.wide {
+  max-width: min(1180px, 94vw);
+  width: min(1180px, 94vw);
+  max-height: 92vh;
+  display: flex; flex-direction: column;
+}
+
+/* Topbar tools dropdown — same shell as .tweaks-panel, sized to its items. */
+.tools-menu {
+  position: absolute; right: 0; top: calc(100% + 6px); z-index: 100;
+  min-width: 180px;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  box-shadow: 0 10px 32px rgba(16,22,33,0.16);
+  padding: 4px;
+  -webkit-app-region: no-drag;
+}
+.tools-item {
+  display: block; width: 100%;
+  padding: 7px 10px;
+  border: 0; border-radius: 4px;
+  background: transparent; color: var(--text);
+  font: inherit; font-size: 12px; text-align: left;
+  cursor: pointer;
+}
+.tools-item:hover { background: var(--accent-soft); color: var(--accent-line); }
+
+/* Board generator: controls left, preview right. */
+.boardgen {
+  display: grid; grid-template-columns: 280px minmax(0, 1fr); gap: 14px;
+  padding: 12px 16px; min-height: 0; overflow: auto;
+}
+.boardgen-side { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.boardgen-print { display: flex; flex-direction: column; gap: 8px; }
+.boardgen-facts {
+  display: flex; flex-direction: column; gap: 4px;
+  padding: 9px;
+  background: var(--surface-2);
+  border: 1px solid var(--border-soft);
+  border-radius: 4px;
+  font-size: 12px;
+}
+.boardgen-facts > div { display: flex; justify-content: space-between; gap: 10px; }
+.boardgen-facts span { color: var(--text-3); }
+.boardgen-facts b { font-variant-numeric: tabular-nums; }
+.boardgen-note { margin: 0; font-size: 11px; line-height: 1.5; color: var(--text-3); }
+.boardgen-preview { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.boardgen-canvas {
+  flex: 1; min-height: 320px;
+  display: flex; align-items: center; justify-content: center;
+  padding: 10px;
+  background: var(--bg-2);
+  border: 1px solid var(--border-soft);
+  border-radius: 4px;
+}
+.boardgen-canvas img {
+  max-width: 100%; max-height: 62vh;
+  object-fit: contain;
+  background: #fff;
+  box-shadow: 0 2px 12px rgba(16,22,33,0.18);
+}
+.boardgen-error {
+  max-width: 34em;
+  font-size: 12px; line-height: 1.6; text-align: center;
+  color: var(--err);
+}
+.boardgen-empty { color: var(--text-4); }
 .tweaks-head {
   display: flex; align-items: center; justify-content: space-between;
   padding: 8px 12px;

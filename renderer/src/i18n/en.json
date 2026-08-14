@@ -6,14 +6,35 @@
     "drop": "drop",
     "minimize": "minimize",
     "maximize": "maximize",
-    "close": "close"
+    "close": "close",
+    "tools": "Tools",
+    "generateBoard": "Generate calibration board"
   },
   "tabs": {
-    "intrinsics": { "label": "Pinhole", "sub": "intrinsics" },
-    "fisheye": { "label": "Fish-eye", "sub": "intrinsics" },
-    "handeye": { "label": "Hand-Eye", "sub": "cam ↔ tracker" },
-    "link": { "label": "Link", "sub": "tracker ↔ ctrl" },
-    "addStage": "+ add stage"
+    "intrinsics": {
+      "label": "Pinhole",
+      "sub": "intrinsics"
+    },
+    "fisheye": {
+      "label": "Fish-eye",
+      "sub": "intrinsics"
+    },
+    "handeye": {
+      "label": "Hand-Eye",
+      "sub": "cam ↔ tracker"
+    },
+    "link": {
+      "label": "Link",
+      "sub": "tracker ↔ ctrl"
+    },
+    "camparams": {
+      "label": "Camera",
+      "sub": "exposure / gain"
+    },
+    "roifov": {
+      "label": "Optics",
+      "sub": "centre / FOV"
+    }
   },
   "tweaks": {
     "title": "Tweaks",
@@ -85,7 +106,8 @@
     "loadFailed": "load failed: {{error}}",
     "error": "error: {{error}}",
     "rmsPx": "rms {{rms}} px",
-    "failed": "failed: {{message}}"
+    "failed": "failed: {{message}}",
+    "close": "Close"
   },
   "panels": {
     "frames": "frames",
@@ -313,20 +335,41 @@
     "progress": "step {{step}}/{{total}} · {{group}}·{{action}} · shot {{shot}}/{{shots}}",
     "done": "all done — run calibration",
     "groups": {
-      "frontal": "frontal zones", "edge": "edges", "tilt": "pitch", "yaw": "yaw", "roll": "in-plane roll", "dist": "distance"
+      "frontal": "frontal zones",
+      "edge": "edges",
+      "tilt": "pitch",
+      "yaw": "yaw",
+      "roll": "in-plane roll",
+      "dist": "distance"
     },
     "steps": {
-      "f_center": "frontal · center", "f_tl": "frontal · top-left", "f_tr": "frontal · top-right", "f_bl": "frontal · bottom-left", "f_br": "frontal · bottom-right",
-      "e_top": "push to top edge", "e_bottom": "push to bottom edge", "e_left": "push to left edge", "e_right": "push to right edge",
-      "t_fwd": "top edge tipped forward (pitch)", "t_back": "top edge leaned back (pitch)",
-      "y_left": "left side turned in (yaw)", "y_right": "right side turned in (yaw)",
+      "f_center": "frontal · center",
+      "f_tl": "frontal · top-left",
+      "f_tr": "frontal · top-right",
+      "f_bl": "frontal · bottom-left",
+      "f_br": "frontal · bottom-right",
+      "e_top": "push to top edge",
+      "e_bottom": "push to bottom edge",
+      "e_left": "push to left edge",
+      "e_right": "push to right edge",
+      "t_fwd": "top edge tipped forward (pitch)",
+      "t_back": "top edge leaned back (pitch)",
+      "y_left": "left side turned in (yaw)",
+      "y_right": "right side turned in (yaw)",
       "r_roll": "in-plane roll (turn like a clock)",
-      "d_near": "close in, fill the frame", "d_far": "pull back, smaller", "d_mid": "medium distance"
+      "d_near": "close in, fill the frame",
+      "d_far": "pull back, smaller",
+      "d_mid": "medium distance"
     },
     "hint": {
-      "frontal": "face the camera, keep it flat", "tilted": "tilt the board ~30–45°", "roll": "roll the board in its plane",
-      "near": "move closer, fill the frame", "far": "move away, smaller", "mid": "hold a medium distance",
-      "region": "move into the highlighted zone", "vary": "nudge slightly, then take the second"
+      "frontal": "face the camera, keep it flat",
+      "tilted": "tilt the board ~30–45°",
+      "roll": "roll the board in its plane",
+      "near": "move closer, fill the frame",
+      "far": "move away, smaller",
+      "mid": "hold a medium distance",
+      "region": "move into the highlighted zone",
+      "vary": "nudge slightly, then take the second"
     }
   },
   "handeye": {
@@ -530,5 +573,302 @@
     "noFileLoaded": "no file loaded",
     "importMeta": "n={{n}} · Δ{{span}}s",
     "deviceNone": "(none)"
+  },
+  "cameraParams": {
+    "railTitle": "Camera Parameters",
+    "status": "Status",
+    "presets": "Presets",
+    "noPreset": "none active",
+    "noPresetsYet": "no presets yet",
+    "saveAs": "save current as",
+    "presetNamePlaceholder": "e.g. indoor",
+    "reset": "Reset to driver defaults",
+    "confirmReset": "Reset every control to the driver's default and clear the active preset?",
+    "confirmDeletePreset": "Delete preset \"{{name}}\"?",
+    "needPresetName": "Enter a name for the preset first.",
+    "persistNote": "Changes are saved per camera (by USB serial) and re-applied when the stream restarts.",
+    "unsupported": "Not available",
+    "nControls": "{{count}} controls",
+    "commonControls": "Common",
+    "allControls": "All controls",
+    "expand": "show all",
+    "collapse": "hide",
+    "noCommon": "this camera exposes none of the usual controls",
+    "exposureReadout": "Exposure readout",
+    "waitingForFrames": "waiting for frames…",
+    "clipHigh": "clipped high",
+    "clipLow": "clipped low",
+    "meanLuma": "mean",
+    "sharpness": "sharpness (focus)",
+    "liveLabel": "live · {{device}}",
+    "noCamera": "no camera",
+    "pickCamera": "pick a camera to adjust its parameters",
+    "on": "on",
+    "off": "off",
+    "lockedBy": "locked by {{parent}}",
+    "unlock": "switch to manual",
+    "lockedUnknown": "read-only right now (driver reports it as inactive)",
+    "loadFailed": "could not read controls: {{error}}",
+    "setFailed": "setting {{name}} failed: {{error}}",
+    "setRejected": "the driver rejected {{name}}: {{error}}",
+    "presetFailed": "preset operation failed: {{error}}",
+    "reason": {
+      "not-a-v4l2-device": "This source is managed by its ROS2 driver node, so its exposure and gain cannot be changed from here. Adjust them on the driver instead.",
+      "v4l2-ctl-missing": "v4l2-ctl is not installed. Install v4l-utils to adjust camera parameters.",
+      "no-controls-exposed": "This camera exposes no adjustable controls.",
+      "v4l2-ctl-failed": "The driver did not answer the control query."
+    },
+    "ctrl": {
+      "auto_exposure": "auto exposure",
+      "exposure_auto": "auto exposure",
+      "exposure_time_absolute": "exposure time",
+      "exposure_absolute": "exposure time",
+      "exposure_dynamic_framerate": "let exposure lower the frame rate",
+      "gain": "gain",
+      "brightness": "brightness",
+      "contrast": "contrast",
+      "saturation": "saturation",
+      "hue": "hue",
+      "gamma": "gamma",
+      "sharpness": "sharpness",
+      "white_balance_automatic": "auto white balance",
+      "white_balance_temperature": "white balance (K)",
+      "backlight_compensation": "backlight compensation",
+      "power_line_frequency": "power line frequency",
+      "focus_automatic_continuous": "continuous autofocus",
+      "focus_absolute": "focus"
+    },
+    "setAdjusted": "{{name}} was outside the driver's range — set to {{value}}.",
+    "setInactive": "{{name}} is locked right now; switch its parent control to manual first.",
+    "adviceTitle": "Guidance",
+    "adviceWaiting": "waiting for a frame and the control list…",
+    "adviceAllGood": "Ready for calibration.",
+    "adviceCount": "{{count}} thing(s) to fix",
+    "advicePassing": "OK: {{list}}",
+    "focusPeak": "focus vs best seen",
+    "focusPeakHint": "Turn the focus ring and watch for the peak — the absolute number is meaningless, the maximum is not.",
+    "advice": {
+      "autoExposure": {
+        "title": "Auto exposure is on",
+        "why": "The driver re-decides exposure between frames, so images captured minutes apart no longer share one camera model — which is what a calibration assumes they do.",
+        "fix": "Switch to manual",
+        "short": "manual exposure"
+      },
+      "autoFocus": {
+        "title": "Continuous autofocus is on",
+        "why": "Refocusing mid-session changes the focal length, so the frames no longer belong to a single intrinsic model.",
+        "fix": "Turn it off",
+        "short": "fixed focus"
+      },
+      "clipHigh": {
+        "title": "Highlights are blown out",
+        "why": "The white squares are saturating, so the corner between a white and a black square stops existing where it clips.",
+        "fix": "Shorten the exposure",
+        "short": "exposure level"
+      },
+      "clipLow": {
+        "title": "Shadows are crushed",
+        "why": "The black squares are hitting zero, which removes the same corners from the other side.",
+        "fix": "Lengthen the exposure",
+        "short": "exposure level"
+      },
+      "exposureLevel": {
+        "title": "Exposure level",
+        "why": "",
+        "fix": "",
+        "short": "exposure level"
+      },
+      "gainHigh": {
+        "title": "Gain is high",
+        "why": "Gain amplifies noise along with signal, and sub-pixel corner refinement fits a surface to local intensity — noise perturbs that fit directly. Exposure adds real signal instead, so the fix trades some gain for a longer exposure at about the same brightness.",
+        "fix": "Trade gain for exposure",
+        "short": "gain"
+      },
+      "motionBlur": {
+        "title": "Exposure is long enough to smear a moving board",
+        "why": "Corners captured while the board is moving land in the wrong place. If you are holding the board by hand, shorten the exposure and accept a little more gain.",
+        "fix": "",
+        "short": "exposure time"
+      },
+      "powerLine": {
+        "title": "Mains frequency does not match",
+        "why": "Under artificial light a mismatch bands the image, and the bands move between frames.",
+        "fix": "Match the local mains",
+        "short": "flicker"
+      },
+      "gainNeedsLight": {
+        "title": "Gain is high and exposure cannot compensate",
+        "why": "Lowering the gain now would only darken the picture — the exposure is already at the motion-blur limit, so there is nothing to trade against. The scene simply needs more light.",
+        "fix": "",
+        "short": "gain"
+      },
+      "whiteBalance": {
+        "title": "White balance",
+        "why": "",
+        "fix": "",
+        "short": "white balance"
+      },
+      "colorCast": {
+        "title": "The picture is tinted — the white balance is locked to the wrong value",
+        "why": "The colour-temperature control only trades red against blue; it cannot reach the green/magenta axis, so a green cast cannot be dialled back out once locked. And luma weights green at 0.587, so the tint makes every brightness reading read high while red and blue stay dark.",
+        "fix": "Hand it back to auto",
+        "short": "tint"
+      },
+      "colorCastAuto": {
+        "title": "The picture is tinted, but white balance is already automatic",
+        "why": "The driver is already correcting as best it can, and UVC exposes no green/magenta control — there is nothing on this panel that would change it. Usually the light source itself is tinted: change the light, or accept it.",
+        "fix": "",
+        "short": "tint"
+      }
+    },
+    "adviceBlocked": "Locked by {{parent}} — fix that first.",
+    "autoTuneTitle": "Auto tune",
+    "autoTune": "Tune exposure & gain",
+    "tuning": "Tuning…",
+    "mounting": "board is",
+    "handheld": "handheld",
+    "fixed": "on a stand",
+    "handheldNote": "Keeps the exposure short enough that a moving board does not smear. If the room is too dim for that, it will go longer anyway and say so — a dark frame has no corners at all.",
+    "fixedNote": "No blur to worry about, so exposure can run long and gain stays low. Best image quality.",
+    "tuneOk": "On target.",
+    "tunePartial": "Best achievable here.",
+    "tuneFailed": "tuning failed: {{error}}",
+    "tuneExposure": "exposure",
+    "tuneGain": "gain",
+    "tuneWhite": "white level",
+    "tuneSteps": "steps",
+    "showTrace": "show what it did",
+    "hideTrace": "hide",
+    "tuneIssue": {
+      "too-dark": "Still too dark — the scene needs more light.",
+      "too-bright": "Still too bright.",
+      "clipped-high": "Highlights are clipping.",
+      "clipped-low": "Shadows are clipping.",
+      "exceeds-blur-limit": "Exposure is longer than a handheld board can hold still — use a stand, or add light.",
+      "high-gain": "Gain ended high, so expect noise. More light would let it come down.",
+      "costs-frame-rate": "Reaching the target needed an exposure longer than one frame period — the frame rate drops.",
+      "camera-fps-ceiling": "The exposure fits, but the camera cannot hit the target frame rate at this resolution — a hardware ceiling."
+    },
+    "fpsTarget": "target fps",
+    "fpsAny": "any",
+    "capNote": "exposure ceiling {{ms}} ms ({{reason}})",
+    "capReason": {
+      "fps": "set by the frame rate",
+      "blur": "set by motion blur"
+    },
+    "tuneFps": "measured",
+    "health": {
+      "title": "Is it tuned?",
+      "waiting": "waiting for frames…",
+      "pass": "All checks pass.",
+      "fail": "Some checks still fail.",
+      "verdict": {
+        "over": "over-exposed",
+        "under": "under-exposed"
+      },
+      "check": {
+        "brightness": "white level",
+        "clipHigh": "highlight clipping",
+        "clipLow": "shadow clipping",
+        "gain": "gain used",
+        "exposureBudget": "exposure vs frame period",
+        "frameRate": "measured fps",
+        "colorCast": "colour cast"
+      },
+      "why": {
+        "brightness": {
+          "over": "The white squares are near saturation and the black/white boundary goes with them — shorten the exposure or lower the gain.",
+          "under": "Dark enough that the black squares crush to 0, which loses the corners from the other side — lengthen the exposure or add light."
+        },
+        "exposureBudget": "The exposure is longer than one frame period, so the sensor can only read out slower — this exposure is about {{fps}} fps.",
+        "frameRate": {
+          "exposure": "The exposure is what is holding the frame rate down; shortening it recovers the rate.",
+          "cameraCeiling": "The exposure fits inside the frame period and the frames still are not arriving — this is the camera's or the USB link's ceiling at this resolution, and no tuning will lift it. A smaller resolution might."
+        },
+        "colorCast": "The highlights lean {{channel}} — luma is green-weighted, so a cast skews the exposure judgement. If the white balance is locked, hand it back to auto."
+      },
+      "channel": {
+        "red": "red",
+        "green": "green",
+        "blue": "blue"
+      }
+    },
+    "blocker": {
+      "colorCast": "The picture leans {{channel}}. Luma is green-weighted, so a cast skews the readings — fix the white balance first, or the loop will converge confidently on the wrong answer."
+    },
+    "blockerFix": {
+      "colorCast": "Fix white balance first"
+    }
+  },
+  "roi": {
+    "railTitle": "Optical Centre / FOV",
+    "status": "Status",
+    "readout": "Readout",
+    "calibration": "Calibration",
+    "notLoaded": "none loaded",
+    "loadCalib": "Load a calibration…",
+    "needCalibration": "Run a calibration in tab 01 or 02, save it, then load it here — the principal point comes from K.",
+    "needStream": "Waiting for the camera to report its frame size.",
+    "noKInFile": "That file has no camera matrix K.",
+    "loadCalibFailed": "could not load: {{error}}",
+    "loadFailed": "could not read the ROI: {{error}}",
+    "rmsHigh": "high — the principal point may be unreliable",
+    "hwCrop": "Hardware crop",
+    "hwCropYes": "Supported — the driver can crop at the sensor, so no resolution is lost.",
+    "hwCropNo": "Not supported by this driver (usual for UVC cameras). A software crop is used instead, which costs resolution.",
+    "cropWindow": "Crop window",
+    "customSize": "custom size",
+    "useMax": "max",
+    "clamped": "Too large for a centred window — reduced to {{w}}×{{h}}.",
+    "apply": "Apply crop",
+    "clear": "Clear",
+    "roiActive": "crop active",
+    "roiOff": "no crop",
+    "confirmApply": "Crop the stream to {{w}}×{{h}}? This discards {{lost}}% of the frame and you will need to calibrate again.",
+    "applied": "Crop applied and saved. Calibrate again to get intrinsics for the cropped stream.",
+    "savedNotApplied": "Saved, but not applied to the running stream: {{error}}",
+    "applyFailed": "could not set the crop: {{error}}",
+    "cleared": "Crop cleared.",
+    "recalibrateNote": "Applying a crop invalidates the calibration you loaded — re-run it afterwards.",
+    "offset": "Principal-point offset",
+    "distance": "distance",
+    "fovNow": "Field of view now",
+    "afterCrop": "After crop",
+    "frameLoss": "frame lost",
+    "kAfter": "K after crop",
+    "kNote": "A crop only translates the image origin: fx and fy are unchanged and the distortion coefficients still hold, because they are defined relative to the principal point.",
+    "liveLabel": "live · {{device}}",
+    "noCamera": "no camera",
+    "pickCamera": "pick a camera to inspect its optical centre",
+    "roiStaleShort": "crop not applied",
+    "roiStaleTitle": "Crop out of date",
+    "roiStale": "This crop was measured on a {{was}} frame but the stream is now {{now}}, so it is not being applied — the same rectangle would cover a different part of the scene. Clear it and measure again at this resolution.",
+    "overlayHiddenCropped": "A crop is live, so the preview is already the cropped picture — clear the crop to see the optical-centre overlay against the full frame.",
+    "circleClipped": "Image circle clipped",
+    "circleClippedBody": "The lens's image circle runs past the {{edges}} edge(s) of the sensor, so that part of the field of view never reaches the picture.",
+    "circleClippedNote": "This is a property of how the lens sits on the sensor, not something a crop can fix — cropping cannot recover pixels the sensor never received. Re-seating or shimming the lens module is the only way to get that field of view back. It does not affect calibration accuracy: as long as the principal point is solved correctly, undistortion stays valid over the field that is present.",
+    "edge": {
+      "top": "top",
+      "bottom": "bottom",
+      "left": "left",
+      "right": "right"
+    }
+  },
+  "boardgen": {
+    "title": "Calibration board generator",
+    "paper": "Paper",
+    "dpi": "DPI",
+    "margin": "Quiet zone",
+    "printedSize": "Printed size",
+    "actualSquare": "Actual square",
+    "innerCorners": "Inner corners",
+    "markers": "Markers",
+    "modePage": "Print sheet",
+    "modeBoard": "Board only",
+    "savePng": "Save PNG",
+    "savePdf": "Save PDF",
+    "openSaved": "Open saved file",
+    "scaleWarning": "Print at 100% scale — never \"fit to page\". Then measure a square with calipers and enter the measured value as the board square size.",
+    "legacyWarning": "The top-left square is black. A downloaded board whose top-left square is white uses the pre-OpenCV-4.7 layout and will not detect correctly here."
   }
 }

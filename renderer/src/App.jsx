@@ -6,10 +6,13 @@ import { Tabs } from './components/Tabs.jsx';
 import { TWEAKS_DEFAULTS } from './components/TweaksPanel.jsx';
 import { LogStrip } from './components/panels.jsx';
 import { ConfirmHost } from './components/confirm.jsx';
+import { BoardGenDialog } from './components/BoardGenDialog.jsx';
 import { IntrinsicsTab } from './tabs/IntrinsicsTab.jsx';
 import { FisheyeTab } from './tabs/FisheyeTab.jsx';
 import { HandEyeTab } from './tabs/HandEyeTab.jsx';
 import { LinkCalibTab } from './tabs/LinkCalibTab.jsx';
+import { CameraParamsTab } from './tabs/CameraParamsTab.jsx';
+import { RoiFovTab } from './tabs/RoiFovTab.jsx';
 import { api, voiceEventsUrl } from './api/client.js';
 import { dispatchVoiceCommand } from './lib/voiceControl.js';
 
@@ -20,6 +23,8 @@ const TAB_DEFS = [
   { id: 'fisheye',    num: '02', badge: 'warn', Comp: FisheyeTab },
   { id: 'handeye',    num: '03', badge: 'ok',   Comp: HandEyeTab },
   { id: 'link',       num: '04', badge: 'ok',   Comp: LinkCalibTab },
+  { id: 'camparams',  num: '05', badge: 'ok',   Comp: CameraParamsTab },
+  { id: 'roifov',     num: '06', badge: 'ok',   Comp: RoiFovTab },
 ];
 
 export function App() {
@@ -34,6 +39,8 @@ export function App() {
     } catch { return { ...TWEAKS_DEFAULTS }; }
   });
   const [tweaksVisible, setTweaksVisible] = useState(false);
+  const [toolsOpen, setToolsOpen] = useState(false);
+  const [boardGenOpen, setBoardGenOpen] = useState(false);
   // Eye-in-hand vs eye-to-hand is a property of the physical rig, not a per-tab
   // setting — Hand-Eye owns the toggle, Link reads it for its own solver.
   const [solvePattern, setSolvePattern] = useState(
@@ -107,11 +114,16 @@ export function App() {
           tweaks={tweaks} setTweaks={setTweaks}
           settingsOpen={tweaksVisible}
           onToggleSettings={() => setTweaksVisible(v => !v)}
-          onCloseSettings={() => setTweaksVisible(false)}/>
+          onCloseSettings={() => setTweaksVisible(false)}
+          toolsOpen={toolsOpen}
+          onToggleTools={() => setToolsOpen(v => !v)}
+          onCloseTools={() => setToolsOpen(false)}
+          onOpenBoardGen={() => setBoardGenOpen(true)}/>
         <Tabs tabs={tabs} value={active} onChange={setActive}/>
         <ActiveComp active={active} solvePattern={solvePattern} setSolvePattern={setSolvePattern} tweaks={tweaks}/>
         <LogStrip lines={[]}/>
         <ConfirmHost/>
+        <BoardGenDialog open={boardGenOpen} onClose={() => setBoardGenOpen(false)}/>
       </div>
     </TelemetryProvider>
   );

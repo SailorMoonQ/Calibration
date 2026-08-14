@@ -14,9 +14,11 @@ import cv2
 import numpy as np
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, Response, StreamingResponse
+from PIL import Image
+from pydantic import ValidationError
 
 from app import __version__
-from app.calib import _io, chain, extrinsics, fisheye, handeye, intrinsics
+from app.calib import _io, boardgen, chain, extrinsics, fisheye, handeye, intrinsics
 from app.models import (
     Board,
     CalibrationLoadResponse,
@@ -33,9 +35,13 @@ from app.models import (
     IntrinsicsRequest,
     LinkRequest,
 )
+from app.sources import control_store
+from app.sources import autotune as autotune_mod
+from app.sources import roi_store
 from app.sources import manager as source_manager
 from app.sources import opencv as opencv_source
 from app.sources import ros2_context
+from app.sources import v4l2_controls
 from app.utils import yaml_io
 from app import voice
 
@@ -159,6 +165,294 @@ async def stream_set_resolution(body: dict) -> dict:
         return src.info()
     finally:
         source_manager.release(device)
+
+
+def _control_key(device: str) -> tuple[str, str]:
+    """Storage identity for a camera: USB serial when readable, device path
+    otherwise. Shared by every /camera/* route so a preset saved through one
+    endpoint is found by the others."""
+    serial = v4l2_controls.device_serial(device)
+    return control_store.device_key(device, serial)
+
+
+@router.get("/camera/controls")
+async def camera_controls(device: str) -> dict:
+    """Enumerate the camera's V4L2 controls, plus its stored presets.
+
+    Returns supported=False with a reason (rather than an error) for sources that
+    cannot carry V4L2 controls — ROS2 topics are owned by their driver node — so
+    the UI can say why instead of rendering an inert panel."""
+    if not device:
+        raise HTTPException(status_code=400, detail="need device")
+    result = v4l2_controls.list_controls(device)
+    key, keyed_by = _control_key(device)
+    result["key"] = key
+    result["keyed_by"] = keyed_by
+    result["presets"] = control_store.list_presets(key)
+    result["hw_crop"] = v4l2_controls.supports_hw_crop(device)
+    return result
+
+
+@router.post("/camera/control")
+async def camera_set_control(body: dict) -> dict:
+    """Set one control and return the REFRESHED full list.
+
+    Returning the whole list is deliberate: changing one control can lock or
+    unlock another (exposure_time_absolute follows auto_exposure), and only the
+    driver knows the new state. Re-enumerating costs one v4l2-ctl call and keeps
+    the UI from having to guess."""
+    device = body.get("device")
+    name = body.get("name")
+    value = body.get("value")
+    if not device or not name or value is None:
+        raise HTTPException(status_code=400, detail="need device/name/value")
+    try:
+        value = int(value)
+    except (TypeError, ValueError) as e:
+        raise HTTPException(status_code=400, detail="value must be an integer") from e
+    r = v4l2_controls.set_control(device, name, value)
+    key, keyed_by = _control_key(device)
+    if r["ok"]:
+        # Persist the edit into the active preset (creating an implicit one when
+        # the user has not named any). Without this, a slider change would be
+        # silently reverted the next time the stream restarts — a resolution
+        # switch or tab change would quietly undo the operator's work, which is
+        # exactly the failure mode this feature exists to remove.
+        control_store.remember_value(key, keyed_by, name, value)
+    result = v4l2_controls.list_controls(device)
+    result["set"] = r
+    result["key"] = key
+    result["keyed_by"] = keyed_by
+    result["presets"] = control_store.list_presets(key)
+    return result
+
+
+@router.get("/camera/presets")
+async def camera_presets(device: str) -> dict:
+    if not device:
+        raise HTTPException(status_code=400, detail="need device")
+    key, keyed_by = _control_key(device)
+    return {"key": key, "keyed_by": keyed_by, **control_store.list_presets(key)}
+
+
+@router.post("/camera/presets")
+async def camera_presets_mutate(body: dict) -> dict:
+    """save | delete | activate | reset.
+
+    `reset` writes every control back to the value the driver reports as its
+    default and clears the active preset, which also restores the legacy
+    force-auto-exposure behaviour on the next stream open."""
+    device = body.get("device")
+    action = body.get("action")
+    if not device or action not in ("save", "delete", "activate", "reset"):
+        raise HTTPException(status_code=400, detail="need device + action save|delete|activate|reset")
+    key, keyed_by = _control_key(device)
+
+    if action == "save":
+        name = body.get("name")
+        values = body.get("values")
+        if not name or not isinstance(values, dict):
+            raise HTTPException(status_code=400, detail="save needs name + values")
+        try:
+            info = control_store.save_preset(key, keyed_by, name, values)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        v4l2_controls.apply_controls(device, {k: int(v) for k, v in values.items()})
+    elif action == "delete":
+        name = body.get("name")
+        if not name:
+            raise HTTPException(status_code=400, detail="delete needs name")
+        info = control_store.delete_preset(key, name)
+    elif action == "activate":
+        name = body.get("name")
+        try:
+            info = control_store.set_active(key, keyed_by, name)
+        except KeyError as e:
+            raise HTTPException(status_code=404, detail=f"no such preset: {name}") from e
+        values = info["presets"].get(name) if name else None
+        if values:
+            v4l2_controls.apply_controls(device, {k: int(v) for k, v in values.items()})
+    else:  # reset
+        listing = v4l2_controls.list_controls(device)
+        defaults = {
+            c["id"]: c["default"]
+            for c in listing.get("controls", [])
+            if c.get("default") is not None
+        }
+        if defaults:
+            v4l2_controls.apply_controls(device, defaults)
+        info = control_store.set_active(key, keyed_by, None)
+
+    return {"key": key, "keyed_by": keyed_by, **info}
+
+
+@router.post("/camera/autotune")
+async def camera_autotune(body: dict) -> dict:
+    """Drive exposure and gain to a measured target, closed loop.
+
+    Closed loop rather than a formula because V4L2 does not define what a gain
+    unit means — on the test rig gain=0 is unity (p95=39, not black) and the
+    ISP's gamma makes the exposure exponent drift from 0.81 to 0.44 across the
+    range. Measuring the camera's own response sidesteps all of that.
+
+    Runs in a worker thread: each iteration sleeps to let the sensor settle, and
+    blocking the event loop for that would stall every other request including
+    the video stream the loop is measuring."""
+    device = body.get("device")
+    if not device:
+        raise HTTPException(status_code=400, detail="need device")
+    if not v4l2_controls.is_v4l2_device(device):
+        raise HTTPException(status_code=400, detail="autotune needs a v4l2 device")
+
+    listing = v4l2_controls.list_controls(device)
+    if not listing.get("supported"):
+        raise HTTPException(status_code=400, detail=listing.get("reason") or "no controls")
+    by = {c["id"]: c for c in listing["controls"]}
+    exp = by.get("exposure_time_absolute") or by.get("exposure_absolute")
+    if not exp:
+        raise HTTPException(status_code=400, detail="camera exposes no exposure control")
+    gain = by.get("gain")
+
+    # Manual exposure is a precondition, not a suggestion: with the driver's own
+    # AE running, every write we make is immediately overridden and the loop
+    # would be measuring the driver's decisions rather than its own.
+    ae = by.get("auto_exposure") or by.get("exposure_auto")
+    if ae is not None and ae.get("value") != 1:
+        v4l2_controls.set_control(device, ae["id"], 1, listing["controls"])
+        listing = v4l2_controls.list_controls(device)
+        by = {c["id"]: c for c in listing["controls"]}
+        exp = by.get("exposure_time_absolute") or by.get("exposure_absolute")
+        gain = by.get("gain")
+        if not exp or exp.get("inactive"):
+            raise HTTPException(status_code=409,
+                                detail="exposure stayed locked after switching to manual")
+
+    t = autotune_mod.Targets()
+    for key in ("p95", "p95_tol", "clip_high_max", "clip_low_max", "exposure_max_ms",
+                "fps_target", "allow_exceed_blur", "max_iterations"):
+        if key in body and body[key] is not None:
+            setattr(t, key, type(getattr(t, key))(body[key]))
+
+    limits = autotune_mod.Limits(
+        exp_min=int(exp["min"]), exp_max=int(exp["max"]), exp_step=int(exp.get("step") or 1),
+        gain_min=int(gain["min"]) if gain else 0,
+        gain_max=int(gain["max"]) if gain else 0,
+        gain_step=int(gain.get("step") or 1) if gain else 1,
+        has_gain=gain is not None and not gain.get("inactive"),
+    )
+    names = {"exposure": exp["id"], "gain": gain["id"] if gain else None}
+
+    def apply_control(which, value):
+        name = names.get(which)
+        if name:
+            v4l2_controls.set_control(device, name, int(value))
+
+    src = source_manager.get(device)
+    try:
+        if not src.wait_frame(timeout=3.0):
+            raise HTTPException(status_code=503, detail="camera produced no frame")
+        start = autotune_mod.State(
+            exposure=int(exp.get("value") or exp["min"]),
+            gain=int(gain.get("value") or gain["min"]) if gain else 0,
+        )
+        result = await asyncio.to_thread(
+            autotune_mod.run_autotune, src, apply_control, limits, t,
+            float(body.get("settle_s") or 0.28), start,
+        )
+    finally:
+        source_manager.release(device)
+
+    # Persist whatever the loop settled on, so it survives the stream restarts
+    # that a resolution change or a tab switch causes.
+    key, keyed_by = _control_key(device)
+    control_store.remember_value(key, keyed_by, names["exposure"], result["state"]["exposure"])
+    if names["gain"]:
+        control_store.remember_value(key, keyed_by, names["gain"], result["state"]["gain"])
+
+    result["controls"] = v4l2_controls.list_controls(device).get("controls", [])
+    result["presets"] = control_store.list_presets(key)
+    return result
+
+
+@router.get("/camera/roi")
+async def camera_get_roi(device: str) -> dict:
+    """Current ROI, the source's frame size, and whether the driver could do the
+    crop in hardware.
+
+    The size is what a caller needs to reason about the crop, and it must be the
+    size CONSUMERS see (post-clip), because that is the coordinate system the
+    principal point from a calibration is expressed in."""
+    if not device:
+        raise HTTPException(status_code=400, detail="need device")
+    key, keyed_by = _control_key(device)
+    stored = roi_store.get_roi(key)
+    size = None
+    live = None
+    try:
+        src = source_manager.get(device)
+        info = src.info()
+        if info.get("open"):
+            size = [info.get("width"), info.get("height")]
+        live = src.get_roi() if hasattr(src, "get_roi") else None
+    except Exception:
+        # Not streaming yet is normal — the stored ROI is still meaningful.
+        pass
+    # Ask the source whether it is applying the crop rather than re-deriving it:
+    # the size reported to consumers is the size AFTER cropping, so comparing
+    # that against for_size would flag every working crop as stale.
+    stale = bool(stored and live and live.get("applied") is False)
+    # The uncropped frame size — the coordinate system an ROI is expressed in.
+    source_size = (live or {}).get("source_size") or size
+    return {
+        "key": key, "keyed_by": keyed_by,
+        "roi": stored, "live_roi": live, "size": size,
+        "source_size": source_size, "stale": stale,
+        "hw_crop": v4l2_controls.supports_hw_crop(device),
+    }
+
+
+@router.post("/camera/roi")
+async def camera_set_roi(body: dict) -> dict:
+    """Set or clear the ROI. `{clear: true}` removes it.
+
+    Applied to the running source immediately (no restart — cropping happens
+    after each grab) and persisted, so it survives the resolution changes and tab
+    switches that tear the stream down."""
+    device = body.get("device")
+    if not device:
+        raise HTTPException(status_code=400, detail="need device")
+    key, keyed_by = _control_key(device)
+    clear = bool(body.get("clear"))
+    roi = None
+    if not clear:
+        try:
+            roi = {k: int(body[k]) for k in ("left", "top", "width", "height")}
+        except (KeyError, TypeError, ValueError) as e:
+            raise HTTPException(status_code=400, detail="need left/top/width/height") from e
+        if roi["width"] <= 0 or roi["height"] <= 0:
+            raise HTTPException(status_code=400, detail="width/height must be positive")
+        if roi["left"] < 0 or roi["top"] < 0:
+            raise HTTPException(status_code=400, detail="left/top must not be negative")
+        # The frame size the caller measured against. Without it a crop cannot be
+        # told apart from one left over from another resolution, and applying the
+        # stale one silently crops the wrong region.
+        fs = body.get("for_size")
+        if isinstance(fs, (list, tuple)) and len(fs) == 2:
+            roi["for_size"] = [int(fs[0]), int(fs[1])]
+    stored = roi_store.set_roi(key, keyed_by, roi)
+    try:
+        src = source_manager.get(device)
+        if hasattr(src, "set_roi"):
+            if roi:
+                src.set_roi(roi["left"], roi["top"], roi["width"], roi["height"],
+                            roi.get("for_size"))
+            else:
+                src.set_roi(0, 0, 0, 0)
+    except Exception as e:
+        # Persisted but not live: say so rather than reporting plain success,
+        # because the preview will not match what was just saved.
+        return {"key": key, "roi": stored, "applied": False, "error": str(e)}
+    return {"key": key, "roi": stored, "applied": True, "error": None}
 
 
 @router.post("/stream/clip")
@@ -596,6 +890,96 @@ async def dataset_rectified(body: dict):
         raise HTTPException(status_code=500, detail="encode failed")
     return Response(content=buf.tobytes(), media_type="image/jpeg",
                     headers={"Cache-Control": "no-cache, no-store"})
+
+
+def _board_from_query(board_type: str, cols: int, rows: int, square: float,
+                      marker: float | None, dictionary: str) -> Board:
+    try:
+        return Board(type=board_type, cols=cols, rows=rows, square=square,
+                     marker=marker, dictionary=dictionary)
+    except ValidationError as e:
+        raise HTTPException(status_code=400, detail=f"invalid board: {e}") from e
+
+
+def _render_requested(board: Board, mode: str, dpi: int, paper: str,
+                      margin_mm: float) -> np.ndarray:
+    try:
+        if mode == "board":
+            return boardgen.render_board(board, dpi)
+        if mode == "page":
+            return boardgen.compose_page(board, dpi, paper, margin_mm)
+    except (ValueError, KeyError) as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    raise HTTPException(status_code=400, detail=f"unknown mode: {mode}")
+
+
+@router.get("/board/preview.png")
+async def board_preview(
+    board_type: str = "charuco",
+    cols: int = 11,
+    rows: int = 8,
+    square: float = 0.045,
+    marker: float | None = 0.034,
+    dictionary: str = "DICT_5X5_100",
+    mode: str = "page",
+    dpi: int = 300,
+    paper: str = "A4",
+    margin_mm: float = 10.0,
+    max_px: int = 1600,
+) -> Response:
+    """Preview raster for the generator dialog.
+
+    `max_px` only downsamples the finished render — the layout is computed in
+    millimetres at the real `dpi` first, so what the dialog shows is the page
+    that will be exported, not a separately-laid-out approximation of it.
+    """
+    board = _board_from_query(board_type, cols, rows, square, marker, dictionary)
+    image = _render_requested(board, mode, dpi, paper, margin_mm)
+    if max_px > 0 and max(image.shape[:2]) > max_px:
+        scale = max_px / max(image.shape[:2])
+        image = cv2.resize(image, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+    ok, buf = cv2.imencode(".png", image)
+    if not ok:
+        raise HTTPException(status_code=500, detail="encode failed")
+    return Response(content=buf.tobytes(), media_type="image/png",
+                    headers={"Cache-Control": "no-cache, no-store"})
+
+
+@router.post("/board/export")
+async def board_export(body: dict) -> dict:
+    """Writes the board to `path` as PNG or PDF, at full `dpi` — never downsampled.
+
+    PDF goes through Pillow because the page has to carry its size in points; a
+    PNG's DPI tag is advisory and print dialogs routinely scale it away.
+    """
+    path = str(body.get("path") or "").strip()
+    if not path:
+        raise HTTPException(status_code=400, detail="path is required")
+    fmt = str(body.get("format", "png")).lower()
+    if fmt not in ("png", "pdf"):
+        raise HTTPException(status_code=400, detail=f"unknown format: {fmt}")
+
+    board = _board_from_query(
+        str(body.get("board_type", "charuco")), int(body.get("cols", 11)),
+        int(body.get("rows", 8)), float(body.get("square", 0.045)),
+        body.get("marker"), str(body.get("dictionary", "DICT_5X5_100")),
+    )
+    dpi = int(body.get("dpi", 300))
+    image = _render_requested(board, str(body.get("mode", "page")), dpi,
+                              str(body.get("paper", "A4")),
+                              float(body.get("margin_mm", 10.0)))
+
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    if fmt == "png":
+        ok, buf = cv2.imencode(".png", image)
+        if not ok:
+            raise HTTPException(status_code=500, detail="encode failed")
+        with open(path, "wb") as f:
+            f.write(buf.tobytes())
+    else:
+        Image.fromarray(image).save(path, format="PDF", resolution=float(dpi))
+    return {"ok": True, "path": path,
+            "square_m": boardgen.actual_square_m(board.square, dpi)}
 
 
 @router.post("/detect", response_model=DetectResponse)
