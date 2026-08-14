@@ -34,8 +34,7 @@
     "roifov": {
       "label": "光心视野",
       "sub": "中心 / 视场"
-    },
-    "addStage": "+ 添加阶段"
+    }
   },
   "tweaks": {
     "title": "偏好设置",

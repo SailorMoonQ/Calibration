@@ -34,8 +34,7 @@
     "roifov": {
       "label": "Optics",
       "sub": "centre / FOV"
-    },
-    "addStage": "+ add stage"
+    }
   },
   "tweaks": {
     "title": "Tweaks",
