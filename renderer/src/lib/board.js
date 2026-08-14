@@ -11,6 +11,16 @@ export const DEFAULT_BOARD_COLS = 11;
 export const DEFAULT_BOARD_ROWS = 8;
 export const DEFAULT_BOARD_SQUARE_M = 0.045;
 export const DEFAULT_BOARD_MARKER_M = 0.034;  // ≈ 0.75 × square
+export const DEFAULT_BOARD_DICT = 'DICT_5X5_100';
+
+// The dictionaries the backend actually accepts (_io._ARUCO_DICTS). Anything
+// else silently falls back to DICT_5X5_100 there, so the picker must not offer
+// options that don't exist.
+export const BOARD_DICTS = Object.freeze([
+  'DICT_4X4_50', 'DICT_4X4_100',
+  'DICT_5X5_50', 'DICT_5X5_100',
+  'DICT_6X6_250', 'DICT_7X7_250',
+]);
 
 export const DEFAULT_BOARD = Object.freeze({
   type: 'charuco',
@@ -18,6 +28,7 @@ export const DEFAULT_BOARD = Object.freeze({
   rows: DEFAULT_BOARD_ROWS,
   sq:   DEFAULT_BOARD_SQUARE_M,
   marker: DEFAULT_BOARD_MARKER_M,
+  dictionary: DEFAULT_BOARD_DICT,
 });
 
 // Convenience for tabs that historically used the plain chess board
@@ -29,4 +40,5 @@ export const DEFAULT_CHESS_BOARD = Object.freeze({
   cols: DEFAULT_BOARD_COLS,
   rows: DEFAULT_BOARD_ROWS,
   sq:   DEFAULT_BOARD_SQUARE_M,
+  dictionary: DEFAULT_BOARD_DICT,
 });

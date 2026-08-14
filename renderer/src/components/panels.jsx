@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { Section, Seg, Field, Chk, KV, NumInput, Spark, Histogram } from './primitives.jsx';
 import { useTelemetry } from '../lib/telemetry.jsx';
 import { polarCellGeometry } from '../lib/polarCoverage.js';
+import { BOARD_DICTS, DEFAULT_BOARD_DICT } from '../lib/board.js';
 
 function FrameThumb({ f }) {
   return (
@@ -443,13 +444,18 @@ export function TargetPanel({ board, onBoard }) {
         <NumInput value={board.sq} step={0.001} onChange={v => onBoard({...board, sq: v})} suffix="m"/>
       </Field>
       {board.type === 'charuco' && (
-        <Field label={t('panels.marker')}>
-          <NumInput value={board.marker || 0.018} step={0.001} onChange={v => onBoard({...board, marker: v})} suffix="m"/>
-        </Field>
+        <>
+          <Field label={t('panels.marker')}>
+            <NumInput value={board.marker || 0.018} step={0.001} onChange={v => onBoard({...board, marker: v})} suffix="m"/>
+          </Field>
+          <Field label={t('panels.dict')}>
+            <select className="select" value={board.dictionary || DEFAULT_BOARD_DICT}
+                    onChange={e => onBoard({...board, dictionary: e.target.value})}>
+              {BOARD_DICTS.map(d => <option key={d} value={d}>{d}</option>)}
+            </select>
+          </Field>
+        </>
       )}
-      <Field label={t('panels.dict')}>
-        <select className="select"><option>DICT_4X4_50</option><option>DICT_5X5_100</option><option>DICT_6X6_250</option></select>
-      </Field>
     </Section>
   );
 }
