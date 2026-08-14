@@ -1,8 +1,9 @@
-import { useEffect, useRef } from 'react';
+import { useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Pill, Seg } from './primitives.jsx';
 import { TweaksPanel } from './TweaksPanel.jsx';
 import { useTelemetry } from '../lib/telemetry.jsx';
+import { useOutsideClick } from '../lib/useOutsideClick.js';
 import { setLang, normalizeLang } from '../i18n';
 
 // Map a /dev/videoN path to a short label. Anything else falls through.
@@ -32,20 +33,15 @@ function dropStatus(pct) {
 
 const win = (action) => () => window.calib?.win?.[action]?.();
 
-export function Topbar({ tweaks, setTweaks, settingsOpen, onToggleSettings, onCloseSettings }) {
+export function Topbar({ tweaks, setTweaks, settingsOpen, onToggleSettings, onCloseSettings,
+                         toolsOpen, onToggleTools, onCloseTools, onOpenBoardGen }) {
   const { t, i18n } = useTranslation();
   const { cameras, poses } = useTelemetry();
   const settingsRef = useRef(null);
+  const toolsRef = useRef(null);
 
-  // Close the settings dropdown on an outside click while it's open.
-  useEffect(() => {
-    if (!settingsOpen) return;
-    const onDown = (e) => {
-      if (settingsRef.current && !settingsRef.current.contains(e.target)) onCloseSettings?.();
-    };
-    document.addEventListener('mousedown', onDown);
-    return () => document.removeEventListener('mousedown', onDown);
-  }, [settingsOpen, onCloseSettings]);
+  useOutsideClick(settingsRef, settingsOpen, onCloseSettings);
+  useOutsideClick(toolsRef, toolsOpen, onCloseTools);
 
   const camPills = Object.entries(cameras)
     .sort(([a], [b]) => a.localeCompare(b))
@@ -88,6 +84,17 @@ export function Topbar({ tweaks, setTweaks, settingsOpen, onToggleSettings, onCl
         { value: 'en', label: 'EN' },
         { value: 'zh', label: '中' },
       ]}/>
+      <div className="settings-anchor" ref={toolsRef}>
+        <button className={"btn ghost icon" + (toolsOpen ? ' on' : '')}
+                title={t('topbar.tools')} onClick={onToggleTools}>🛠</button>
+        {toolsOpen && (
+          <div className="tools-menu">
+            <button className="tools-item" onClick={() => { onCloseTools?.(); onOpenBoardGen?.(); }}>
+              {t('topbar.generateBoard')}
+            </button>
+          </div>
+        )}
+      </div>
       <div className="settings-anchor" ref={settingsRef}>
         <button className={"btn ghost icon" + (settingsOpen ? ' on' : '')}
                 title={t('topbar.settings')} onClick={onToggleSettings}>⚙</button>

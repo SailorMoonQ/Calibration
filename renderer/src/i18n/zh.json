@@ -6,7 +6,9 @@
     "drop": "丢帧",
     "minimize": "最小化",
     "maximize": "最大化",
-    "close": "关闭"
+    "close": "关闭",
+    "tools": "工具",
+    "generateBoard": "生成标定板"
   },
   "tabs": {
     "intrinsics": {
@@ -105,7 +107,8 @@
     "loadFailed": "加载失败：{{error}}",
     "error": "错误：{{error}}",
     "rmsPx": "rms {{rms}} px",
-    "failed": "失败：{{message}}"
+    "failed": "失败：{{message}}",
+    "close": "关闭"
   },
   "panels": {
     "frames": "帧",
@@ -851,5 +854,22 @@
       "left": "左",
       "right": "右"
     }
+  },
+  "boardgen": {
+    "title": "标定板生成",
+    "paper": "纸张",
+    "dpi": "DPI",
+    "margin": "白边",
+    "printedSize": "成图尺寸",
+    "actualSquare": "实际格边长",
+    "innerCorners": "内角点",
+    "markers": "码数",
+    "modePage": "打印页",
+    "modeBoard": "仅板面",
+    "savePng": "保存 PNG",
+    "savePdf": "保存 PDF",
+    "openSaved": "打开已保存文件",
+    "scaleWarning": "按 100% 比例打印，不要选「适应页面」。印好后用卡尺量一格，把实测值填回方格尺寸。",
+    "legacyWarning": "左上角是黑格。网上下载的板若左上角为白格，属于 OpenCV 4.7 之前的旧排布，在这里检测会出错。"
   }
 }

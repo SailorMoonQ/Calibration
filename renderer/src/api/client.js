@@ -1,3 +1,5 @@
+import { previewQuery } from '../lib/boardgen.js';
+
 let cached = null;
 
 async function info() {
@@ -289,6 +291,38 @@ export async function fetchRectifiedBlob({
     throw new Error(`rectify ${res.status}: ${txt}`);
   }
   return res.blob();
+}
+
+// FastAPI reports refusals as {"detail": "..."} — for the board generator that
+// text is the whole message ("board does not fit A4: needs 560x450 mm ..."), so
+// it has to reach the dialog instead of being flattened to a status code.
+async function detailOf(res) {
+  try {
+    const body = await res.json();
+    return body.detail || res.statusText;
+  } catch { return res.statusText; }
+}
+
+export async function fetchBoardPreviewBlob(board, opts) {
+  const { baseUrl } = await info();
+  const qs = previewQuery(board, opts);
+  const res = await fetch(`${baseUrl}/board/preview.png?${qs.toString()}`);
+  if (!res.ok) throw new Error(await detailOf(res));
+  return res.blob();
+}
+
+export async function exportBoard(board, opts, { format, path }) {
+  const { baseUrl } = await info();
+  const qs = previewQuery(board, opts);
+  const body = Object.fromEntries(qs.entries());
+  delete body.max_px;  // export always renders at full dpi
+  const res = await fetch(`${baseUrl}/board/export`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ...body, format, path }),
+  });
+  if (!res.ok) throw new Error(await detailOf(res));
+  return res.json();
 }
 
 export async function pickFolder(defaultPath) {

@@ -425,6 +425,82 @@ svg.fill { width: 100%; height: 100%; display: block; }
   display: flex; justify-content: flex-end; gap: 8px;
   padding: 10px 14px 14px;
 }
+.modal-actions .spacer { flex: 1; }
+/* app.css has no global :disabled rule, so a disabled .btn is visually identical
+   to a live one. The generator disables Save while the sheet is unprintable —
+   that has to read as unavailable rather than as an unresponsive button. */
+.modal-actions .btn:disabled { opacity: 0.42; cursor: not-allowed; }
+
+/* Wide variant for tool dialogs that need a preview pane beside their controls;
+   the base .modal is sized for confirm prompts. */
+.modal.wide {
+  max-width: min(1180px, 94vw);
+  width: min(1180px, 94vw);
+  max-height: 92vh;
+  display: flex; flex-direction: column;
+}
+
+/* Topbar tools dropdown — same shell as .tweaks-panel, sized to its items. */
+.tools-menu {
+  position: absolute; right: 0; top: calc(100% + 6px); z-index: 100;
+  min-width: 180px;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  box-shadow: 0 10px 32px rgba(16,22,33,0.16);
+  padding: 4px;
+  -webkit-app-region: no-drag;
+}
+.tools-item {
+  display: block; width: 100%;
+  padding: 7px 10px;
+  border: 0; border-radius: 4px;
+  background: transparent; color: var(--text);
+  font: inherit; font-size: 12px; text-align: left;
+  cursor: pointer;
+}
+.tools-item:hover { background: var(--accent-soft); color: var(--accent-line); }
+
+/* Board generator: controls left, preview right. */
+.boardgen {
+  display: grid; grid-template-columns: 280px minmax(0, 1fr); gap: 14px;
+  padding: 12px 16px; min-height: 0; overflow: auto;
+}
+.boardgen-side { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.boardgen-print { display: flex; flex-direction: column; gap: 8px; }
+.boardgen-facts {
+  display: flex; flex-direction: column; gap: 4px;
+  padding: 9px;
+  background: var(--surface-2);
+  border: 1px solid var(--border-soft);
+  border-radius: 4px;
+  font-size: 12px;
+}
+.boardgen-facts > div { display: flex; justify-content: space-between; gap: 10px; }
+.boardgen-facts span { color: var(--text-3); }
+.boardgen-facts b { font-variant-numeric: tabular-nums; }
+.boardgen-note { margin: 0; font-size: 11px; line-height: 1.5; color: var(--text-3); }
+.boardgen-preview { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.boardgen-canvas {
+  flex: 1; min-height: 320px;
+  display: flex; align-items: center; justify-content: center;
+  padding: 10px;
+  background: var(--bg-2);
+  border: 1px solid var(--border-soft);
+  border-radius: 4px;
+}
+.boardgen-canvas img {
+  max-width: 100%; max-height: 62vh;
+  object-fit: contain;
+  background: #fff;
+  box-shadow: 0 2px 12px rgba(16,22,33,0.18);
+}
+.boardgen-error {
+  max-width: 34em;
+  font-size: 12px; line-height: 1.6; text-align: center;
+  color: var(--err);
+}
+.boardgen-empty { color: var(--text-4); }
 .tweaks-head {
   display: flex; align-items: center; justify-content: space-between;
   padding: 8px 12px;

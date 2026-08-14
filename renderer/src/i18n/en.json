@@ -6,7 +6,9 @@
     "drop": "drop",
     "minimize": "minimize",
     "maximize": "maximize",
-    "close": "close"
+    "close": "close",
+    "tools": "Tools",
+    "generateBoard": "Generate calibration board"
   },
   "tabs": {
     "intrinsics": {
@@ -105,7 +107,8 @@
     "loadFailed": "load failed: {{error}}",
     "error": "error: {{error}}",
     "rmsPx": "rms {{rms}} px",
-    "failed": "failed: {{message}}"
+    "failed": "failed: {{message}}",
+    "close": "Close"
   },
   "panels": {
     "frames": "frames",
@@ -851,5 +854,22 @@
       "left": "left",
       "right": "right"
     }
+  },
+  "boardgen": {
+    "title": "Calibration board generator",
+    "paper": "Paper",
+    "dpi": "DPI",
+    "margin": "Quiet zone",
+    "printedSize": "Printed size",
+    "actualSquare": "Actual square",
+    "innerCorners": "Inner corners",
+    "markers": "Markers",
+    "modePage": "Print sheet",
+    "modeBoard": "Board only",
+    "savePng": "Save PNG",
+    "savePdf": "Save PDF",
+    "openSaved": "Open saved file",
+    "scaleWarning": "Print at 100% scale — never \"fit to page\". Then measure a square with calipers and enter the measured value as the board square size.",
+    "legacyWarning": "The top-left square is black. A downloaded board whose top-left square is white uses the pre-OpenCV-4.7 layout and will not detect correctly here."
   }
 }

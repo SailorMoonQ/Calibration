@@ -14,9 +14,11 @@ import cv2
 import numpy as np
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, Response, StreamingResponse
+from PIL import Image
+from pydantic import ValidationError
 
 from app import __version__
-from app.calib import _io, chain, extrinsics, fisheye, handeye, intrinsics
+from app.calib import _io, boardgen, chain, extrinsics, fisheye, handeye, intrinsics
 from app.models import (
     Board,
     CalibrationLoadResponse,
@@ -888,6 +890,96 @@ async def dataset_rectified(body: dict):
         raise HTTPException(status_code=500, detail="encode failed")
     return Response(content=buf.tobytes(), media_type="image/jpeg",
                     headers={"Cache-Control": "no-cache, no-store"})
+
+
+def _board_from_query(board_type: str, cols: int, rows: int, square: float,
+                      marker: float | None, dictionary: str) -> Board:
+    try:
+        return Board(type=board_type, cols=cols, rows=rows, square=square,
+                     marker=marker, dictionary=dictionary)
+    except ValidationError as e:
+        raise HTTPException(status_code=400, detail=f"invalid board: {e}") from e
+
+
+def _render_requested(board: Board, mode: str, dpi: int, paper: str,
+                      margin_mm: float) -> np.ndarray:
+    try:
+        if mode == "board":
+            return boardgen.render_board(board, dpi)
+        if mode == "page":
+            return boardgen.compose_page(board, dpi, paper, margin_mm)
+    except (ValueError, KeyError) as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    raise HTTPException(status_code=400, detail=f"unknown mode: {mode}")
+
+
+@router.get("/board/preview.png")
+async def board_preview(
+    board_type: str = "charuco",
+    cols: int = 11,
+    rows: int = 8,
+    square: float = 0.045,
+    marker: float | None = 0.034,
+    dictionary: str = "DICT_5X5_100",
+    mode: str = "page",
+    dpi: int = 300,
+    paper: str = "A4",
+    margin_mm: float = 10.0,
+    max_px: int = 1600,
+) -> Response:
+    """Preview raster for the generator dialog.
+
+    `max_px` only downsamples the finished render — the layout is computed in
+    millimetres at the real `dpi` first, so what the dialog shows is the page
+    that will be exported, not a separately-laid-out approximation of it.
+    """
+    board = _board_from_query(board_type, cols, rows, square, marker, dictionary)
+    image = _render_requested(board, mode, dpi, paper, margin_mm)
+    if max_px > 0 and max(image.shape[:2]) > max_px:
+        scale = max_px / max(image.shape[:2])
+        image = cv2.resize(image, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+    ok, buf = cv2.imencode(".png", image)
+    if not ok:
+        raise HTTPException(status_code=500, detail="encode failed")
+    return Response(content=buf.tobytes(), media_type="image/png",
+                    headers={"Cache-Control": "no-cache, no-store"})
+
+
+@router.post("/board/export")
+async def board_export(body: dict) -> dict:
+    """Writes the board to `path` as PNG or PDF, at full `dpi` — never downsampled.
+
+    PDF goes through Pillow because the page has to carry its size in points; a
+    PNG's DPI tag is advisory and print dialogs routinely scale it away.
+    """
+    path = str(body.get("path") or "").strip()
+    if not path:
+        raise HTTPException(status_code=400, detail="path is required")
+    fmt = str(body.get("format", "png")).lower()
+    if fmt not in ("png", "pdf"):
+        raise HTTPException(status_code=400, detail=f"unknown format: {fmt}")
+
+    board = _board_from_query(
+        str(body.get("board_type", "charuco")), int(body.get("cols", 11)),
+        int(body.get("rows", 8)), float(body.get("square", 0.045)),
+        body.get("marker"), str(body.get("dictionary", "DICT_5X5_100")),
+    )
+    dpi = int(body.get("dpi", 300))
+    image = _render_requested(board, str(body.get("mode", "page")), dpi,
+                              str(body.get("paper", "A4")),
+                              float(body.get("margin_mm", 10.0)))
+
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    if fmt == "png":
+        ok, buf = cv2.imencode(".png", image)
+        if not ok:
+            raise HTTPException(status_code=500, detail="encode failed")
+        with open(path, "wb") as f:
+            f.write(buf.tobytes())
+    else:
+        Image.fromarray(image).save(path, format="PDF", resolution=float(dpi))
+    return {"ok": True, "path": path,
+            "square_m": boardgen.actual_square_m(board.square, dpi)}
 
 
 @router.post("/detect", response_model=DetectResponse)

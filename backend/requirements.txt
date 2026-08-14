@@ -5,6 +5,8 @@ pydantic>=2.9
 numpy>=1.26,<2
 # 非 contrib 即可: 仅用 aruco/charuco, 自 OpenCV 4.7 已并入主仓库 objdetect。
 opencv-python>=4.10
+# 标定板页面导出 PDF 用 (OpenCV 只能写位图, PDF 才能把页面尺寸以点写死)。
+pillow>=10.0
 ruamel.yaml>=0.18
 cryptography>=42
 qrcode>=7.4

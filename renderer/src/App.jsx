@@ -6,6 +6,7 @@ import { Tabs } from './components/Tabs.jsx';
 import { TWEAKS_DEFAULTS } from './components/TweaksPanel.jsx';
 import { LogStrip } from './components/panels.jsx';
 import { ConfirmHost } from './components/confirm.jsx';
+import { BoardGenDialog } from './components/BoardGenDialog.jsx';
 import { IntrinsicsTab } from './tabs/IntrinsicsTab.jsx';
 import { FisheyeTab } from './tabs/FisheyeTab.jsx';
 import { HandEyeTab } from './tabs/HandEyeTab.jsx';
@@ -38,6 +39,8 @@ export function App() {
     } catch { return { ...TWEAKS_DEFAULTS }; }
   });
   const [tweaksVisible, setTweaksVisible] = useState(false);
+  const [toolsOpen, setToolsOpen] = useState(false);
+  const [boardGenOpen, setBoardGenOpen] = useState(false);
   // Eye-in-hand vs eye-to-hand is a property of the physical rig, not a per-tab
   // setting — Hand-Eye owns the toggle, Link reads it for its own solver.
   const [solvePattern, setSolvePattern] = useState(
@@ -111,11 +114,16 @@ export function App() {
           tweaks={tweaks} setTweaks={setTweaks}
           settingsOpen={tweaksVisible}
           onToggleSettings={() => setTweaksVisible(v => !v)}
-          onCloseSettings={() => setTweaksVisible(false)}/>
+          onCloseSettings={() => setTweaksVisible(false)}
+          toolsOpen={toolsOpen}
+          onToggleTools={() => setToolsOpen(v => !v)}
+          onCloseTools={() => setToolsOpen(false)}
+          onOpenBoardGen={() => setBoardGenOpen(true)}/>
         <Tabs tabs={tabs} value={active} onChange={setActive}/>
         <ActiveComp active={active} solvePattern={solvePattern} setSolvePattern={setSolvePattern} tweaks={tweaks}/>
         <LogStrip lines={[]}/>
         <ConfirmHost/>
+        <BoardGenDialog open={boardGenOpen} onClose={() => setBoardGenOpen(false)}/>
       </div>
     </TelemetryProvider>
   );

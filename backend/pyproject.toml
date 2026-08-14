@@ -11,6 +11,9 @@ dependencies = [
   "numpy>=1.26,<2",
   # 非 contrib 即可: 仅用 aruco/charuco, 自 OpenCV 4.7 已并入主仓库 objdetect。
   "opencv-python>=4.10",
+  # 仅用于把标定板页面存成 PDF: OpenCV 只能写位图, 而印出来尺寸要准就得让
+  # 页面尺寸以点为单位写进 PDF, 不能靠打印对话框的缩放。
+  "pillow>=10.0",
   "ruamel.yaml>=0.18",
 ]
 
